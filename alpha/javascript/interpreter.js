@@ -72,11 +72,27 @@ function isIdentifierNode(n) {
 function isStructFieldLine(n) {
   return (isDefineNode(n) && isIdentifierNode(n.left)) || isIdentifierNode(n);
 }
+// スロットのキーになれるノード。**識別子と文字列リテラル**である。
+//
+// 名前付きスロットの意味論は「名前→値の有限写像」であり（function_guide.md
+// 「構造体メンバーの一致による自動バインディング」）、名前が識別子として綴れるか
+// どうかは別の話である。演算子記号を鍵にした表を書けるようにするために要る:
+//
+//   add_mul :
+//       `+` : `add`
+//       `*` : `mul`
+//
+// 文字リテラル（`\+`）は受けない。同じ名前に綴りが2つある状態を作らないためで、
+// 記号を名前にしたいなら文字列で書く。
+function isSlotKeyNode(n) {
+  if (isIdentifierNode(n)) return true;
+  return !!n && n.type === "atom" && n.kind === "string";
+}
 function isStructBlock(node) {
   if (node.isFunctionBody) return false; // 関数本体は match_case であって構造体ではない
   const lines = node.lines;
   if (!Array.isArray(lines) || lines.length === 0) return false;
-  if (lines.every((l) => isDefineNode(l) && isIdentifierNode(l.left))) return true;
+  if (lines.every((l) => isDefineNode(l) && isSlotKeyNode(l.left))) return true;
   return lines.length >= 2 && lines.every(isStructFieldLine);
 }
 
@@ -244,11 +260,17 @@ function bindBracketParams(entries, value, env) {
 
     let idx = 0;
     for (const entry of before) {
-      let v = idx < value.length ? value[idx] : UNIT;
+      // **範囲外は「対象が無い」ではない。** 分解は受け取った器を指し直すだけであり
+      // （layer_relations.md 分解 `[c ~r]` の行）、崩壊するのは「分解する対象が無ければ」＝
+      // 実引数そのものが `__` のときである（function_guide.md）。それは呼び出し側で
+      // 既に見ている。器は在るが位置が短いだけなら、そのスロットは `__` を指すだけで、
+      // 呼び出しは本体へ入る——添字（`s ' 1`）が範囲外で `__` を返しつつ本体が走るのと同じ。
+      const inRange = idx < value.length;
+      let v = inRange ? value[idx] : UNIT;
       idx++;
       if (isUnit(v)) {
         if (entry.default) v = evaluate(entry.default, env);
-        else return null; // 完全性公理
+        else if (inRange) return null; // 完全性公理：器の中身が `__` だった
       }
       envDefine(env, entry.name, v);
     }
@@ -1478,9 +1500,30 @@ function getPropValue(l, rightNode, env) {
   // そのため §2 が OK 例として明示している `list ' i`（`i` は実行時変数でよい）が
   // 書けず、仮引数経由の `f : n ? l ' n` も `__` になっていた——連番スロットは
   // 「順序が意味そのもの」であり、変数で引けなければバイト並びを扱う手段にならない。
-  if (rightNode.type === "atom" && rightNode.kind === "identifier") {
+  // **名前は識別子として綴れるものだけではない。** スロットの意味論は「名前→値の有限写像」
+  // なので（function_guide.md「構造体メンバーの一致による自動バインディング」）、
+  // 演算子記号のように識別子にできない綴りも文字列リテラルで名前にできる。
+  // どちらも綴りの外側を1文字ずつ剥がせば名前になる（`<foo>` / `` `+` ``）。
+  //
+  // 名前として読むのは**左辺が名前付きスロットのときだけ**である。List や String が
+  // 左辺なら右辺は値（添字）であり、その判断は下の内側の条件が持っている。
+  // **後置 `~` は「中身を出せ」である。** 名前付きスロットに対して `d ' k~` と書いたら、
+  // `k` という綴りではなく `k` が持っている値を名前として引く。`~` の意味は他の位置と
+  // 同じ「展開して渡す」で、ここでは「識別子を綴りのままではなく中身で渡す」になる。
+  //
+  // 名前付きスロットに順序は無い（`type_system.md` §6.2、位置アクセスを持たない）ので、
+  // 添字位置の `N~` が意味する get-rest はそもそも成立しない。空いている綴りである。
+  //
+  // 見るのは Pass 2 が残した `desugaredFrom: "index-rest"` の印で、元の添字は左辺に在る。
+  if (l && typeof l === "object" && !Array.isArray(l) && rightNode && rightNode.desugaredFrom === "index-rest") {
+    const key = evaluate(rightNode.left, env);
+    if (isUnit(key)) return UNIT;
+    const k = String(observe(key));
+    return Object.prototype.hasOwnProperty.call(l, k) ? l[k] : UNIT;
+  }
+  if (rightNode.type === "atom" && (rightNode.kind === "identifier" || rightNode.kind === "string")) {
     if (l && typeof l === "object" && !Array.isArray(l)) {
-      const key = rightNode.value.slice(1, -1); // "<foo>" -> "foo"
+      const key = rightNode.value.slice(1, -1); // "<foo>" -> "foo" / "`+`" -> "+"
       return Object.prototype.hasOwnProperty.call(l, key) ? l[key] : UNIT;
     }
     // 名前を持たない左辺（List / String / スカラー）。識別子は値として評価し、
