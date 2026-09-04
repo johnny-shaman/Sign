@@ -82,6 +82,18 @@ function markBlock(input) {
   // そのため、ブラケットを開いた直後の最初の行と、閉じて深さが0に戻る行は、
   // 改行を挟まず直前の行にくっつける。
   let justOpenedBracket = false;
+  // **行頭のスペースが許されるのは、それが余積演算子であるときだけである。**
+  // 直前の行が文字リテラルの `\` で終わっていれば、`\` は改行そのものを1バイトとして
+  // 食っている（operator_table.md 特殊記号「直後の1文字を文字として扱う」）。すると
+  // 次の行の行頭スペースは字下げではなく、その文字と右辺を繋ぐ**余積**である
+  // （同 基本原則「全ての空白を余積演算子と見なせる」）。落とすと右辺が宙に浮き、
+  // 値が黙って変わる。それ以外の行頭スペースは空白インデントであり、
+  // match_case.md「TABのみ・空白インデントはNG」により受け付けない。
+  //
+  // かつてここは「スペース1個までは黙って無視、2個以上はエラー」という閾値だった。
+  // 1個を許していたのは上の余積を通すためだが、閾値は仕様のどこにも無く、
+  // ついでに ` ?`（行頭スペース＋?）という仕様に無い仮引数ブロックの綴りも通していた。
+  let prevEndsWithEscape = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -102,11 +114,13 @@ function markBlock(input) {
     // 黙って無視するが、2個以上はスペースインデントの意図とみなし明確な構文エラーにする
     // （黙って独立したトップレベル文として誤解釈されるのを防ぐ）。ブラケット内
     // （bracketDepth>0）ではインデント自体が意味を持たない（整形用の空白は無害）ため対象外。
-    if (bracketDepth === 0 && content.startsWith('  ')) {
+    if (bracketDepth === 0 && content.startsWith(' ') && !prevEndsWithEscape) {
       throw new SyntaxError(
-        `Signのインデントは厳密にタブ文字(\\t)のみです。スペース2個以上によるインデントは使用できません: ${JSON.stringify(line)}`
+        `Signのインデントは厳密にタブ文字(\\t)のみです。行頭のスペースが許されるのは、` +
+          `直前の行が文字リテラルの \\ で終わっていて、そのスペースが余積演算子である場合だけです: ${JSON.stringify(line)}`
       );
     }
+    prevEndsWithEscape = /(^|[^\\])(\\\\)*\\$/.test(line);
 
     if (bracketDepth > 0) {
       const newDepth = bracketDepth + bracketDelta(content);
@@ -138,7 +152,7 @@ function markBlock(input) {
     }
 
     // 継続行の判定 (行頭が中置演算子などで始まる場合)
-    const contentTrimmed = content.trim();
+    const contentTrimmed = content;
     // **行頭の `|` / `||` が「続き」なのは、空白が続くときだけである。** 密着していれば
     // それは囲みの開き（絶対値・ノルム）であって中置演算子ではない——`||xs||` を続きと
     // 読むと、インデントブロックの境界がずれる（枝が1つ header へ吸い込まれていた）。

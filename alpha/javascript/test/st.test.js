@@ -211,11 +211,11 @@ check("ブラケットにも付けない", entries("f : [a ~b] ? a"), ["f : [a b
 // デフォルトは「引数が省略されたときに実際にそこへ入る値」なので、型の根拠として本体の
 // 使用箇所より強い。使用箇所は「その演算が要求する型」しか語らない——`y + 0.0` は y が
 // Int でも昇格するので y が Float とは限らない。デフォルトは中身そのものを語る。
-check("デフォルトが整数なら Int", entries("f :\n\tx\n\ty : 1\n ? y"), ["f : Atom Int -> Int"]);
-check("デフォルトが実数なら Float", entries("f :\n\tx\n\ty : 1.0\n ? y"), ["f : Atom Float -> Float"]);
-check("デフォルトが1文字なら Char", entries("f :\n\tx\n\ty : `s`\n ? y"), ["f : Atom Char -> Char"]);
-check("デフォルトがリストなら List", entries("f :\n\tx\n\ty : [1 2 3]\n ? y"), ["f : Atom List -> List"]);
-check("デフォルトは使用箇所より優先する（値は Int、式が Float へ昇格）", entries("f :\n\ty : 1\n ? y + 0.0"), [
+check("デフォルトが整数なら Int", entries("f :\n\tx\n\ty : 1\n? y"), ["f : Atom Int -> Int"]);
+check("デフォルトが実数なら Float", entries("f :\n\tx\n\ty : 1.0\n? y"), ["f : Atom Float -> Float"]);
+check("デフォルトが1文字なら Char", entries("f :\n\tx\n\ty : `s`\n? y"), ["f : Atom Char -> Char"]);
+check("デフォルトがリストなら List", entries("f :\n\tx\n\ty : [1 2 3]\n? y"), ["f : Atom List -> List"]);
+check("デフォルトは使用箇所より優先する（値は Int、式が Float へ昇格）", entries("f :\n\ty : 1\n? y + 0.0"), [
 	"f : Int -> Float",
 ]);
 // ---- 返値型（§7.1・§7.3・§8） ----
@@ -550,13 +550,13 @@ check("2番目の引数でも逆流する", entries("g : a b ? 0.0 + b\nh : y ? 
 ]);
 // 仮引数のデフォルト式も使用箇所である。デフォルトは**他の仮引数を使って書ける**ので、
 // 本体だけを見ていると仮引数リストの中でしか使われない引数が `Atom` のまま残る。
-check("デフォルト式の中の使用も拾う", entries("g : s ? 0.0 + s\nh :\n\tx\n\ty : g x\n ?\n\ty"), [
+check("デフォルト式の中の使用も拾う", entries("g : s ? 0.0 + s\nh :\n\tx\n\ty : g x\n?\n\ty"), [
 	"g : Float -> Float",
 	"h : Float Float -> Float",
 ]);
 // 逆算した型はラムダのスコープへ書き戻す。書き戻さないと本体でその仮引数を読んだときに
 // Pass 1a が置いた下限（`Atom`）しか見えず、返値型が実際より緩くなる。
-check("デフォルトが式でも本体まで型が届く", entries("id : s ? s = `a`\nc :\n\traw\n\tb : id raw\n ?\n\tb"), [
+check("デフォルトが式でも本体まで型が届く", entries("id : s ? s = `a`\nc :\n\traw\n\tb : id raw\n?\n\tb"), [
 	"id : Char -> Char",
 	"c : Char Char -> Char",
 ]);
@@ -880,7 +880,7 @@ check("どちらの添字も要素型になる", entries("h : 1 ~ 5\na : 0 ~+ 1\
 ]);
 // stack_abi.md §3.3 のループカウンタ。開端レンジをデフォルト引数へ置くと、その関数は
 // 「Iterator を受けて要素を返すもの」として型が付く——再帰を書かずにループが成立する形である。
-check("開端レンジをデフォルトに持つ関数の型", entries("f :\n\tc : [0 ~+ 1]\n ?\n\tc ' 3"), ["f : Iterator -> Int"]);
+check("開端レンジをデフォルトに持つ関数の型", entries("f :\n\tc : [0 ~+ 1]\n?\n\tc ' 3"), ["f : Iterator -> Int"]);
 // レンジの端点も比較と同じ制約を持つ。§4 のシグネチャ
 // `~ : (Point -> Point) -> Iterator -> (List | String)` が「両端は同じ点」と定めている
 // 以上、片方が分かればもう片方も決まる——注釈を足したのではなく、演算子の定義を読んだだけ。

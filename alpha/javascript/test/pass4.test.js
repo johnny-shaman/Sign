@@ -380,7 +380,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 // 見るのと同じ順序でなければならない——デフォルト式は前の仮引数を参照でき（`let*`）、
 // かつ Input（前置 `@`）を含みうるので、**どの順で何回読むかが観測できる**。
 {
-	const src = "f :\n\tn\n\tas : 7\n ?\n\tn + as\nf 3";
+	const src = "f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3";
 	const r = asm(src);
 	check("デフォルト付きは出る", r.diagnostics.length, 0);
 	const ls = body(src, "f");
@@ -394,11 +394,11 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 	const main = body(src, "_sign_main");
 	checkTrue("呼ぶ側が __ を置く", main.some((l) => l === "movz x1, #0x8000, lsl #48"), main.join(" / "));
 	// 全部渡せば埋めない。
-	checkTrue("全部渡せば埋めない", !body("f :\n\tn\n\tas : 7\n ?\n\tn + as\nf 3 5", "_sign_main").some((l) => /^movz x1,/.test(l)));
+	checkTrue("全部渡せば埋めない", !body("f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3 5", "_sign_main").some((l) => /^movz x1,/.test(l)));
 }
 // デフォルト式は前の仮引数を読める（`let*`）。
 {
-	const ls = body("f :\n\tn\n\ta : n + 1\n ?\n\tn + a\nf 3", "f");
+	const ls = body("f :\n\tn\n\ta : n + 1\n?\n\tn + a\nf 3", "f");
 	// 前の仮引数と足し合わせている（置き先は問わない）。
 	checkTrue("前の仮引数を読む", ls.some((l) => /^add x\d+, x9, x10$/.test(l)), ls.join(" / "));
 }
@@ -406,7 +406,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 // `__` を置いても何も変わらない。宣言の内容は「この引数について完全性公理を働かせない」
 // の一点であり、検査を飛ばせば足りる——定義域の持ち上げは機械の上では何も無い。
 {
-	const src = "f :\n\tn\n\ts : __\n ?\n\tn + 1\nf 3 5";
+	const src = "f :\n\tn\n\ts : __\n?\n\tn + 1\nf 3 5";
 	const ls = body(src, "f");
 	check("公理の検査は n の分だけ", ls.filter((l) => /^b\.eq \.Lunit/.test(l)).length, 1);
 	checkTrue("埋める命令は出ない", !ls.some((l) => /^b\.ne \.Lhave/.test(l)), ls.join(" / "));
