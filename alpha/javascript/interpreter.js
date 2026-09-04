@@ -70,7 +70,17 @@ function isIdentifierNode(n) {
 // ——`[x]` は「1要素リスト ≅ スカラー」として既に広く使われている形であり、
 // 単独の識別子をフィールド1個の構造体へ読み替えると `(f 1)` のような括弧が全て壊れる。
 function isStructFieldLine(n) {
-  return (isDefineNode(n) && isIdentifierNode(n.left)) || isIdentifierNode(n);
+  return (isDefineNode(n) && isSlotKeyNode(n.left)) || isIdentifierNode(n) || isStructSpreadLine(n);
+}
+
+// **名前付きスロットを撒く行**（`this~`）。分解した残りを組み直しへ戻すために要る。
+//
+// 分解（`[a b ~this]`）と組み直し（`[a : … / b : … / this~]`）で、Store の余代数の
+// 取り出しと置き直しが揃う。`this` を `~` 無しで書くと省略記法として「this という名前の
+// フィールド」になってしまうので、撒くことは `~` で言う——余積・直積の他の位置と同じ
+// 「展開して渡す」である。
+function isStructSpreadLine(n) {
+  return !!n && n.type === "operation" && n.position === "postfix" && n.name === "expand";
 }
 // スロットのキーになれるノード。**識別子と文字列リテラル**である。
 //
@@ -299,17 +309,25 @@ function bindBracketParams(entries, value, env) {
     return env;
   }
   // Struct（構造体）: entry名とキー名の一致で分割代入
+  //
+  // **名前は識別子でも文字列でも綴れる。** どちらも外側を1文字ずつ剥がせば名前になり
+  // （`<foo>` / `` `foo` ``）、キーとして引くのも束縛するのも同じ名前で行う。
+  // 束縛名を綴りのまま使うと、`[`foo` ~this]` で束縛した `foo` を本体（`<foo>` を探す）
+  // が見つけられない——鍵は消費されるのに値へ届かない、という半端な形になっていた。
+  //
+  // **仮引数名は静的に定まっていなければならない。** ここで見るのは書かれた綴りだけで、
+  // 実行時の値からフィールド名を作る道は無い。
   const claimedKeys = new Set();
   for (const entry of entries) {
     if (entry.rest) continue; // restは全エントリ処理後にまとめて扱う
-    const key = entry.name.slice(1, -1); // "<foo>" -> "foo"
+    const key = entry.name.slice(1, -1); // "<foo>" -> "foo" / "`foo`" -> "foo"
     claimedKeys.add(key);
     let v = Object.prototype.hasOwnProperty.call(value, key) ? value[key] : UNIT;
     if (isUnit(v)) {
       if (entry.default) v = evaluate(entry.default, env);
       else return null; // 完全性公理
     }
-    envDefine(env, entry.name, v);
+    envDefine(env, "<" + key + ">", v);
   }
   const restEntry = entries.find((e) => e.rest);
   if (restEntry) {
@@ -2042,6 +2060,19 @@ function evaluate(node, env) {
       const structEnv = newRuntimeEnv(env);
       const dict = {};
       for (const line of node.lines) {
+        // **撒く行**（`this~`）: 名前付きスロットをそのまま溶かし込む。分解で取り出した
+        // 残りを組み直しへ戻す道であり、`[a : … / b : … / this~]` が set にあたる。
+        // 既に置いた鍵は上書きしない——**書かれた行の方が新しい**。分解の残りには
+        // 消費した鍵が入っていないので通常は衝突しないが、順序で意味が変わらない方を採る。
+        if (isStructSpreadLine(line)) {
+          const spread = observe(evaluate(line.operand, structEnv));
+          if (isNamedSlots(spread)) {
+            for (const k of Object.keys(spread)) {
+              if (!Object.prototype.hasOwnProperty.call(dict, k)) dict[k] = spread[k];
+            }
+          }
+          continue;
+        }
         if (isIdentifierNode(line)) {
           // 省略記法（`[x / y]`）: フィールド名も値もその識別子から取る。
           // 値は外側のenvに既にある束縛（仮引数など）を読む。
@@ -2052,7 +2083,7 @@ function evaluate(node, env) {
           continue;
         }
         const value = evaluate(line, structEnv); // define評価：structEnvに束縛しつつ値を返す
-        dict[line.left.value.slice(1, -1)] = value; // "<foo>" -> "foo"
+        dict[line.left.value.slice(1, -1)] = value; // "<foo>" -> "foo" / "`+`" -> "+"
       }
       return dict;
     }
