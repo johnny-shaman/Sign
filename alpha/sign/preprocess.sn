@@ -82,6 +82,9 @@ in_quote : [c ~rest] ?
 `行頭が中置演算子で始まる行は、前の行の続きとして空白で繋ぐ`
 `多義的な | と ~ は2文字目まで見る。| は絶対値、~ は残余にもなるため1文字では決まらない`
 
+`記号そのものは名前を通す。文字リテラルを比較へ直書きすると型が決まらず、`
+`機械語にならない（型が付くのは束縛の側なので、直書きのままでは相手が null になる）`
+
 bang : \!
 bar : \|
 tilde : \~
@@ -116,24 +119,28 @@ cont_tilde : ch ?
 	ch = \^ : ch
 	__
 
-`継続行の判定は行頭の空白を落としてから行う。body_of が落とすのはタブだけであり`
-`（タブの数がインデントの深さそのものだから）、深さに関わらないスペースは残る。`
-`仮引数リストを閉じる  ?  の行がまさにこの形である`
-
-lstrip : [c ~rest] ?
-	c = space : lstrip rest
-	c rest
-
+`継続行の判定は、タブを落とした本文の先頭をそのまま見る。`
+``
+`行頭のスペースを落としてはならない。スペースは余積演算子であり`
+`（operator_table.md 基本原則「全ての空白を余積演算子と見なせる」）、`
+`落とすと演算子が消える。前の行が \ で改行を文字として食っている場合、`
+`次の行の行頭スペースは字下げではなく、その文字と右辺を繋ぐ余積そのものである。`
+`落とすと右辺が宙に浮き、値が黙って変わる。診断は出ない`
+``
+`仮引数リストを閉じる ? は、行頭スペースではなく実タブ深さに載せる`
+`（関数のブロックの中に、仮引数がさらにブロックとして入る）。`
+`そう書けば落とすべきスペースは最初から存在しない`
 
 continues :
-	raw
-	b : lstrip raw
- ?
-	cont1 (b ' 0) : b
-	((b ' 0) = bang) & ((b ' 1) = \=) : b
-	((b ' 0) = bar) & (cont_bar (b ' 1)) : b
-	((b ' 0) = tilde) & (cont_tilde (b ' 1)) : b
-	__
+		b
+		h : b ' 0
+		t : b ' 1
+	?
+		cont1 h : b
+		(h = bang) & (t = \=) : b
+		(h = bar) & (cont_bar t) : b
+		(h = tilde) & (cont_tilde t) : b
+		__
 
 `--- 括弧の中ではインデントを無効化する ---`
 `括弧の中で見やすさのためにタブを深くする書き方があるため、深さの変化を`
@@ -180,7 +187,6 @@ opened : bd nd ?
 `インデント幅のスタック。深さの列として積む。底の 0 は要素として常に残るので`
 `スタックは空にならない——unwind は (top st) > d で止まり、0 > d は偽である`
 
-bottom : 0
 push : [~st] d ? d st~
 
 top : [~st] ? st ' 0
@@ -250,21 +256,21 @@ next_st : [~st] d ?
 `仮引数リストの側である`
 
 walk :
-	s
-	st
-	bd
-	jo
-	line : head_line s
-	rest : tail_line s
-	b : body_of line
-	d : depth_of line
-	nd : bd + (delta b)
- ?
-	!b : (walk rest st bd jo) | (close_all st)
-	(bd > 0) & ((jo = 1) | (nd < 1)) : b ((walk rest st nd 0) | (close_all st))
-	bd > 0 : newline b ((walk rest st nd 0) | (close_all st))
-	continues b : (closers st d) space b ((walk rest (unwind st d) nd (opened bd nd)) | (close_all (unwind st d)))
-	(gap st d) b ((walk rest (next_st st d) nd (opened bd nd)) | (close_all (next_st st d)))
+		s
+		st
+		bd
+		jo
+		line : head_line s
+		rest : tail_line s
+		b : body_of line
+		d : depth_of line
+		nd : bd + (delta b)
+	?
+		!b : (walk rest st bd jo) | (close_all st)
+		(bd > 0) & ((jo = 1) | (nd < 1)) : b ((walk rest st nd 0) | (close_all st))
+		bd > 0 : newline b ((walk rest st nd 0) | (close_all st))
+		continues b : (closers st d) space b ((walk rest (unwind st d) nd (opened bd nd)) | (close_all (unwind st d)))
+		(gap st d) b ((walk rest (next_st st d) nd (opened bd nd)) | (close_all (next_st st d)))
 
 `walk は各行の前に区切りを置くため、先頭行のぶんだけ余分な改行が付く`
 `先頭行がインデントされている場合は区切りが INDENT になるので、その時は取らない`
@@ -273,12 +279,11 @@ strip_head : [c ~rest] ?
 	c = newline : rest
 	c rest
 
-mark : s ? strip_head (walk s bottom 0 0)
-
 `--- 前処理の全体 ---`
 `インデントを先に確定させてから、演算子の空白を入れる`
+`スタックの底の 0 はここで積む——空にならないので unwind が必ず止まる`
 
-preprocess : s ? sep (mark s)
+preprocess : s ? sep (strip_head (walk s 0 0 0))
 
 `実行例`
 
