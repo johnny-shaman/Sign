@@ -94,7 +94,6 @@ cont1 : ch ?
 	ch = \+ : ch
 	ch = \* : ch
 	ch = \/ : ch
-	ch = \. : ch
 	ch = \, : ch
 	ch = \= : ch
 	ch = \< : ch
