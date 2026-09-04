@@ -1,0 +1,279 @@
+`Sign 自身で書いた前処理器`
+`alpha/javascript/lexer.js の preprocess と同じ仕事をする`
+``
+`  1. 確定した中置演算子の両側に空白を入れる`
+`  2. 行頭のタブ深さから INDENT / DEDENT のマーカーを作る`
+``
+`出力はトークン列ではなく文字列である。トークンへの分割は後段のパーサが空白で行う`
+
+`--- 文字定数 ---`
+`文字リテラルは直後の1バイトをそのまま取る。末尾に何も無い行が改行文字にあたる`
+
+space : \ 
+tab : \	
+newline : \
+quote : \`
+escape : \\
+indent : \
+dedent : \
+
+`--- 中置演算子表 ---`
+`多義的なものは入れない。- は負号、| は絶対値、~ は残余、|| はノルムの囲みにもなるため区切れない`
+`長いものから先に照合する`
+
+infix3 : t ?
+	t = `===` : t
+	t = `!==` : t
+	__
+
+infix2 : t ?
+	t = `==` : t
+	t = `!=` : t
+	t = `<=` : t
+	t = `>=` : t
+	t = `<<` : t
+	t = `>>` : t
+	t = `&&` : t
+	t = `;;` : t
+	t = `~+` : t
+	t = `~-` : t
+	t = `~*` : t
+	t = `~/` : t
+	t = `~^` : t
+	__
+
+infix1 : ch ?
+	ch = \: : ch
+	ch = \? : ch
+	ch = \; : ch
+	ch = \& : ch
+	ch = \, : ch
+	ch = \< : ch
+	ch = \> : ch
+	ch = \= : ch
+	ch = \+ : ch
+	ch = \* : ch
+	ch = \/ : ch
+	ch = \% : ch
+	ch = \^ : ch
+	ch = \' : ch
+	__
+
+`--- 1. 中置演算子の両側へ空白を入れる ---`
+`文字リテラル・文字列・コメントの中身は保護する`
+
+sep : [c a b ~rest] ?
+	c = escape : c a (sep (rest ' 1~))
+	c = quote : c (in_quote rest)
+	infix3 (c a b) : space (c a b) space (sep (rest ' 2~))
+	infix2 (c a) : space (c a) space (sep (rest ' 1~))
+	infix1 c : space c space (sep rest)
+	c (sep rest)
+
+`閉じるバッククォートまで、あるいは行末まで素通しする`
+`閉じない場合は行コメントであり、いずれにせよ行末で通常状態へ戻る`
+
+in_quote : [c ~rest] ?
+	c = quote : c (sep rest)
+	c = newline : c (sep rest)
+	c (in_quote rest)
+
+`--- 継続行の判定 ---`
+`行頭が中置演算子で始まる行は、前の行の続きとして空白で繋ぐ`
+`多義的な | と ~ は2文字目まで見る。| は絶対値、~ は残余にもなるため1文字では決まらない`
+
+cont1 : ch ?
+	ch = \? : ch
+	ch = \+ : ch
+	ch = \* : ch
+	ch = \/ : ch
+	ch = \. : ch
+	ch = \, : ch
+	ch = \= : ch
+	ch = \< : ch
+	ch = \> : ch
+	ch = \; : ch
+	ch = \% : ch
+	ch = \& : ch
+	ch = \^ : ch
+	__
+
+cont_bar : ch ?
+	ch = space : ch
+	ch = bar : ch
+	__
+
+cont_tilde : ch ?
+	ch = space : ch
+	ch = \+ : ch
+	ch = \- : ch
+	ch = \* : ch
+	ch = \/ : ch
+	ch = \^ : ch
+	__
+
+`継続行の判定は行頭の空白を落としてから行う。body_of が落とすのはタブだけであり`
+`（タブの数がインデントの深さそのものだから）、深さに関わらないスペースは残る。`
+`仮引数リストを閉じる  ?  の行がまさにこの形である`
+
+lstrip : [c ~rest] ?
+	c = space : lstrip rest
+	c rest
+
+
+continues :
+		raw
+		b : lstrip raw
+		h : (lstrip raw) ' 0
+		t : (lstrip raw) ' 1
+	?
+		cont1 h : b
+		(h = \!) & (t = \=) : b
+		(h = \|) & (cont_bar t) : b
+		(h = \~) & (cont_tilde t) : b
+		__
+
+`--- 括弧の中ではインデントを無効化する ---`
+`括弧の中で見やすさのためにタブを深くする書き方があるため、深さの変化を`
+`INDENT/DEDENT にしてはいけない。他の多くの言語のオフサイドルールと同じ扱いである`
+
+open_br : ch ?
+	ch = \[ : ch
+	ch = \( : ch
+	ch = \{ : ch
+	__
+
+close_br : ch ?
+	ch = \] : ch
+	ch = \) : ch
+	ch = \} : ch
+	__
+
+`閉じるバッククォートまで読み飛ばす。閉じが無ければ残り全部（行コメント）`
+
+skip_quote : [c ~rest] ?
+	c = quote : rest
+	skip_quote rest
+
+`1行ぶんの括弧の開閉差。文字列とエスケープの中は数えない`
+`終端では完全性公理で呼び出しが消えて Unit になるが、算術の右辺の Unit は単位元なので`
+`n + __ = n となり、それまでの和がそのまま残る`
+
+delta : [c ~rest] ?
+	c = escape : delta (rest ' 1~)
+	c = quote : delta (skip_quote rest)
+	open_br c : 1 + (delta rest)
+	close_br c : -1 + (delta rest)
+	delta rest
+
+`この行で括弧を開いたか。開いた直後の行は前の行へ直結させる必要がある`
+`文法上、開き括弧の直後と閉じ括弧の直前に改行を置けないためである`
+
+opened : bd nd ?
+	(bd < 1) & (nd > 0) : 1
+	0
+
+`--- 2. 行頭のタブ深さから INDENT / DEDENT を作る ---`
+
+`インデント幅のスタック。深さの列として積む。底の 0 は要素として常に残るので`
+`スタックは空にならない——unwind は (top st) > d で止まり、0 > d は偽である`
+
+top : [~st] ? st ' 0
+
+pop : [~st] ? st ' 1~
+
+`行頭のタブ数と、タブを落とした本文`
+
+depth_of : [c ~rest] ?
+	c = tab : 1 + (depth_of rest)
+	0
+
+body_of : [c ~rest] ?
+	c = tab : body_of rest
+	c rest
+
+`最初の改行まで、および最初の改行より後ろ`
+
+head_line : [c ~rest] ?
+	c = newline : __
+	c (head_line rest)
+
+tail_line : [c ~rest] ?
+	c = newline : rest
+	tail_line rest
+
+`深さ d より深い段を閉じる。閉じた後のスタックと、その段数ぶんの DEDENT`
+
+unwind : [~st] d ?
+	(top st) > d : unwind (pop st) d
+	st
+
+closers : [~st] d ?
+	(top st) > d : dedent (closers (pop st) d)
+	__
+
+close_all : [~st] ?
+	(top st) > 0 : dedent (close_all (pop st))
+	__
+
+`この行の直前に置く区切りと、この行を読んだ後のスタック`
+`深くなれば INDENT で前の行に直結し、浅くなれば DEDENT を並べてから改行する`
+
+gap : [~st] d ?
+	d > (top st) : indent
+	(closers st d) newline
+
+next_st : [~st] d ?
+	d > (top st) : d st~
+	unwind st d
+
+`1行ずつ処理する。空行は落とす——深さ計算に関わらず、パース結果も変わらない`
+`（DEDENT は直前の内容行に付く必要があり、空行を残すと間に挟まって構文が壊れる）`
+`空かどうかは否定演算子で見る。等号で空を判定してはいけない`
+`——比較は左辺が零射へ落ちた時点で確定し、空のときこそ偽になる（function_guide.md）`
+``
+`絶対値による判定も使えない。中身が無いときそれが「空リストで 0」なのか`
+`「値の不在」なのかは型でしか決まらず、裸の仮引数（Atom）では決められないので`
+`吸収元へ倒れる（unit.md）`
+``
+`入力が尽きたら walk は解なしを返す。完全性公理は「解なしならば解なしを返す」と`
+`言っており、それを演算子まで徹底しているだけである`
+`残った段の DEDENT は、各段が再帰の結果を受けるところで拾う——左が解なしなら右`
+
+`行から取り出す4つは仮引数リストで宣言する。関数本体のインデント行は全て match_case`
+`であり、そこに 識別子 : 値 と書いても分岐にしかならない。ローカル変数を置く場所は`
+`仮引数リストの側である`
+
+walk :
+		s
+		st
+		bd
+		jo
+		line : head_line s
+		rest : tail_line s
+		b : body_of line
+		d : depth_of line
+		nd : bd + (delta b)
+	?
+		!b : (walk rest st bd jo) | (close_all st)
+		(bd > 0) & ((jo = 1) | (nd < 1)) : b ((walk rest st nd 0) | (close_all st))
+		bd > 0 : newline b ((walk rest st nd 0) | (close_all st))
+		continues b : (closers st d) space b ((walk rest (unwind st d) nd (opened bd nd)) | (close_all (unwind st d)))
+		(gap st d) b ((walk rest (next_st st d) nd (opened bd nd)) | (close_all (next_st st d)))
+
+`walk は各行の前に区切りを置くため、先頭行のぶんだけ余分な改行が付く`
+`先頭行がインデントされている場合は区切りが INDENT になるので、その時は取らない`
+
+strip_head : [c ~rest] ?
+	c = newline : rest
+	c rest
+
+`--- 前処理の全体 ---`
+`インデントを先に確定させてから、演算子の空白を入れる`
+`スタックの底の 0 はここで積む——空にならないので unwind が必ず止まる`
+
+preprocess : s ? sep (strip_head (walk s 0 0 0))
+
+`実行例`
+
+preprocess `a+b*c`

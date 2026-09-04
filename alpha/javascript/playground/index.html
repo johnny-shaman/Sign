@@ -1,115 +1,119 @@
 <!doctype html>
 <html lang="ja">
+
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sign alpha/javascript Playground</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/playground/playground.css">
-<link rel="icon" type="image/svg+xml" href="/playground/Sign_logo_dark.svg">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign alpha/javascript Playground</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/playground/playground.css">
+  <link rel="icon" type="image/svg+xml" href="/playground/Sign_logo_dark.svg">
 </head>
+
 <body>
-<div class="glass-bg"></div>
-<div class="app-container">
-  <header class="app-header">
-    <div class="logo-area">
-      <img src="/playground/Sign_logo_dark.svg" class="app-logo" width="63" height="36" alt="Sign Logo">
-      <div class="title-text">
-        <h1>Sign</h1>
+  <div class="glass-bg"></div>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo-area">
+        <h1><img src="/playground/Sign_logo_dark.svg" class="app-logo" width="63" height="36" alt="Sign"></h1>
         <span class="badge">alpha/javascript</span>
       </div>
-    </div>
 
-    <div class="controls-area">
-      <div class="control-group">
-        <label for="exampleSelect">Template</label>
-        <select id="exampleSelect" class="custom-select">
-          <option value="composition">Function Composition</option>
-          <option value="currying">Auto Currying</option>
-          <option value="pointfree">Pointfree</option>
-          <option value="match_case">Match Case</option>
-          <option value="rest_recursion">Rest Param Recursion</option>
-          <option value="chain_compare">Chain Comparison</option>
-          <option value="manual_curry">Manual Curry ($/@/#)</option>
-          <option value="types">Types (SignType)</option>
-        </select>
-      </div>
-      <div class="control-group font-group">
-        <label for="fontSelect">Font</label>
-        <select id="fontSelect" class="custom-select">
-          <option value='"JetBrains Mono", monospace'>JetBrains Mono</option>
-          <option value='"Cascadia Code", Consolas, monospace'>Cascadia Code</option>
-          <option value='"Fira Code", monospace'>Fira Code</option>
-          <option value='"Source Code Pro", monospace'>Source Code Pro</option>
-          <option value='Menlo, Monaco, monospace'>Menlo / Monaco</option>
-          <option value='Consolas, monospace'>Consolas</option>
-          <option value='"Courier New", monospace'>Courier New</option>
-          <option value='ui-monospace, monospace'>システム標準</option>
-        </select>
-        <input type="range" id="fontSize" min="11" max="22" step="1" value="14" />
-        <span id="fontSizeLabel" class="range-label">14px</span>
-        <label class="checkbox-label"><input type="checkbox" id="ligatures" /> 合字</label>
-      </div>
-      <button id="runBtn" class="btn btn-primary">
-        <span class="btn-text">実行 (Ctrl+Enter)</span>
-        <span class="loader"></span>
-      </button>
-    </div>
-  </header>
-
-  <main class="playground-layout">
-    <!-- Left Pane: Editor -->
-    <section class="panel editor-panel">
-      <div class="panel-header">
-        <h2>Sign Source</h2>
-        <span class="panel-subtitle">lexer → Pass1/1b/2/3 → interpreter</span>
-      </div>
-      <div class="panel-body editor-wrapper">
-        <div class="line-numbers" id="lineNumbers"><div>1</div></div>
-        <textarea id="src" spellcheck="false"></textarea>
-      </div>
-    </section>
-
-    <!-- Right Layout: Result + AST -->
-    <div class="output-split">
-      <section class="panel result-panel">
-        <div class="panel-header">
-          <h2>Evaluated Result</h2>
-          <span class="panel-subtitle">各行を順に評価</span>
-        </div>
-        <div class="panel-body code-view">
-          <pre><code id="out"></code></pre>
-        </div>
-      </section>
-
-      <section class="panel signtype-panel">
-        <div class="panel-header">
-          <h2>SignType</h2>
-          <select id="stScope" class="custom-select scope-select">
-            <option value="ist">.ist（全識別子）</option>
-            <option value="st">.st（export のみ）</option>
+      <div class="controls-area">
+        <div class="control-group">
+          <label for="exampleSelect">Template</label>
+          <select id="exampleSelect" class="custom-select">
+            <option value="composition">Function Composition</option>
+            <option value="currying">Auto Currying</option>
+            <option value="pointfree">Pointfree</option>
+            <option value="match_case">Match Case</option>
+            <option value="rest_recursion">Rest Param Recursion</option>
+            <option value="chain_compare">Chain Comparison</option>
+            <option value="manual_curry">Manual Curry ($/@/#)</option>
+            <option value="types">Types (SignType)</option>
           </select>
         </div>
-        <div class="panel-body code-view">
-          <pre><code id="st"></code></pre>
+        <div class="control-group font-group">
+          <label for="fontSelect">Font</label>
+          <select id="fontSelect" class="custom-select">
+            <option value='"JetBrains Mono", monospace'>JetBrains Mono</option>
+            <option value='"Cascadia Code", Consolas, monospace'>Cascadia Code</option>
+            <option value='"Fira Code", monospace'>Fira Code</option>
+            <option value='"Source Code Pro", monospace'>Source Code Pro</option>
+            <option value='Menlo, Monaco, monospace'>Menlo / Monaco</option>
+            <option value='Consolas, monospace'>Consolas</option>
+            <option value='"Courier New", monospace'>Courier New</option>
+            <option value='ui-monospace, monospace'>システム標準</option>
+          </select>
+          <input type="range" id="fontSize" min="11" max="22" step="1" value="14" />
+          <span id="fontSizeLabel" class="range-label">14px</span>
+          <label class="checkbox-label"><input type="checkbox" id="ligatures" /> 合字</label>
         </div>
-      </section>
+        <button id="runBtn" class="btn btn-primary">
+          <span class="btn-text">実行 (Ctrl+Enter)</span>
+          <span class="loader"></span>
+        </button>
+      </div>
+    </header>
 
-      <section class="panel ast-panel">
+    <main class="playground-layout">
+      <!-- Left Pane: Editor -->
+      <section class="panel editor-panel">
         <div class="panel-header">
-          <h2>Resolved AST</h2>
-          <span class="panel-subtitle">Pass1/Pass2 出力＋Layer 2 型</span>
+          <h2>Sign Source</h2>
+          <span class="panel-subtitle">lexer → Pass1/1b/2/3 → interpreter</span>
         </div>
-        <div class="panel-body code-view">
-          <pre><code id="ast"></code></pre>
+        <div class="panel-body editor-wrapper">
+          <div class="line-numbers" id="lineNumbers">
+            <div>1</div>
+          </div>
+          <textarea id="src" spellcheck="false"></textarea>
         </div>
       </section>
-    </div>
-  </main>
-</div>
 
-<script type="module" src="/playground/playground.js"></script>
+      <!-- Right Layout: Result + AST -->
+      <div class="output-split">
+        <section class="panel result-panel">
+          <div class="panel-header">
+            <h2>Evaluated Result</h2>
+            <span class="panel-subtitle">各行を順に評価</span>
+          </div>
+          <div class="panel-body code-view">
+            <pre><code id="out"></code></pre>
+          </div>
+        </section>
+
+        <section class="panel signtype-panel">
+          <div class="panel-header">
+            <h2>SignType</h2>
+            <select id="stScope" class="custom-select scope-select">
+              <option value="ist">.ist（全識別子）</option>
+              <option value="st">.st（export のみ）</option>
+            </select>
+          </div>
+          <div class="panel-body code-view">
+            <pre><code id="st"></code></pre>
+          </div>
+        </section>
+
+        <section class="panel ast-panel">
+          <div class="panel-header">
+            <h2>Resolved AST</h2>
+            <span class="panel-subtitle">Pass1/Pass2 出力＋Layer 2 型</span>
+          </div>
+          <div class="panel-body code-view">
+            <pre><code id="ast"></code></pre>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="/playground/playground.js"></script>
 </body>
+
 </html>
