@@ -76,12 +76,6 @@ function markBlock(input) {
   // 二重に差し込まれてパースが壊れる。他の多くの言語のオフサイドルールと同様、
   // ブラケットの中では改行・インデントの意味を一時的に無効化することでこれを防ぐ。
   let bracketDepth = 0;
-  // grammar（sign.pegjs）の Block 規則 `"[" _ exprs:Expressions _ "]"` は、
-  // `_` がスペースのみでEOLを許さないため、開き括弧の直後・閉じ括弧の直前に
-  // 改行があってはならない（複数行ある場合の「間」の統計行だけがEOL区切りを許される）。
-  // そのため、ブラケットを開いた直後の最初の行と、閉じて深さが0に戻る行は、
-  // 改行を挟まず直前の行にくっつける。
-  let justOpenedBracket = false;
   // **行頭のスペースが許されるのは、それが余積演算子であるときだけである。**
   // 直前の行が文字リテラルの `\` で終わっていれば、`\` は改行そのものを1バイトとして
   // 食っている（operator_table.md 特殊記号「直後の1文字を文字として扱う」）。すると
@@ -109,11 +103,8 @@ function markBlock(input) {
     const leadingWs = leadingWsMatch ? leadingWsMatch[0] : '';
     const content = line.substring(leadingWs.length);
 
-    // タブを全部消費してもなお行頭にスペースが残っている＝スペースインデント（またはタブ+
-    // スペース混在）の疑い。スペース1個までは（grammarの`_`が元々許容する程度の余白として）
-    // 黙って無視するが、2個以上はスペースインデントの意図とみなし明確な構文エラーにする
-    // （黙って独立したトップレベル文として誤解釈されるのを防ぐ）。ブラケット内
-    // （bracketDepth>0）ではインデント自体が意味を持たない（整形用の空白は無害）ため対象外。
+    // ブラケット内（bracketDepth>0）ではインデント自体が意味を持たない（整形用の空白は
+    // 無害）ため対象外。判定の根拠は上の `prevEndsWithEscape` の説明を参照。
     if (bracketDepth === 0 && content.startsWith(' ') && !prevEndsWithEscape) {
       throw new SyntaxError(
         `Signのインデントは厳密にタブ文字(\\t)のみです。行頭のスペースが許されるのは、` +
@@ -123,19 +114,13 @@ function markBlock(input) {
     prevEndsWithEscape = /(^|[^\\])(\\\\)*\\$/.test(line);
 
     if (bracketDepth > 0) {
-      const newDepth = bracketDepth + bracketDelta(content);
-      if (justOpenedBracket || newDepth <= 0) {
-        // 開いた直後の最初の行、または閉じ括弧を含んで深さが0に戻る行は、
-        // 改行を挟まず前の行にくっつける（grammar上、"["直後・"]"直前にはEOL不可のため）。
-        result[lastContentLineIdx] += content;
-      } else {
-        // 開始・終了以外の中間行は、複数文として改行区切りのまま新しい行で追加する
-        // （Expressionsの `(EOL _ Expression)*` がこの形を前提としている）。
-        result.push(content);
-        lastContentLineIdx = result.length - 1;
-      }
-      justOpenedBracket = false;
-      bracketDepth = newDepth;
+      // **ブラケットの中ではタブ深さを INDENT/DEDENT に翻訳しない。** 見やすさのために
+      // 中を深くインデントする書き方（function_guide.md の func_mixed 例）で、本来無い
+      // インデントブロックが二重に差し込まれるのを防ぐ。行頭のタブだけ落として、
+      // 改行はそのまま残す——ブロックの縁の EOL は文法の `_e` が受ける。
+      result.push(content);
+      lastContentLineIdx = result.length - 1;
+      bracketDepth += bracketDelta(content);
       continue;
     }
 
@@ -151,14 +136,16 @@ function markBlock(input) {
       }
     }
 
-    // 継続行の判定 (行頭が中置演算子などで始まる場合)
-    const contentTrimmed = content;
+    // 継続行の判定（行頭が中置演算子で始まる場合）。**行頭をそのまま見る**——
+    // かつてはここで `content.trim()` していたが、行頭のスペースは余積演算子であって
+    // 剥がしてよいものではない（preprocess.sn 側の lstrip と同じ穴だった）。
+    //
     // **行頭の `|` / `||` が「続き」なのは、空白が続くときだけである。** 密着していれば
     // それは囲みの開き（絶対値・ノルム）であって中置演算子ではない——`||xs||` を続きと
     // 読むと、インデントブロックの境界がずれる（枝が1つ header へ吸い込まれていた）。
     // `.` は演算子表に無いので、行頭に来ても継続行にはなりえない（かつては文法の
     // 文字クラスが `'-=` をレンジとして読み、`.` を演算子として受理していた名残）。
-    const isContinuation = /^[?+*\/,=<>;%&^]/.test(contentTrimmed) || /^!=(?:=)?/.test(contentTrimmed) || /^\|\|?\s/.test(contentTrimmed) || /^~(?:\s|[+*\/\^-])/.test(contentTrimmed);
+    const isContinuation = /^[?+*\/,=<>;%&^]/.test(content) || /^!=(?:=)?/.test(content) || /^\|\|?\s/.test(content) || /^~(?:\s|[+*\/\^-])/.test(content);
 
     if (isContinuation) {
       if (lastContentLineIdx !== -1) {
@@ -182,9 +169,7 @@ function markBlock(input) {
       lastContentLineIdx = result.length - 1;
     }
 
-    const depthBefore = bracketDepth;
     bracketDepth += bracketDelta(content);
-    justOpenedBracket = depthBefore === 0 && bracketDepth > 0;
   }
 
   // ファイル末尾に達した場合、残っているインデントをすべて閉じる

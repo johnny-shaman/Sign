@@ -174,13 +174,6 @@ delta : [c ~rest] ?
 	close_br c : -1 + (delta rest)
 	delta rest
 
-`この行で括弧を開いたか。開いた直後の行は前の行へ直結させる必要がある`
-`文法上、開き括弧の直後と閉じ括弧の直前に改行を置けないためである`
-
-opened : bd nd ?
-	(bd < 1) & (nd > 0) : 1
-	0
-
 `--- 2. 行頭のタブ深さから INDENT / DEDENT を作る ---`
 
 `インデント幅のスタック。深さの列として積む。底の 0 は要素として常に残るので`
@@ -258,18 +251,16 @@ walk :
 		s
 		st
 		bd
-		jo
 		line : head_line s
 		rest : tail_line s
 		b : body_of line
 		d : depth_of line
 		nd : bd + (delta b)
 	?
-		!b : (walk rest st bd jo) | (close_all st)
-		(bd > 0) & ((jo = 1) | (nd < 1)) : b ((walk rest st nd 0) | (close_all st))
-		bd > 0 : newline b ((walk rest st nd 0) | (close_all st))
-		continues b : (closers st d) space b ((walk rest (unwind st d) nd (opened bd nd)) | (close_all (unwind st d)))
-		(gap st d) b ((walk rest (next_st st d) nd (opened bd nd)) | (close_all (next_st st d)))
+		!b : (walk rest st bd) | (close_all st)
+		bd > 0 : newline b ((walk rest st nd) | (close_all st))
+		continues b : (closers st d) space b ((walk rest (unwind st d) nd) | (close_all (unwind st d)))
+		(gap st d) b ((walk rest (next_st st d) nd) | (close_all (next_st st d)))
 
 `walk は各行の前に区切りを置くため、先頭行のぶんだけ余分な改行が付く`
 `先頭行がインデントされている場合は区切りが INDENT になるので、その時は取らない`
@@ -282,7 +273,7 @@ strip_head : [c ~rest] ?
 `インデントを先に確定させてから、演算子の空白を入れる`
 `スタックの底の 0 はここで積む——空にならないので unwind が必ず止まる`
 
-preprocess : s ? sep (strip_head (walk s 0 0 0))
+preprocess : s ? sep (strip_head (walk s 0 0))
 
 `実行例`
 
