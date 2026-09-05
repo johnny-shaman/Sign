@@ -1240,6 +1240,15 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("構造体：返す（宣言1番を引く）", "f : n ? [\n\ta : n\n\tb : n + 1\n]\n(f 7) ' b");
 	agree("構造体：返す（宣言0番を引く）", "f : n ? [\n\ta : n\n\tb : n + 1\n]\n(f 7) ' a");
 	agree("構造体：返して連番で引く", "f : n ? [\n\ta : n\n\tb : n + 1\n]\n(f 7) ' 1");
+	// **入れ子。** スロットに置かれるのは `{ptr}` の 8 byte なので、内側がどこに何を持つかを
+	// 知っているのは外側の並びのスロットだけである（layout.js の `slots[].shape`）。型名だけ
+	// 残して並びを捨てていたため、型が1段で切れて Pass 4 は命令を選べなかった。
+	const NEST = "n :\n\ta : 1\n\tb :\n\t\tc : 2\n\t\td :\n\t\t\te : 5\n";
+	agree("入れ子：2段", NEST + "(n ' b) ' c");
+	agree("入れ子：3段", NEST + "((n ' b) ' d) ' e");
+	agree("入れ子：連番で辿る", NEST + "(n ' 1) ' 0");
+	agree("入れ子：渡して辿る", NEST + "f : s ? (s ' b) ' c\nf n");
+	agree("入れ子：分割代入して辿る", NEST + "f : [a b ~o] ? b ' c\nf n");
 }
 
 console.log(`\n${passed}/${total} passed`);

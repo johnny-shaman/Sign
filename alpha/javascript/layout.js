@@ -498,10 +498,35 @@ function listItems(node, env = null) {
  *
  * @returns {{ size, align, slotKind, slots: Array<{name?, ordinal, type, offset, size, align}> }|null}
  */
+/**
+ * **いま並びを起こしている途中の構造体。**
+ *
+ * `a : / b : a` のような自分を含む構造体は、並びを起こそうとすると回り続ける
+ * ——`layoutOfStruct` → `packSlots` → `slotCellSize` → `passingOf` → `measure` →
+ * `layoutOfStruct` と戻ってくるからである。**引数で持ち回すと途中の1つが渡し忘れた
+ * だけで穴が開く**（実際 `slotCellSize` は conf しか受け取らない）ので、経路を選ばない
+ * ところに置く。同期呼び出しなので、これで漏れなく止まる。
+ *
+ * 止めたところは並びが出ない（null）。無限に回るのでも例外で落ちるのでもなく、
+ * 「決まらない」と言う（原理4）。以前は診断ではなく
+ * `Maximum call stack size exceeded` で落ちていた。
+ */
+const LAYOUT_IN_PROGRESS = new Set();
+
 function layoutOfStruct(node, conf) {
   // 構造体も名前を経由できる。`p2 : p` のスロット配置は `p` にしか無い。
   node = deref(node, conf && conf.env);
   if (!node || node.atomType !== "Struct") return null;
+  if (LAYOUT_IN_PROGRESS.has(node)) return null;
+  LAYOUT_IN_PROGRESS.add(node);
+  try {
+    return layoutOfStructInner(node, conf);
+  } finally {
+    LAYOUT_IN_PROGRESS.delete(node);
+  }
+}
+
+function layoutOfStructInner(node, conf) {
 
   // マージの結果はスロット表を直接持つ（list_model.md §5.3）。元の宣言は2つ以上の
   // 構造体へ散っているので、並べられるのは畳んだ後のスロットだけである。物理配置は
@@ -585,7 +610,23 @@ function packSlots(entries, conf, slotKind) {
     if (!m) return null;
     const align = m.align || 1;
     offset = alignUp(offset, align);
-    slots.push({ ...(e.name !== undefined ? { name: e.name } : {}), ordinal: e.ordinal, type: e.node.atomType, offset, size: m.size, align });
+    // **内側の構造体の並びも載せる。** スロットには `{ptr}` の 8 byte しか置かれない
+    // ので、`p ' inner ' x` のように辿るとき、内側がどこに何を持つかを知っているのは
+    // ここだけである。型名（`"Struct"`）だけ残して並びを捨てていたため、Pass 4 は
+    // 内側を引く命令を選べなかった。
+    //
+    // `seen` で自己参照を止める。`measure` の入れ子ガード（MAX_NEST）は
+    // `layoutOfStruct` を経由すると depth が渡らずリセットされるので、ここは別に持つ。
+    const shape = e.node && e.node.atomType === "Struct" ? layoutOfStruct(e.node, conf) : null;
+    slots.push({
+      ...(e.name !== undefined ? { name: e.name } : {}),
+      ordinal: e.ordinal,
+      type: e.node.atomType,
+      offset,
+      size: m.size,
+      align,
+      ...(shape ? { shape } : {}),
+    });
     offset += m.size;
     if (align > maxAlign) maxAlign = align;
   }

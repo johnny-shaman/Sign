@@ -825,6 +825,49 @@ function widestMember(type) {
   return parts.find((t) => CONTAINER_TYPES.has(t)) || type;
 }
 
+/**
+ * **構造体を返す式の並び。** Pass 4 の `structShapeOf` と同じ問いで、同じ3通りである
+ * ——リテラル（名前を経由するものを含む）、仮引数（`binding.shape`）、そして
+ * `x ' k` のように別の構造体から取り出したもの（外側の並びの `slots[].shape`）。
+ *
+ * ここが無かったので型が**1段で切れていた**：`n ' b` は Struct と付くのに
+ * `(n ' b) ' d` は null になり、Pass 4 は命令を選べなかった。
+ */
+function structShapeOfNode(node, env, depth = 0) {
+  const u = node && node.type === "block" && node.kind === "paren" && node.lines && node.lines.length === 1 ? node.lines[0] : node;
+  if (!u || depth > 8) return null;
+  const conf = { target: "aarch64_qemu", charset: "ascii", env };
+  const direct = layoutOfStruct(u, conf);
+  if (direct) return direct;
+  if (isIdentifierNode(u) && env) {
+    const b = envLookup(env, u.value);
+    if (b && b.shape && b.shape.slotKind === "named") return b.shape;
+  }
+  if (u.type === "operation" && u.name === "get_prop") {
+    const base = structShapeOfNode(u.left, env, depth + 1);
+    if (!base || base.slotKind !== "named" || !Array.isArray(base.slots)) return null;
+    const sl = slotOfKey(base, u.right);
+    return (sl && sl.shape) || null;
+  }
+  return null;
+}
+
+/** 並びの中から、この鍵が指すスロットを1つ選ぶ。名前でも連番（**宣言順**）でも引ける。 */
+function slotOfKey(shape, key) {
+  if (!shape || !Array.isArray(shape.slots) || !key) return null;
+  if (key.type === "atom" && key.kind === "number") {
+    const i = parseInt(key.value, 10);
+    return shape.slots.find((x) => x.ordinal === i) || null;
+  }
+  // 名前は綴りではなく中身（layout.js の `bareName` と同じ規則）。
+  if (key.type === "atom" && (key.kind === "identifier" || key.kind === "string")) {
+    const v = String(key.value);
+    const bare = v.length >= 2 && ((v[0] === "<" && v[v.length - 1] === ">") || (v[0] === "`" && v[v.length - 1] === "`")) ? v.slice(1, -1) : v;
+    return shape.slots.find((x) => x.name === bare) || null;
+  }
+  return null;
+}
+
 function getPropResultType(node, env) {
   markGetPropKey(node);
   // 器そのものを解決する。識別子なら束縛先まで辿る——`l : [1 2 3]` の `l ' 0` を
@@ -898,6 +941,13 @@ function getPropResultType(node, env) {
 
   if (containerType === "Struct") {
     const key = node.right;
+    // **入れ子も辿る。** 名前で引いた結果がまた構造体なら、その並びは外側の並びの中の
+    // スロットが持っている（layout.js の `slots[].shape`）。名前でも連番でも同じ表を引く。
+    {
+      const shape = structShapeOfNode(node.left, env);
+      const sl = shape && shape.slotKind === "named" ? slotOfKey(shape, key) : null;
+      if (sl && sl.type) return sl.type;
+    }
     // 名前付きスロットは名前で引く。
     if (base && base.slotKind === "named" && isIdentifierNode(key)) {
       const slot = namedSlots(base).get(key.value);
@@ -2497,16 +2547,19 @@ function collectCallsiteParamTypes(nodes, env) {
           layout = lay;
           for (const s of lay.slots || []) {
             const prev = seen.get(s.name);
-            if (prev && prev !== s.type) { agree = false; break; }
-            seen.set(s.name, s.type);
+            if (prev && prev.type !== s.type) { agree = false; break; }
+            // 型だけでなくスロットごと覚える。分解した先が構造体なら、その**並び**まで
+            // 渡さないと Pass 4 は中を引けない（型は "Struct" としか言わない）。
+            seen.set(s.name, s);
           }
         }
         if (agree) {
           for (const e of named) {
-            const t = seen.get(String(e.name).replace(/[<>]/g, ""));
-            if (!t) continue;
+            const sl = seen.get(String(e.name).replace(/[<>]/g, ""));
+            if (!sl) continue;
             const b = envLookup(bscope, e.name);
-            if (b && b.atomType !== t) { b.atomType = t; changed = true; }
+            if (b && b.atomType !== sl.type) { b.atomType = sl.type; changed = true; }
+            if (b && sl.shape && !b.shape) { b.shape = sl.shape; changed = true; }
           }
           // **並びは器そのものを受ける名前に置く。** Pass 4 の入口はそこから引いて
           // 固定オフセットのロードを出す——名前はコンパイル時にオフセットへ解決され、

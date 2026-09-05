@@ -3521,6 +3521,40 @@ function bindingShapeOf(node, env) {
 	return sh && sh.slotKind === "named" && Array.isArray(sh.slots) ? sh : null;
 }
 
+/**
+ * **構造体を返す式の並び。**
+ *
+ * 3通りある。リテラル（や名前を経由したリテラル）なら `layoutOfStruct` が起こす。
+ * 仮引数なら値ノードが無いので起こせず、呼び出しサイトから起こしたものを Pass 3 が
+ * 束縛へ置いてある（`binding.shape`）。そして `x ' k` のように**別の構造体から取り出した
+ * もの**なら、その並びは x の並びの中のスロットが持っている（`slot.shape`）。
+ *
+ * 3つとも「この式が返す構造体はどこに何を持つか」という同じ問いなので、入口を1つに
+ * まとめる。別々に書くと、辿れる書き方と辿れない書き方が並ぶ——実際そうなっていて、
+ * `[foo bar ~o] ? foo` は通るのに `s ? s ' foo` が通らない、という非対称が残っていた。
+ */
+function structShapeOf(node, env, conf, depth = 0) {
+	const u = unwrap(node);
+	if (!u || depth > 8) return null;
+	const direct = layoutOfStruct(u, conf) || bindingShapeOf(u, env);
+	if (direct) return direct;
+	if (u.type === "operation" && u.name === "get_prop") {
+		const base = structShapeOf(u.left, env, conf, depth + 1);
+		if (!base || base.slotKind !== "named" || !Array.isArray(base.slots)) return null;
+		const si = constAddressOf(u.right, env);
+		let slot = null;
+		if (si !== null && si >= 0n) {
+			// 連番は宣言順（stack_abi.md §7.1）——引く側と同じ規則で辿る。
+			slot = base.slots.find((sl) => sl.ordinal === Number(si));
+		} else {
+			const spell = slotKeySpelling(unwrap(u.right), env);
+			if (spell !== null) slot = base.slots.find((sl) => sl.name === spell);
+		}
+		return (slot && slot.shape) || null;
+	}
+	return null;
+}
+
 function genIndex(node, env, em, scope) {
 	const conf = em.conf;
 	// **定数の構造体は畳む**（レジスタ束はここで消える）。
@@ -3542,10 +3576,7 @@ function genIndex(node, env, em, scope) {
 		// かったので素通りしていたが、スロットの幅を `passingOf` で埋めるようにした途端、
 		// カーソルがここへ落ちて「1本で運びます」と断られた。前提は明示して確かめる。
 		const carried = sb ? slotsOfNode(sb, conf, env) : null;
-		const slay =
-			sb && sb.atomType === "Struct" && carried === 1
-				? layoutOfStruct(sb, { target: conf.target, charset: conf.charset, env }) || bindingShapeOf(sb, env)
-				: null;
+		const slay = sb && sb.atomType === "Struct" && carried === 1 ? structShapeOf(sb, env, { target: conf.target, charset: conf.charset, env }) : null;
 		// 引き方は2つ——連番と名前。**どちらもスロットを1つ決めるだけ**で、読み出しの命令は
 		// 同じである。決めるところだけ分けて、出すところは1本にまとめる。
 		let slot = null;
