@@ -1197,9 +1197,19 @@ function buildParameterList(paramTokens, env) {
 // 同一パラメータリスト内で、まだ束縛されていない識別子（自分自身 or 後ろのパラメータ）への
 // 前方参照を検出する。tokens は defaultTokens の生トークン列（ネストした配列も再帰的に見る）。
 function checkNoForwardReference(tokens, paramName, allNames, boundSoFar) {
-  for (const t of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
     if (Array.isArray(t)) {
       checkNoForwardReference(t, paramName, allNames, boundSoFar);
+      continue;
+    }
+    // `obj ' foo` の `foo` はスロット**名**であって値の参照ではない（operator_table.md の
+    // `'`：右辺に裸の識別子を置いたらそれは名前で、識別子の**値**を鍵にしたいときだけ
+    // `obj ' k~` / `obj ' @k` と書く——トークン列でも `' <k> _~` / `' @_ <k>` と形が違う）。
+    // ここで名前を参照として数えていたため、`foo : this ' foo`（構造体の分割代入を
+    // 糖衣へ展開した形）が「foo が自分自身を参照している」と誤判定されて弾かれていた。
+    if (t === "'" && isIdentifierToken(tokens[i + 1]) && tokens[i + 2] !== "_~") {
+      i++;
       continue;
     }
     if (isIdentifierToken(t) && allNames.has(t) && !boundSoFar.has(t)) {
