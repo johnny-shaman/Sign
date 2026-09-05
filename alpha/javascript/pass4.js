@@ -1067,6 +1067,25 @@ function genExpr(node, env, em, scope, tail = false) {
 				const loaded = genLoadBinding(n, b, env, em);
 				if (loaded !== null) return loaded;
 			}
+			// **在る器へのマージは畳んではいけない。書き込みだからである。**
+			//
+			// `q : p~ [ … ]~` の `q` は「p の器へ入れた結果」＝**p そのもの**である
+			// （解釈器も同じオブジェクトを返す）。ところが識別子の畳み込みは `q` を使うたびに
+			// 値ノードを出し直すので、**マージが使った回数だけ走る**。同じ値を書くだけなら
+			// 結果は変わらないが、右辺が自分を読む形では二重に効く——
+			//
+			//     p : / n : 0 ／ q : p~ [ n : (p ' n) + 1 ]~ ／ q ' n
+			//     解釈器 1 に対し、機械語は**診断ゼロで 2**（使用回数を増やすと壊れ方が育つ）
+			//
+			// 畳まずに**左の器そのもの**へ解決する。マージ自体は定義の行で一度だけ出ている。
+			if (v) {
+				const mb = v.slotOrigins && v.mergeBase === "name" ? mergeBaseNode(v) : null;
+				if (mb && !(scope && scope.folding && scope.folding.has(n.value))) {
+					const folding = new Set(scope && scope.folding ? scope.folding : []);
+					folding.add(n.value);
+					return genExpr(mb, env, em, { ...(scope || {}), folding }, tail);
+				}
+			}
 			// 自分自身へ戻らないようにする（`a : a` のような形は解けない）。
 			if (v && v !== n && !(scope && scope.folding && scope.folding.has(n.value))) {
 				const folding = new Set(scope && scope.folding ? scope.folding : []);
