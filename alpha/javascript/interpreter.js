@@ -424,6 +424,23 @@ function makeClosure(paramsNode, bodyNode, env) {
         "返値の位置には受け手が無いため、名前付きスロットなら名前が落ちて値の並びになります。器をそのまま返すなら `~` を外してください",
     });
   }
+  // **分解には必ず rest の位置がある。** `[h t]` のように rest を書かない形は、
+  // 「先頭 n 個＋残り」という一つの族から外れてしまう——残りをどう扱うかが書かれて
+  // いないので、受け取り方（`{ptr, len}` か `{ptr}` か）も決まらない。
+  // 残りが要らないなら零対象を置く：`[h t ~__]`。拾うものが無いことがそのまま値になる。
+  if (paramsNode && paramsNode.type === "params" && paramsNode.bracket) {
+    const es = paramsNode.entries || [];
+    if (es.length >= 2 && !es.some((e) => e.rest)) {
+      env.diagnostics.push({
+        level: "error",
+        message:
+          "分解には rest の位置が要ります（`[" +
+          es.map((e) => String(e.name).slice(1, -1)).join(" ") +
+          "]`）。残りが要らないなら `~__` と書いてください——" +
+          "先頭 n 個と残り、という一つの形に揃えると、受け取り方が形だけで決まります",
+      });
+    }
+  }
   return { __lambda__: true, params: paramsNode, body: bodyNode, env };
 }
 

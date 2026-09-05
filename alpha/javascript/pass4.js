@@ -439,7 +439,13 @@ function paramShapesOf(paramNode) {
 		// （名前でソートした正規順）、機械の上ですることは固定オフセットからのロードである。
 		// `~obj` は器そのもの＝その `ptr` を指す。
 		if (es.length >= 2 && es[es.length - 1].rest && es[es.length - 1].name && es.slice(0, -1).every((e) => e.name && !e.rest && !e.pattern && !e.default)) {
-			return [{ kind: "fields", names: es.slice(0, -1).map((e) => e.name), rest: es[es.length - 1].name }];
+			// **構文だけでは読み方が決まらない。** 名前で分けるのは器が構造体のときで、
+			// List / String なら位置で取る（そちらには名前が無いので位置しか残らない）。
+			// どちらか一方しか成立しない、というだけのことなので、決めるのは型である
+			// ——`paramRegWidths` が並びを引けたら名前、引けなければ位置として読む。
+			// 先頭たちは `names` と `heads` の両方で持たせておく。
+			const heads = es.slice(0, -1).map((e) => e.name);
+			return [{ kind: "fields", names: heads, heads, rest: es[es.length - 1].name }];
 		}
 		return [null];
 	}
@@ -562,7 +568,18 @@ function emitLiftToContainer(em, node, valueOff, why) {
 	return po;
 }
 
-function emitDestructure(em, containerOff, headOff, elemSize, signed, name) {
+/**
+ * `[x1 … xn ~r]` を出す。**先頭を n 個読んで、残りは同じ領域を指したまま頭をずらす。**
+ *
+ * 分解は受け取った器を指し直すだけであり、確保は起きない
+ * （`layer_relations.md` の「分解 `[c ~r]` … 受け取った器を指し直すだけ」）。n 個でも
+ * 同じで、`ptr` を n 要素ぶん進めて `len` を n 減らすだけである——1個のときの繰り返し
+ * でしかないので、`[h ~t]` と `[a b c ~d]` の間に段差は無い。
+ *
+ * @param headOffs 先頭たちを置くスロットのオフセット（宣言順）
+ */
+function emitDestructure(em, containerOff, headOffs, elemSize, signed, name) {
+	const offs = Array.isArray(headOffs) ? headOffs : [headOffs];
 	em.load(SCRATCH[0], containerOff, `${name} の先頭を取り出す`);
 	// 要素の幅ぶんだけ読む。符号ありで 8 byte 未満なら符号拡張が要る。
 	const mnemonic =
@@ -570,13 +587,14 @@ function emitDestructure(em, containerOff, headOff, elemSize, signed, name) {
 		: elemSize === 4 ? `ldr${signed ? "sw " + SCRATCH[1] : " w10"}, [${SCRATCH[0]}]`
 		: elemSize === 2 ? `ldr${signed ? "sh " + SCRATCH[1] : "h w10"}, [${SCRATCH[0]}]`
 		: `ldr${signed ? "sb " + SCRATCH[1] : "b w10"}, [${SCRATCH[0]}]`;
-	em.emit(mnemonic, `${elemSize} byte の要素1つ`);
-	em.store(SCRATCH[1], headOff, "先頭");
-	// 残りは同じ領域を指したまま、頭を1つ分ずらす。
-	em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${elemSize}`, "1要素ぶん進める");
+	offs.forEach((headOff, i) => {
+		em.emit(mnemonic, `${elemSize} byte の要素1つ（${i + 1} 個目）`);
+		em.store(SCRATCH[1], headOff, offs.length === 1 ? "先頭" : `先頭から ${i + 1} 個目`);
+		em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${elemSize}`, "1要素ぶん進める");
+	});
 	em.store(SCRATCH[0], containerOff, "残りの ptr");
 	em.load(SCRATCH[1], containerOff + 8);
-	em.emit(`sub ${SCRATCH[1]}, ${SCRATCH[1]}, #1`, "残りの長さ");
+	em.emit(`sub ${SCRATCH[1]}, ${SCRATCH[1]}, #${offs.length}`, "残りの長さ");
 	em.store(SCRATCH[1], containerOff + 8, "残りの len（0 なら __）");
 }
 /**
@@ -6170,7 +6188,23 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 			// ので（`shape`）、そこから引く——無ければ `~obj` の型から引き直す。
 			const rb = lambdaNode.scope ? envLookup(lambdaNode.scope, sh.rest) : null;
 			const lay = (rb && rb.shape) || lambdaNode.structLayout || null;
-			return { shape: sh, regs: 1, layout: lay };
+			// **並びが引けたなら構造体である。** 名前がコンパイル時にオフセットへ解決
+			// されるので `{ptr}` 1本で足りる。
+			if (lay) return { shape: sh, regs: 1, layout: lay };
+			// **引けないなら位置で読む。** 名前を持たない器（List / String）に渡された、
+			// ということであり、そこでは位置しか読み方が無い。`[h ~t]` と同じ道であって、
+			// 先頭が n 個あるだけである。
+			const ht = typeOf(sh.heads[0]);
+			const el = ht ? measure({ atomType: ht }, { target: em.conf.target, charset: em.conf.charset }) : null;
+			if (el && el.size && slotsOf(ht, em.conf) === 1) {
+				return {
+					shape: { kind: "destructure", heads: sh.heads, head: sh.heads[0], rest: sh.rest },
+					regs: 2,
+					elemSize: el.size,
+					signed: SIGNEDNESS[ht] === "signed",
+				};
+			}
+			return { shape: sh, regs: 1, layout: null };
 		}
 		const headType = typeOf(sh.head);
 		const elem = headType ? measure({ atomType: headType }, { target: em.conf.target, charset: em.conf.charset }) : null;
@@ -6633,15 +6667,19 @@ function genFunction(name, lambdaNode, env, em, mono) {
 		// **`[h ~t]` は検査の後で作る。** 空の容器から先頭を読むと指す先の外を触る
 		// ——先に崩壊させておけば読まずに済む。先頭は新しいスロット、残りは容器の
 		// スロットをそのまま使い回す（コピーしない）。
-		const headOff = em.slot * 8;
-		em.push();
-		emitDestructure(em, inc.off, headOff, inc.elemSize, inc.signed, what);
-		params.push(inc.shape.head, inc.shape.rest);
-		paramOffsets.push(headOff, inc.off);
+		const heads = inc.shape.heads || [inc.shape.head];
+		const headOffs = heads.map(() => {
+			const o = em.slot * 8;
+			em.push();
+			return o;
+		});
+		emitDestructure(em, inc.off, headOffs, inc.elemSize, inc.signed, what);
+		params.push(...heads, inc.shape.rest);
+		paramOffsets.push(...headOffs, inc.off);
 		// **分解した組を覚えておく。** 組み直す形（`c rest`）は恒等射なので、器を作る
 		// のではなく参照を戻せばよい（`genRejoin`）。
 		bracketPairs.push({ head: inc.shape.head, rest: inc.shape.rest, restOff: inc.off, elemSize: inc.elemSize });
-		paramSlots.push(1, 2);
+		paramSlots.push(...heads.map(() => 1), 2);
 	}
 
 	// **自分のフレームに置いたものは返せない。**
