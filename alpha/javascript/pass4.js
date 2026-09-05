@@ -38,7 +38,7 @@
 import { reduceToMachineType, widthsOf, UNIT_NICHE_ASM, charSizeOf, charLimitOf, DEFAULT_CHARSET, SIGNEDNESS, literalDigits, literalParts } from "./target_info.js";
 import { envLookup } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
-import { passingOf, measure, layoutOfStruct, flattenProduct } from "./layout.js";
+import { passingOf, measure, layoutOfStruct, elementShapeOfList, flattenProduct } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 // AAPCS64（stack_abi.md §4.2）。引数は x0〜x7、返値は x0、一時は x9〜x15。
@@ -3539,6 +3539,19 @@ function structShapeOf(node, env, conf, depth = 0) {
 	const direct = layoutOfStruct(u, conf) || bindingShapeOf(u, env);
 	if (direct) return direct;
 	if (u.type === "operation" && u.name === "get_prop") {
+		// 器の要素を引いた形（`l ' 0`）。要素はどれも同じ形なので、添字が何であれ
+		// 並びは同じ——添字が実行時に決まっても構わない、というのがここの違いである。
+		const bl = unwrap(u.left);
+		if (bl && (bl.atomType === "List" || bl.atomType === "Iterator")) {
+			const direct = elementShapeOfList(bl, conf);
+			if (direct) return direct;
+			// 仮引数として受けた器には値ノードが無い。呼び出しサイトから起こしたものが束縛に在る。
+			if (isIdentifierNode(bl) && env) {
+				const eb = envLookup(env, bl.value);
+				if (eb && eb.elementShape && eb.elementShape.slotKind === "named") return eb.elementShape;
+			}
+			return null;
+		}
 		const base = structShapeOf(u.left, env, conf, depth + 1);
 		if (!base || base.slotKind !== "named" || !Array.isArray(base.slots)) return null;
 		const si = constAddressOf(u.right, env);

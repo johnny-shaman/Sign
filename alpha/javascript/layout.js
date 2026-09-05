@@ -494,6 +494,30 @@ function listItems(node, env = null) {
 }
 
 /**
+ * **器の要素が構造体なら、その並び。**
+ *
+ * 器に並ぶのは要素の**運ぶ姿**——構造体なら `{ptr}` の 8 byte——なので、要素の中に
+ * 何があるかは器の側には書いていない。`(l ' 0) ' foo` のように要素の中を引くとき、
+ * 並びを持っているのは要素そのものである。
+ *
+ * **要素はどれも同じ形である**（そうでなければ器ではなく直積である）ので、
+ * 先頭の1つを見れば足りる。1つも無い（空の器）なら並びは決まらない。
+ */
+function elementShapeOfList(node, conf) {
+  const n = deref(node, conf && conf.env);
+  if (!n) return null;
+  let items = listItems(n, conf && conf.env);
+  if (!items || items.length === 0) return null;
+  // 1行のブロックの中身が積（`[p , p]`）なら、そこがそのまま要素の並びである
+  // ——`listItems` はブロックの行を割るが、行の中の積までは割らない。
+  if (items.length === 1 && items[0] && items[0].type === "operation" && items[0].name === "product") {
+    items = flattenProduct(items[0]);
+  }
+  if (!items.length) return null;
+  return layoutOfStruct(items[0], conf);
+}
+
+/**
  * `Struct` のレイアウトを出す。
  *
  * @returns {{ size, align, slotKind, slots: Array<{name?, ordinal, type, offset, size, align}> }|null}
@@ -741,4 +765,4 @@ function passingOf(node, conf) {
   return null;
 }
 
-export { measure, layoutOfStruct, formatLayout, alignUp, passingOf, stringLength, flattenProduct };
+export { measure, layoutOfStruct, elementShapeOfList, formatLayout, alignUp, passingOf, stringLength, flattenProduct };

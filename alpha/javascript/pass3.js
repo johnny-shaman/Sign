@@ -33,7 +33,7 @@
 import { literalDigits } from "./target_info.js";
 import { envLookup } from './pass1.js';
 import { OperationError } from "./errors.js";
-import { stringLength, layoutOfStruct } from "./layout.js";
+import { stringLength, layoutOfStruct , elementShapeOfList } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 const ARITHMETIC_OPS = new Set(["add", "sub", "mul", "div", "mod", "pow"]);
@@ -844,6 +844,18 @@ function structShapeOfNode(node, env, depth = 0) {
     if (b && b.shape && b.shape.slotKind === "named") return b.shape;
   }
   if (u.type === "operation" && u.name === "get_prop") {
+    // 器の要素を引いた形。要素はどれも同じ形なので、並びは要素そのものが持っている。
+    const bl = u.left;
+    if (bl && (bl.atomType === "List" || bl.atomType === "Iterator")) {
+      const direct = elementShapeOfList(bl, conf);
+      if (direct) return direct;
+      // 仮引数として受けた器には値ノードが無い。呼び出しサイトから起こしたものが束縛に在る。
+      if (isIdentifierNode(bl) && env) {
+        const b2 = envLookup(env, bl.value);
+        if (b2 && b2.elementShape && b2.elementShape.slotKind === "named") return b2.elementShape;
+      }
+      return null;
+    }
     const base = structShapeOfNode(u.left, env, depth + 1);
     if (!base || base.slotKind !== "named" || !Array.isArray(base.slots)) return null;
     const sl = slotOfKey(base, u.right);
@@ -2508,19 +2520,30 @@ function collectCallsiteParamTypes(nodes, env) {
               : (e.rest ? null : e);
           if (!recv || !recv.name) return;
           const ai = isBracket ? 0 : i;
-          let lay = null;
+          // 渡ってくるのが構造体そのものか、**構造体を要素にする器**かで置く先が変わる。
+          // どちらも「中を名前で引くには並びが要る」という同じ話であり、器の場合は
+          // 要素の並び——要素はどれも同じ形なので1つで足りる。
+          let lay = null, elay = null, sameL = true, sameE = true;
           for (const args of sites) {
-            if (args.length <= ai) { lay = null; break; }
-            const l = layoutOfStruct(args[ai], { target: "aarch64_qemu", charset: "ascii", env: args.scope || env });
+            if (args.length <= ai) { sameL = false; sameE = false; break; }
+            const cf = { target: "aarch64_qemu", charset: "ascii", env: args.scope || env };
             // 呼び出しサイトが1つでも違う並びを渡すなら、静的には決まらない。
-            if (!l || l.slotKind !== "named") { lay = null; break; }
-            if (lay && JSON.stringify(lay.slots) !== JSON.stringify(l.slots)) { lay = null; break; }
-            lay = l;
+            const l = layoutOfStruct(args[ai], cf);
+            if (!l || l.slotKind !== "named" || (lay && JSON.stringify(lay.slots) !== JSON.stringify(l.slots))) sameL = false;
+            else lay = l;
+            const e = elementShapeOfList(args[ai], cf);
+            if (!e || e.slotKind !== "named" || (elay && JSON.stringify(elay.slots) !== JSON.stringify(e.slots))) sameE = false;
+            else elay = e;
           }
-          if (!lay) return;
           const bnd = envLookup(rhs.scope, recv.name);
-          if (bnd && !bnd.shape) { bnd.shape = lay; changed = true; }
-          if (bnd && bnd.atomType !== "Struct") { bnd.atomType = "Struct"; changed = true; }
+          if (!bnd) return;
+          if (sameL && lay) {
+            if (!bnd.shape) { bnd.shape = lay; changed = true; }
+            if (bnd.atomType !== "Struct") { bnd.atomType = "Struct"; changed = true; }
+          } else if (sameE && elay && !bnd.elementShape) {
+            bnd.elementShape = elay;
+            changed = true;
+          }
         });
       }
     }
