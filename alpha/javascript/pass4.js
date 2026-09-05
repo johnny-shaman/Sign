@@ -423,6 +423,12 @@ function isSlotKeyAtom(n) {
 	return isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
 }
 
+/** 後置 `~`（撒く／器そのものを指す）か。マージ `a~ b~` は両辺がこの形である。 */
+function isExpandPostfix(n) {
+	const u = unwrap(n);
+	return !!u && u.type === "operation" && u.position === "postfix" && u.name === "expand" && !!u.operand;
+}
+
 /**
  * **構造体ブロックか。** `p : / foo : 10 / …` は match の並びと**同じ形**をしている
  * ので、`lines` の並びでは見分けられない。見分けているのは Pass 3 で、構造体には
@@ -638,6 +644,17 @@ function emitDestructure(em, containerOff, headOffs, elemSize, signed, name) {
 	em.store(SCRATCH[1], containerOff + 8, "残りの len（0 なら __）");
 }
 /**
+ * **`n` バイトを置くディレクティブ。**
+ *
+ * スカラーの束縛・器の束縛・構造体の像が、どれも同じ問いを持つ。かつては
+ * `rodataLines` の中のローカル関数だったので、構造体のスロットを置く側は同じ表を
+ * 書き直すしかなかった——**同じ事実を2箇所で決めない**（今日のバグはほぼ全部この形）。
+ */
+function dataDirective(size) {
+	return size === 8 ? ".quad" : size === 4 ? ".word" : size === 2 ? ".hword" : ".byte";
+}
+
+/**
  * 命令列を組み立てる器。
  *
  * 診断は**捨てない**。出せなかった場所を黙って飛ばすと、命令の無い関数ができあがって
@@ -691,6 +708,22 @@ class Emitter {
 	 * 同じ名前は1つに畳む——「binding ごとに一意」がそのまま識別子になる。
 	 */
 	internBinding(name, value, size, writable = false) {
+		return this.internBindingImage(name, [`	${dataDirective(size)} ${value}`], size, writable);
+	}
+
+	/**
+	 * **同じことを「バイト列で」置く。**
+	 *
+	 * `internBinding` は「1つの値＋1つの幅」しか持てなかった——`.quad 5` や、要素幅の
+	 * 揃った `.quad 1, 2, 3` は書けるが、**幅の違うスロットが並ぶ構造体が置けない**。
+	 * そのせいで構造体だけが「一つの場所」を持てず、`$p` は断られ、値として使うたびに
+	 * フレームへ組み直されていた（実測で `(f p) + (f p) + (f p)` に `sub sp` が3回）。
+	 *
+	 * 置き場所の決まりは値のときと同じ——書かれるなら `.data`、読むだけなら `.rodata`。
+	 * 違うのは中身が**行の並び**であることだけなので、名前ごとに1つという性質も、
+	 * 節の振り分けも `internBinding` と共有する。
+	 */
+	internBindingImage(name, body, align, writable = false) {
 		const key = `b:${name}`;
 		const hit = this.namedData.get(key);
 		// 一度でも書かれるなら書ける場所でなければならない。
@@ -699,7 +732,7 @@ class Emitter {
 			return hit.label;
 		}
 		const label = `.Lbind_${name.replace(/[^\w]/g, "_")}`;
-		this.namedData.set(key, { label, value, size, writable });
+		this.namedData.set(key, { label, body, align, writable });
 		return label;
 	}
 
@@ -720,12 +753,11 @@ class Emitter {
 			else out.push(`	${dir} ${cps.map((c) => "0x" + c.toString(16)).join(", ")}`);
 			out.push(`	// ${cps.length} 文字`);
 		}
-		const dirFor = (size) => (size === 8 ? ".quad" : size === 4 ? ".word" : size === 2 ? ".hword" : ".byte");
-		for (const { label, value, size, writable } of this.namedData.values()) {
+		for (const { label, body, align, writable } of this.namedData.values()) {
 			if (writable) continue; // 書かれるものは下の `.data` へ
-			out.push(`	.balign ${size}`);
+			out.push(`	.balign ${align}`);
 			out.push(`${label}:`);
-			out.push(`	${dirFor(size)} ${value}`);
+			out.push(...body);
 		}
 		// **書かれる束縛は `.data` へ。** `$名前 # 値` の書き先が読み取り専用の節に在ると、
 		// 書き込みは黙って落ちる（あるいはフォールトする）。どちらに置くかは「書かれるか」
@@ -733,10 +765,10 @@ class Emitter {
 		const written = [...this.namedData.values()].filter((x) => x.writable);
 		if (written.length > 0) {
 			out.push("", "	.section .data");
-			for (const { label, value, size } of written) {
-				out.push(`	.balign ${size}`);
+			for (const { label, body, align } of written) {
+				out.push(`	.balign ${align}`);
 				out.push(`${label}:`);
-				out.push(`	${dirFor(size)} ${value}`);
+				out.push(...body);
 			}
 		}
 		return out;
@@ -1027,7 +1059,12 @@ function genExpr(node, env, em, scope, tail = false) {
 			const v = b && b.valueNode;
 			// **番地を取られた束縛は畳まない。** そこには書き込める場所があるので、読みは
 			// その場所を辿らなければならない——畳むと、書いた後の読みが古い定数を返す。
-			if (b && b.addressTaken) {
+			//
+			// **構造体は番地を取られていなくても畳まない。** 畳むというのは「使うたびに
+			// 組み直す」ことであり、スカラーなら同じ値でも、構造体では**同じ名前が呼び
+			// 出しごとに別の実体になる**（実測で `sub sp` が3回出ていた）。名前ごとに一つ
+			// の場所を持つのは binding の性質であって `$` の副作用ではない。
+			if (b && (b.addressTaken || isStructBlock(unwrap(b.valueNode)))) {
 				const loaded = genLoadBinding(n, b, env, em);
 				if (loaded !== null) return loaded;
 			}
@@ -2047,8 +2084,13 @@ function genExpr(node, env, em, scope, tail = false) {
 			// 畳まれるので指す先が無かった——`$関数` は単相化が、`$匿名式` は `alloca` が
 			// 扱えるのに、**値の束縛だけが場所を持たない**という穴だった。`.rodata` に
 			// 置いて、そのラベルのアドレスを作る。
+			//
+			// **構造体もここへ来る。** かつて `bindingLabel` は「1つの値＋1つの幅」しか
+			// 置けなかったので、幅の違うスロットが並ぶ構造体は場所を持てず、`$p` は
+			// 「アドレスを取れるのはフレームに在るものだけです」で断られていた。置き方は
+			// `structBindingLabel` が知っている——並びは `layoutOfStruct` のものである。
 			const nb = env ? envLookup(env, t.value) : null;
-			const got = nb ? bindingLabel(t.value, nb, env, em) : null;
+			const got = nb ? bindingLabel(t.value, nb, env, em) || structBindingLabel(t.value, nb, env, em) : null;
 			if (got) {
 				const label = got.label;
 				const off = em.push();
@@ -3210,6 +3252,97 @@ function bindingLabel(name, b, env, em) {
 }
 
 /**
+ * **スロット1つを、そのまま置ける形で書き出す。** 置けなければ null。
+ *
+ * 幅は `layoutOfStruct` が言うもの（`slot.size`）をそのまま使う——**1バイトも違っては
+ * いけない**。読む側（`slotLoadInsn` / `genIndex`）が同じ表を引くので、ここで独自に
+ * 幅を決め直すと「置いた場所」と「読む場所」がずれる。
+ *
+ * 参照で運ぶ型は運ぶ姿を置く——文字列は `{ptr, len}` の 16 byte で、`ptr` は
+ * `.rodata` の中身を指すラベルである（`layout.js` の `slotCellSize` がそう数えている）。
+ */
+function slotImageLines(slot, value, env, em) {
+	const v = unwrap(value);
+	if (!v || v.type !== "atom") return null;
+	if (v.kind === "number" || v.kind === "address") {
+		// **整数として書けるものだけ。** `.quad 2.5` はアセンブラが受け取らない
+		// ——浮動小数はまだ出せない（`genExpr` の数リテラルも同じところで断っている）。
+		let n;
+		try {
+			n = BigInt(String(v.value));
+		} catch {
+			return null;
+		}
+		if (![1, 2, 4, 8].includes(slot.size)) return null;
+		return [`	${dataDirective(slot.size)} ${n}`];
+	}
+	if (v.kind === "string" || v.kind === "char" || v.kind === "unicode") {
+		const cps = codePointsOf(v);
+		if (cps === null) return null;
+		// `{ptr, len}` で運ぶ幅（16 byte）なら中身を `.rodata` へ置いてラベルを指す。
+		// 1文字は符号位置そのもの（スカラー）なので、数と同じ置き方になる。
+		if (slot.size === 16) {
+			if (cps.length === 0) return null; // 空文字列は指す先が無い（`{0, 0}`）
+			return [`	.quad ${em.intern(cps)}`, `	.quad ${cps.length}`];
+		}
+		if (cps.length !== 1 || ![1, 2, 4, 8].includes(slot.size)) return null;
+		return [`	${dataDirective(slot.size)} ${cps[0]}`];
+	}
+	return null;
+}
+
+/**
+ * **構造体を「一つの場所」として書き出す**バイト列。置けなければ null。
+ *
+ * 並びを決めるのは `layoutOfStruct` であって、ここではない——各スロットを
+ * `slot.offset` の位置へ置き、隙間は `.zero` で埋めるだけである。**offset を数え直さ
+ * ない**のが肝で、数え直した瞬間に「置いた場所」と `genIndex` が「読む場所」が
+ * 別々の答えを持つ（今日のバグはほぼ全部この形だった）。
+ *
+ * 物理配置は名前のソート順、評価（宣言）順は `slot.ordinal`——`lines[ordinal]` が
+ * そのスロットの値である。組み立ての枝（`genExpr` の名前付きスロット）と同じ結び方で
+ * なければならない。
+ *
+ * 置けるのはスロットが全部リテラルに畳めるものだけである。実行時に決まる値があるなら
+ * 「一つの場所」を静的には作れないので、これまで通りフレームへ組む道へ返す。
+ */
+function structImageOf(node, env, em) {
+	const n = unwrap(node);
+	if (!isStructBlock(n) || n.mergedSlots) return null;
+	const lay = layoutOfStruct(n, { target: em.conf.target, charset: em.conf.charset, env });
+	const lines = (n.lines || []).map(unwrap);
+	if (!lay || !lay.slots || lay.slots.length !== lines.length) return null;
+	const body = [];
+	let at = 0;
+	for (const sl of lay.slots) {
+		const line = lines[sl.ordinal];
+		if (!isDefineNode(line)) return null;
+		const piece = slotImageLines(sl, line.right, env, em);
+		if (!piece) return null;
+		// 重なったら置かない。決まらないことは黙って別の答えにせず、道を譲る（原理4）。
+		if (sl.offset < at) return null;
+		if (sl.offset > at) body.push(`	.zero ${sl.offset - at}`);
+		body.push(...piece);
+		at = sl.offset + sl.size;
+	}
+	if (lay.size < at) return null;
+	if (lay.size > at) body.push(`	.zero ${lay.size - at}`);
+	return { body, align: lay.align, size: lay.size };
+}
+
+/**
+ * **構造体の束縛の置き場所（ラベル）。** 無ければ null。
+ *
+ * スカラーの `bindingLabel` と対になる。`$p` が場所を作り、`p` がそこを読む——2つが
+ * 別々に判断すると片方だけ場所を使う形になるので、どちらもここを通す。
+ */
+function structBindingLabel(name, b, env, em) {
+	const img = b && b.valueNode ? structImageOf(b.valueNode, env, em) : null;
+	if (!img) return null;
+	return { label: em.internBindingImage(bareName(name), img.body, img.align, !!b.addressTaken), size: img.size };
+}
+
+/**
  * 番地を取られた**器**の束縛を、1つの置き場所として出す。出せなければ null。
  *
  * `l : [1 2 3]` は普段、使うたびにフレームへ並べ直される——読むだけなら同じ値なので
@@ -3257,6 +3390,21 @@ function genLoadBinding(node, b, env, em) {
 	// 器か単体かは**束縛の型**が言う。ノード側の幅は識別子には載っていないことがある。
 	const asList = genLoadListBinding(node, b, env, em);
 	if (asList !== null) return asList;
+	// **構造体は名前ごとに一つの場所を持つ。**
+	//
+	// かつては使うたびにフレームへ組み直していた——`f : s ? s ' foo` に対して
+	// `(f p) + (f p) + (f p)` が `sub sp` を3回出し、**同じ名前が3つの別の実体**に
+	// なっていた。読むだけなら値が同じなので見えないが、`$p` の指す先も、マージが
+	// 書き込む先も「どの実体か」で変わる。運ぶのは `{ptr}` の1本である（`passingOf`）。
+	const st = structBindingLabel(node.value, b, env, em);
+	if (st) {
+		const so = em.push();
+		if (so === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+		em.emit(`adrp ${SCRATCH[0]}, ${st.label}`, `${bareName(node.value)} の場所（構造体は名前ごとに一つ）`);
+		em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, :lo12:${st.label}`);
+		em.store(SCRATCH[0], so, "ptr（Struct は形が型にあるので1本）");
+		return 1;
+	}
 	const got = bindingLabel(node.value, b, env, em);
 	if (!got) return null;
 	const off = em.push();
@@ -3298,6 +3446,18 @@ function markAddressTaken(nodes, env) {
 			// 書いた先と読む先が別の実体になる。
 			let t = unwrap(n.operand);
 			while (t && t.type === "operation" && t.name === "get_prop") t = unwrap(t.left);
+			if (isIdentifierNode(t)) {
+				const b = envLookup(env, t.value);
+				if (b) b.addressTaken = true;
+			}
+		}
+		// **マージの左辺にも場所が要る。** `a~ b~` は「a の器に b の器の中を入れる」で
+		// あり、結果は a そのもの——**書き先が a の器**である。左が名前ならその器は既に
+		// 在るものなので上書きになり、書ける場所を持っていなければならない。使うたびに
+		// 組み直される実体では、書いた先と後で読む先が別になる（`$` の対象・ブラケット
+		// 仮引数と同じ理由で、印を付ける場所も同じここである）。
+		if (n.type === "operation" && n.name === "construct" && isExpandPostfix(n.left) && isExpandPostfix(n.right)) {
+			const t = unwrap(unwrap(n.left).operand);
 			if (isIdentifierNode(t)) {
 				const b = envLookup(env, t.value);
 				if (b) b.addressTaken = true;
@@ -3522,6 +3682,10 @@ function constStructField(node, env) {
 	const base = unwrap(node.left);
 	if (!isIdentifierNode(base) || !env) return null;
 	const b = envLookup(env, base.value);
+	// **番地を取られた束縛は畳まない。** そこには場所があり、書き換えられうる——畳むと
+	// 書いた後の読みが古い定数を返す。スカラーの `$n # 99` で開いていたのと同じ穴が、
+	// 構造体が場所を持てるようになった途端にこちらにも開く（マージの左辺が書き先である）。
+	if (b && b.addressTaken) return null;
 	const v = b && b.valueNode ? unwrap(b.valueNode) : null;
 	if (!v || !Array.isArray(v.lines)) return null;
 	for (const line of v.lines) {
@@ -7258,6 +7422,17 @@ function generateAsm(nodes, env, options = {}) {
 		// 止まる——**畳みは成功しているのに、定義が落ちていた**。別名の定義と同じ形の穴で
 		// ある。確保が起きないので `layer: 0` でもそのまま使える。
 		if (isDefineNode(node) && isIdentifierNode(node.left) && constStructDefine(node)) continue;
+		// **静的な像を置ける構造体も命令を持たない。** 像そのものが定義だからである。
+		//
+		// 上の `constStructDefine` は「全行が `名前 : 定数`」しか見ないので、文字列の
+		// スロットを1つ持つだけで（`/ a : 1 / s : \`abc\` / b : 2`）素通りし、定義の側が
+		// フレームへ組んでいた——読む側は `.rodata` の像を見るので、その 32 byte は
+		// **誰も読まない**。組んだ回数だけ `sub sp` が出て、名前が別の実体を持つ形に
+		// 戻ってしまう。飛ばすかどうかは「場所を持てるか」で決める。
+		if (isDefineNode(node) && isIdentifierNode(node.left) && isStructBlock(unwrap(node.right))) {
+			const sb = env ? envLookup(env, node.left.value) : null;
+			if (sb && structBindingLabel(node.left.value, sb, env, em)) continue;
+		}
 		if (isDefineNode(node) && isIdentifierNode(node.left)) {
 			const rhs = node.right;
 			if (rhs && rhs.type === "operation" && rhs.name === "lambda") {
