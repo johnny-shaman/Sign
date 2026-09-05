@@ -2514,8 +2514,11 @@ function genExpr(node, env, em, scope, tail = false) {
 		//
 		// 上書きの側を黙って新しい器で出すと、`a` を見ている他の誰かに変更が見えない
 		// ——**意味が変わる**。出せないことは名指しする（原理4）。
-		if (!Array.isArray(n.lines) && n.mergeBase !== "literal") {
-			return em.fail(n, "左が名前のマージ（`a~ b~`）はまだ出せません。これは a の器へ書く上書きであって新しい器を作る形ではないので、器の場所を持つ仕組みが要ります");
+		// 左が名前なら**在る器へ書く**。確保が要らないので層の門も通る（layer_relations.md
+		// §3.3.1）——`#` 出力（`$名前`）が layer 0 で通るのと同じ理由である。
+		const inPlace = !Array.isArray(n.lines) && n.mergeBase === "name";
+		if (!Array.isArray(n.lines) && n.mergeBase !== "literal" && !inPlace) {
+			return em.fail(n, "マージの左が何か決まりません（名前でもその場のリテラルでもない）");
 		}
 		const sconf = { target: em.conf.target, charset: em.conf.charset, env };
 		const lay = layoutOfStruct(n, sconf);
@@ -2524,16 +2527,44 @@ function genExpr(node, env, em, scope, tail = false) {
 		const origins = new Map();
 		for (const [k, o] of n.slotOrigins) origins.set(slotName(k), o);
 		for (const sl of lay.slots) if (!origins.has(sl.name)) return em.fail(n, `スロット ${sl.name} の出どころが引けません`);
-		if (!sretHere && !allocaAllowed(em, n, "Struct を組み立てる")) return false;
+		// **在る器へ書けるのは、並びが1バイトも変わらないときだけ。** 鍵が増えると名前
+		// ソート順で位置が動く——`bar@0 foo@8` に `aa` を足すと `aa@0 bar@8 foo@16` で
+		// 既存が全部ずれるので、在る場所には収まらない。そこは定義の側で鍵の和集合ぶんを
+		// 取る話（layer_relations.md §3.3.1）であって、ここで場所を作り直す話ではない。
+		let baseNode = null;
+		let baseShape = null;
+		if (inPlace) {
+			baseNode = mergeBaseNode(n);
+			baseShape = baseNode ? structShapeOf(baseNode, env, sconf) : null;
+			if (!baseNode || !baseShape || baseShape.slotKind !== "named") {
+				return em.fail(n, "マージの左の器の並びが引けません");
+			}
+			if (JSON.stringify(baseShape.slots) !== JSON.stringify(lay.slots)) {
+				return em.fail(n, "鍵が増えるマージはまだ出せません（在る器に収まらないので、定義の場所で鍵の和集合ぶんを取る仕組みが要ります）");
+			}
+		}
+		// **上書きは確保しない。** だから門も通らない——`sub sp` を出さないので layer 0 でも
+		// 書ける（在る場所へ書くだけ、が層の要求そのものである）。
+		if (!inPlace && !sretHere && !allocaAllowed(em, n, "Struct を組み立てる")) return false;
 		// 返値スロットの中では自分の枠を先に取る（下の名前付きブロックと同じ理由）。
-		const mOff = sretHere ? em.sretBump || 0 : 0;
-		if (sretHere) em.sretBump = mOff + Math.ceil(lay.size / 16) * 16;
+		const mOff = !inPlace && sretHere ? em.sretBump || 0 : 0;
+		if (!inPlace && sretHere) em.sretBump = mOff + Math.ceil(lay.size / 16) * 16;
 		// **先に全部を評価する。** 確保してから評価すると `sp` が動いた後で番地がずれる。
 		// 撒く元は**器ごとに一度だけ**評価する——同じ器から何スロット引いても場所は1つで、
 		// スロットごとに評価し直すと式なら二度動く。
 		const mbase = em.slot;
 		const lineAt = new Map(); // スロット名 -> { at, width }
 		const srcAt = new Map(); // 撒く元のノード -> { at, shape }
+		// 上書きなら左の器が**宛先**である。撒く元としても同じ場所なので、下のループが
+		// もう一度評価しないよう先に登録しておく（式なら二度動く）。
+		let baseAt = null;
+		if (inPlace) {
+			baseAt = em.slot;
+			const bw = genExpr(baseNode, env, em, scope);
+			if (bw === false) return false;
+			if (bw !== 1) return em.fail(n, "マージの左の器が ptr 1本で運ばれていません");
+			srcAt.set(baseNode, { at: baseAt, shape: baseShape });
+		}
 		for (const sl of lay.slots) {
 			const o = origins.get(sl.name);
 			if (o.kind === "line") {
@@ -2559,7 +2590,9 @@ function genExpr(node, env, em, scope, tail = false) {
 			srcAt.set(o.node, { at, shape });
 		}
 		const MDST = "x11";
-		if (sretHere) {
+		if (inPlace) {
+			em.load(MDST, baseAt * 8, "左の器（ここへ入れる）");
+		} else if (sretHere) {
 			em.load(MDST, em.sretDest, "返値スロット（sret）");
 			if (mOff > 0) em.emit(`add ${MDST}, ${MDST}, #${mOff}`, `入れ子ぶん後ろへ（+${mOff}）`);
 		} else {
@@ -2570,6 +2603,9 @@ function genExpr(node, env, em, scope, tail = false) {
 		}
 		for (const sl of lay.slots) {
 			const o = origins.get(sl.name);
+			// **上書きで、左から来るスロットは書かなくていい。** 宛先が左の器そのものなので、
+			// その値は既にそこに在る——同じ場所へ同じ値を写すだけの命令になる。
+			if (inPlace && o.kind !== "line" && o.node === baseNode) continue;
 			if (o.kind === "line") {
 				const v = lineAt.get(sl.name);
 				for (let r = 0; r < v.width; r++) {
@@ -3562,8 +3598,13 @@ function markAddressTaken(nodes, env) {
 		// 在るものなので上書きになり、書ける場所を持っていなければならない。使うたびに
 		// 組み直される実体では、書いた先と後で読む先が別になる（`$` の対象・ブラケット
 		// 仮引数と同じ理由で、印を付ける場所も同じここである）。
-		if (n.type === "operation" && n.name === "construct" && isExpandPostfix(n.left) && isExpandPostfix(n.right)) {
-			const t = unwrap(unwrap(n.left).operand);
+		//
+		// **左の端を辿るのは `mergeBaseNode` 1つの仕事である。** ここで別に書いていたため、
+		// 書いた行が2つ以上で節点が `construct` ではなく `concat` になる形を取り逃していた
+		// ——`p~ [ foo : 1 / bar : 2 ]~` は印が付かず、`p ' foo` が古い定数へ畳まれて
+		// **診断ゼロで 30（元の値）**を返していた。同じ事実を2箇所で決めない。
+		if (n.type === "operation" && COPRODUCT_BUILD_OPS.has(n.name) && isExpandPostfix(n.right)) {
+			const t = mergeBaseNode(n);
 			if (isIdentifierNode(t)) {
 				const b = envLookup(env, t.value);
 				if (b) b.addressTaken = true;
@@ -3878,6 +3919,22 @@ function structShapeOf(node, env, conf, depth = 0) {
 		}
 		return (slot && slot.shape) || null;
 	}
+	return null;
+}
+
+/**
+ * **マージの左の器。** `a~ b~` の a、`a~ b~ c~` なら一番左の a である。
+ *
+ * Pass 3 が `mergeBase`（name / literal / unknown）で**何であるか**は畳んで
+ * いるが、**どのノードか**は畳んでいない。書き先にするには節点そのものが要る。
+ */
+function mergeBaseNode(x) {
+	let u = unwrap(x);
+	// **余積を作る演算はどれも来る。** 書いた行が2つ以上なら節点は `construct` ではなく
+	// `concat` になる——`p~ [foo : 1 / bar : 2]~` がそれで、`construct` だけ歩いていたので
+	// 左の端に辿り着けず「並びが引けません」で止まっていた。
+	while (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name) && u.left) u = unwrap(u.left);
+	if (u && u.type === "operation" && u.position === "postfix" && u.name === "expand") return unwrap(u.operand);
 	return null;
 }
 
@@ -6912,6 +6969,13 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		const findBuild = (x) => {
 			if (!x || typeof x !== "object" || build) return;
 			const u = unwrap(x);
+			// **上書きのマージも器を作らない。** `a~ b~` で左が名前なら、書き先は a の器
+			// そのもので確保は起きない——組み直し（`rejoinPair`）が渡された器を指し直す
+			// だけなのと同じ形である。ここを「作る」と数えると、呼ぶ側が要りもしない返値
+			// スロットを用意しようとして、その大きさを引数から測ろうとする
+			// ——`f : s ? s~ [ bar : 99 ]~` が「第1引数が器ではない」で止まっていた
+			// （構造体は `{ptr}` の1本で運ぶので、器の `{ptr, len}` 2本にはならない）。
+			if (u && u.slotOrigins && u.mergeBase === "name") return;
 			if (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name) && u.escapesFrame !== false && !rejoinPair(u, rejoinScope)) {
 				build = u;
 				return;
