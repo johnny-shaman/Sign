@@ -2491,6 +2491,112 @@ function genExpr(node, env, em, scope, tail = false) {
 	// その並びで、各スロットの `ordinal` が宣言順の何行目かを指す——**評価は宣言順、格納は
 	// 名前順**で、両者を結ぶのが `ordinal` である。ここを取り違えると値が黙って別のスロット
 	// へ入るので、連番側と同じくスロット数の照合を先に置く。
+	// **「新しい器を作る」マージを実体化する。**
+	//
+	//     q : [ foo : 99 / p~ ]     ブロック形——書いた行が仕様、撒く行が残りを埋める
+	//     q : [ foo : 99 ]~ p~      左がリテラルの余積形——後が勝つ
+	//
+	// どちらも新しい器なので、置き方は上の名前付きブロックと同じ（名前のソート順、
+	// 場所はフレームか sret）。違うのは**スロットの値がどこから来るか**だけで、それは
+	// Pass 3 が `slotOrigins` に畳んである——書いた行はその式を評価して入れ、撒いた器は
+	// その場所から `ldr`／`str` で写す。**勝ち負けもそこで決まっている**ので、ここで
+	// もう一度決め直さない（同じ事実を2箇所で決めない）。
+	//
+	// 写しは**浅い**。スロットに載っているのは運ぶ姿（入れ子の構造体なら `{ptr}` の
+	// 8 byte、器なら `{ptr, len}` の 16 byte）なので、それをそのまま写せば子は共有される
+	// ——`~obj` は渡ってきた器そのもので、名前を挙げても器から何も減らない、という
+	// 分割代入の側と同じ扱いである。
+	if (n.slotOrigins && n.atomType === "Struct" && (sretHere || n.escapesFrame === false)) {
+		// **左が名前のマージは上書きであって、新しい器ではない。** `a~ b~` は「a の器へ
+		// b の器の中を入れる」形で、結果は a そのものである。だから上書きになるか複写に
+		// なるかは**左が何かで決まる**——左が名前なら既に在る器なので上書き、左がその場の
+		// リテラルならその器はいま作られたものなので、入れることがそのまま複写になる。
+		//
+		// 上書きの側を黙って新しい器で出すと、`a` を見ている他の誰かに変更が見えない
+		// ——**意味が変わる**。出せないことは名指しする（原理4）。
+		if (!Array.isArray(n.lines) && n.mergeBase !== "literal") {
+			return em.fail(n, "左が名前のマージ（`a~ b~`）はまだ出せません。これは a の器へ書く上書きであって新しい器を作る形ではないので、器の場所を持つ仕組みが要ります");
+		}
+		const sconf = { target: em.conf.target, charset: em.conf.charset, env };
+		const lay = layoutOfStruct(n, sconf);
+		if (!lay || !lay.slots || !lay.slots.length) return em.fail(n, "構造体の並びが決まりません（新しい器のスロットが引けません）");
+		// 名前は綴りではなく中身で引く（layout.js の `bareName` と同じ規則）。
+		const origins = new Map();
+		for (const [k, o] of n.slotOrigins) origins.set(slotName(k), o);
+		for (const sl of lay.slots) if (!origins.has(sl.name)) return em.fail(n, `スロット ${sl.name} の出どころが引けません`);
+		if (!sretHere && !allocaAllowed(em, n, "Struct を組み立てる")) return false;
+		// 返値スロットの中では自分の枠を先に取る（下の名前付きブロックと同じ理由）。
+		const mOff = sretHere ? em.sretBump || 0 : 0;
+		if (sretHere) em.sretBump = mOff + Math.ceil(lay.size / 16) * 16;
+		// **先に全部を評価する。** 確保してから評価すると `sp` が動いた後で番地がずれる。
+		// 撒く元は**器ごとに一度だけ**評価する——同じ器から何スロット引いても場所は1つで、
+		// スロットごとに評価し直すと式なら二度動く。
+		const mbase = em.slot;
+		const lineAt = new Map(); // スロット名 -> { at, width }
+		const srcAt = new Map(); // 撒く元のノード -> { at, shape }
+		for (const sl of lay.slots) {
+			const o = origins.get(sl.name);
+			if (o.kind === "line") {
+				const at = em.slot;
+				const w = genExpr(o.node, env, em, scope);
+				if (w === false) return false;
+				lineAt.set(sl.name, { at, width: w });
+				continue;
+			}
+			if (srcAt.has(o.node)) continue;
+			// 撒く元の並びが引けなければ、どのバイトを写すか決まらない。名前は Pass 3 が
+			// 解決したときのスコープで引く（仮引数の並びはそこにしか無い）。
+			const oenv = o.env || env;
+			const shape = structShapeOf(o.node, oenv, oenv === env ? sconf : { ...sconf, env: oenv });
+			if (!shape || shape.slotKind !== "named" || !Array.isArray(shape.slots)) {
+				return em.fail(n, "撒く器の並びが引けません（名前付きスロットの構造体だけを撒けます）");
+			}
+			const at = em.slot;
+			const w = genExpr(o.node, env, em, scope);
+			if (w === false) return false;
+			// 構造体は形が型にあるので `{ptr}` の1本で運ばれる（stack_abi.md §4.6）。
+			if (w !== 1) return em.fail(n, "撒く器が ptr 1本で運ばれていません");
+			srcAt.set(o.node, { at, shape });
+		}
+		const MDST = "x11";
+		if (sretHere) {
+			em.load(MDST, em.sretDest, "返値スロット（sret）");
+			if (mOff > 0) em.emit(`add ${MDST}, ${MDST}, #${mOff}`, `入れ子ぶん後ろへ（+${mOff}）`);
+		} else {
+			const mbytes = Math.ceil(lay.size / 16) * 16;
+			em.emit(`sub sp, sp, #${mbytes}`, `${lay.slots.length} スロットの Struct（${lay.size} byte、名前順、撒く行を含む）`);
+			em.movedSp = true;
+			em.emit(`mov ${MDST}, sp`, "組む先");
+		}
+		for (const sl of lay.slots) {
+			const o = origins.get(sl.name);
+			if (o.kind === "line") {
+				const v = lineAt.get(sl.name);
+				for (let r = 0; r < v.width; r++) {
+					em.load(SCRATCH[0], (v.at + r) * 8);
+					em.emit(`str ${SCRATCH[0]}, [${MDST}, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}、書いた行）` : undefined);
+				}
+				continue;
+			}
+			const src = srcAt.get(o.node);
+			const ss = src.shape.slots.find((x) => x.name === sl.name);
+			if (!ss) return em.fail(n, `撒く器に ${sl.name} がありません`);
+			// **幅が合わなければ写せない。** 型が一致していれば合うはずのもので、合わない
+			// ときは並びのどちらかが違うものを見ている——黙って詰めると隣を踏む。
+			if (ss.size !== sl.size) return em.fail(n, `撒く器の ${sl.name} と幅が合いません（${ss.size} と ${sl.size}）`);
+			em.load(SCRATCH[1], src.at * 8, `撒く器の ptr（${sl.name} を写す）`);
+			for (let r = 0; r * 8 < sl.size; r++) {
+				em.emit(`ldr ${SCRATCH[0]}, [${SCRATCH[1]}, #${ss.offset + r * 8}]`);
+				em.emit(`str ${SCRATCH[0]}, [${MDST}, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}、撒いた器の +${ss.offset} から浅く写す）` : undefined);
+			}
+		}
+		em.pop(em.slot - mbase);
+		const mpo = em.push();
+		if (mpo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+		em.emit(`mov ${SCRATCH[0]}, ${MDST}`, "ptr（Struct は形が型にあるので1本）");
+		em.store(SCRATCH[0], mpo);
+		return 1;
+	}
 	if (isStructBlock(n) && (sretHere || n.escapesFrame === false)) {
 		const lines = (n.lines || []).map(unwrap);
 		// マージ（`mergedSlots`）の ordinal は Map の反復順であって宣言行を指さないので、
@@ -6843,7 +6949,12 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		// バイト数・width を 1 として置く。0_design_principles.md のサイズ表に String と
 		// List の行しか無いのは、構造体がこの道を通らないからである。
 		if (isStructBlock(shape)) {
-			const slay = layoutOfStruct(shape, { target: em.conf.target, charset: em.conf.charset });
+			// **上界を出すのに識別子テーブルが要ることがある。** 撒く行を含む形
+			// （`[ foo : 99 / this~ ]`）は、撒く器の並びが仮引数の束縛にしかない
+			// ——`env` を渡していなかったので並びが起こせず、計画に載らないまま
+			// 「まだ出せない式です（block）」で止まっていた。**関数の中でだけ**動かない、
+			// という非対称な壊れ方である。スコープはラムダのもので引く（`genFunction` と同じ）。
+			const slay = layoutOfStruct(shape, { target: em.conf.target, charset: em.conf.charset, env: lam.scope || em.env });
 			if (slay && slay.size) {
 				plan.set(bareName(node.left.value), {
 					konst: structFootprint(slay),

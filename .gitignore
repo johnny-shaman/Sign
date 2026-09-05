@@ -39,3 +39,6 @@ _t*.mjs
 alpha/javascript/qemu/*.o
 alpha/javascript/qemu/*.elf
 alpha/javascript/qemu/probe.s
+
+# エージェントの作業用 worktree
+.claude/worktrees/

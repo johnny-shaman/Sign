@@ -563,7 +563,59 @@ function layoutOfStruct(node, conf) {
   }
 }
 
+/**
+ * **撒く器の並び。** リテラル（や名前を経由したリテラル）なら起こせるが、仮引数として
+ * 受けた器には値ノードが無い——呼び出しサイトから起こしたものが束縛に在る
+ * （`binding.shape`、pass4.js の `bindingShapeOf` と同じ問い）。
+ */
+function namedShapeOfSource(x, conf, scope) {
+  // 優先順位のための括弧を剥ぐ。`(mk 7)~` のように撒く元が式だと、`deref` は括弧の
+  // ブロックで止まる——中の適用まで届かず「並びが決まりません」になっていた。
+  let node = x;
+  while (node && node.type === "block" && node.kind === "paren" && Array.isArray(node.lines) && node.lines.length === 1 && !node.slotKind) {
+    node = node.lines[0];
+  }
+  // **名前は自分のスコープで引く。** 撒く元が仮引数なら、その並びはラムダのスコープの
+  // 束縛にしかない——外側の識別子テーブルで引き直すと見つからないので、Pass 3 が
+  // 解決したときのスコープを添えてある（`slotOrigins` の `env`）。
+  const env = scope || (conf && conf.env);
+  const direct = layoutOfStruct(node, env === (conf && conf.env) ? conf : { ...conf, env });
+  if (direct && direct.slotKind === "named") return direct;
+  if (isIdentifierNode(node) && env) {
+    const b = envLookup(env, node.value);
+    const sh = b && b.shape;
+    if (sh && sh.slotKind === "named" && Array.isArray(sh.slots)) return sh;
+  }
+  return null;
+}
+
 function layoutOfStructInner(node, conf) {
+
+  // **新しい器を作る形**（`[ foo : 99 / p~ ]` と `[ foo : 99 ]~ p~`）は、スロットの
+  // **出どころ**の表を持っている（pass3 の `slotOrigins`）。書いた行はその式の大きさ、
+  // 撒いた鍵は**撒く器の並びのそのスロット**の大きさである——後者は値ノードを持たない
+  // ことがある（仮引数を撒く形）ので、`mergedSlots`（名前→値ノード）だけでは並びが
+  // 起こせない。物理配置は他と同じく名前順、`ordinal` は宣言順（書いた行が先、撒いた
+  // 鍵が後）で、これは interpreter.js が dict を埋める順と同じである。
+  if (node.slotOrigins) {
+    const entries = [];
+    let ordinal = 0;
+    for (const [k, o] of node.slotOrigins) {
+      const name = bareName(k);
+      if (o.kind === "line") {
+        entries.push({ name, ordinal: ordinal++, node: o.node });
+        continue;
+      }
+      const sh = namedShapeOfSource(o.node, conf, o.env);
+      const s = sh && sh.slots ? sh.slots.find((x) => x.name === name) : null;
+      // 撒く器の並びが起こせなければ、そのスロットが何バイトかは決まらない。
+      // 決まらないことは null で言う（原理4）——拾えた分だけで並べてはいけない。
+      if (!s) return null;
+      entries.push({ name, ordinal: ordinal++, cell: s });
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return packSlots(entries, conf, "named");
+  }
 
   // マージの結果はスロット表を直接持つ（list_model.md §5.3）。元の宣言は2つ以上の
   // 構造体へ散っているので、並べられるのは畳んだ後のスロットだけである。物理配置は
@@ -643,7 +695,10 @@ function packSlots(entries, conf, slotKind) {
   let offset = 0;
   let maxAlign = 1;
   for (const e of entries) {
-    const m = slotCellSize(e.node, conf);
+    // **撒いた鍵は、撒く器の並びからそのまま持ってくる。** 値ノードが無いことがある
+    // （仮引数を撒く形）ので、そこは既に測ってあるスロットを `cell` で受ける。写しは
+    // 浅い——運ぶ姿がそのまま写るので、幅も種別も入れ子の並びも撒く元と同じである。
+    const m = e.cell ? { size: e.cell.size, align: e.cell.align || 1 } : slotCellSize(e.node, conf);
     if (!m) return null;
     const align = m.align || 1;
     offset = alignUp(offset, align);
@@ -654,11 +709,11 @@ function packSlots(entries, conf, slotKind) {
     //
     // `seen` で自己参照を止める。`measure` の入れ子ガード（MAX_NEST）は
     // `layoutOfStruct` を経由すると depth が渡らずリセットされるので、ここは別に持つ。
-    const shape = e.node && e.node.atomType === "Struct" ? layoutOfStruct(e.node, conf) : null;
+    const shape = e.cell ? e.cell.shape || null : e.node && e.node.atomType === "Struct" ? layoutOfStruct(e.node, conf) : null;
     slots.push({
       ...(e.name !== undefined ? { name: e.name } : {}),
       ordinal: e.ordinal,
-      type: e.node.atomType,
+      type: e.cell ? e.cell.type : e.node.atomType,
       offset,
       size: m.size,
       align,

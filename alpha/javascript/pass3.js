@@ -485,6 +485,35 @@ function isSpreadNode(n) {
   return !!n && n.type === "operation" && n.position === "postfix" && n.name === "expand";
 }
 
+/**
+ * **スロットの名前は綴りではなく中身である**（layout.js の `bareName`、interpreter.js の
+ * `slice(1, -1)` と同じ規則）。物理配置は名前順で決まるので、区切りを残すか剥がすかで
+ * 並びが変わる——`` `~x` `` と `foo` は、中身で比べれば `foo` が先である。
+ *
+ * ここで剥がしておくのは、**名前の出どころが2つある**からである。値ノードの表からは
+ * `<foo>` と綴りのまま出るが、仮引数の並び（`binding.shape`）からは中身しか出ない。
+ * 綴りのまま混ぜると同じスロットが2つに見える。
+ */
+function bareKey(v) {
+  if (typeof v !== "string" || v.length < 2) return String(v);
+  const head = v[0], tail = v[v.length - 1];
+  if ((head === "<" && tail === ">") || (head === "`" && tail === "`")) return v.slice(1, -1);
+  return v;
+}
+
+/**
+ * **スロットの名前になれるノード。** 識別子と文字列リテラルである（綴れない名前は
+ * 文字列で書く：`` `+` : `add` ``）。interpreter.js の `isSlotKeyNode`、layout.js の
+ * 同名、pass4.js の `isSlotKeyAtom` と**同じ基準でなければならない**。
+ *
+ * ここを識別子だけに絞っていたところが1つ残っていて（`namedSlotTypes`）、文字列キーを
+ * 持つ器を撒くと**その鍵だけが黙って消えた**——新しい器の並びにスロットが無いので、
+ * 引くところで「そんなスロットは無い」になる。
+ */
+function isSlotKeyNode(n) {
+  return isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
+}
+
 // 名前付きスロットを `名前 -> 値ノード` で読む。識別子なら束縛先まで辿る。
 // **型ではなくノードを持つ。** 型からは大きさが出ないからである（文字列の長さ、
 // リストの要素数、レンジの実体はノードにしか無い）——形の解決がここを読む。
@@ -498,10 +527,115 @@ function namedSlotTypes(node, env) {
   if (target.slotKind !== "named") return null;
   const out = new Map();
   for (const line of target.lines || []) {
-    if (isDefineNode(line) && isIdentifierNode(line.left)) out.set(line.left.value, line.right);
-    else if (isIdentifierNode(line)) out.set(line.value, line);
+    if (isDefineNode(line) && isSlotKeyNode(line.left)) out.set(bareKey(line.left.value), line.right);
+    else if (isIdentifierNode(line)) out.set(bareKey(line.value), line);
   }
   return out;
+}
+
+/**
+ * **撒く器が差し出す鍵の顔ぶれ。** 値ノードまでは要らない場面がある——仮引数として
+ * 受けた器には値ノードが無く、呼び出しサイトから起こした並び（`binding.shape`）にしか
+ * 名前が無いからである。
+ *
+ * 顔ぶれを値ノードの表（`namedSlotTypes`）だけで見ていたため、
+ * `f : [~this] ? [ foo : 99 / this~ ]` は「新しい器を作るブロック」と認められず、
+ * **関数の中でだけ**逐次評価へ落ちていた——外では動くのに中では動かない、という
+ * 非対称な壊れ方である。
+ */
+function namedSlotNames(node, env) {
+  const t = namedSlotTypes(node, env);
+  if (t) return [...t.keys()];
+  const sh = structShapeOfNode(isSpreadNode(node) ? node.operand : node, env);
+  if (sh && sh.slotKind === "named" && Array.isArray(sh.slots)) return sh.slots.map((s) => s.name);
+  return null;
+}
+
+/**
+ * **その場に書かれた構造体リテラル**を取り出す（名前を経由しないもの）。
+ *
+ * 優先順位のための括弧だけ剥ぐ——中が構造体そのものであることを見てから返す。
+ * `derefToNode` で辿ってはいけない：`(f p)~` は束縛を辿ると `f` の本体のブロックに
+ * 行き着くが、そのブロックは**ここに書かれたものではない**。写す元の場所が在るのに
+ * 本体の式を評価し直すと、仮引数を含む式では出しようがないし、出せても二度評価になる。
+ */
+function localStructLiteral(x) {
+  let u = x;
+  while (u && u.type === "block" && u.kind === "paren" && Array.isArray(u.lines) && u.lines.length === 1 && !u.slotKind) u = u.lines[0];
+  return u && u.type === "block" && (u.slotKind === "named" || u.slotOrigins) ? u : null;
+}
+
+/**
+ * **スロットの値がどこから来るか。** 名前 → 出どころ、の表を作る。
+ *
+ *   `{ kind: "line",   node }` — その式を評価して入れる
+ *   `{ kind: "spread", node }` — その器の場所から浅く写す（`ldr` して `str`）
+ *
+ * 分かれ目は**左が何か**である（今日決まったこと）。名前を経由するものは既に在る器
+ * なので写す元の場所があり、値ノードを取り直して評価してはいけない——仮引数には値
+ * ノードが無いし、式のスロットなら二度評価になる。逆にその場のリテラルは**いま作られた
+ * もの**なので写す元の場所がどこにも無く、書いた行そのものが出どころになる。
+ */
+function slotOriginsOfSource(node, env) {
+  const x = isSpreadNode(node) ? node.operand : node;
+  if (!x) return null;
+  // 既に畳んだ表を持っているもの（マージの途中結果、撒く行入りのブロック）。
+  if (x.slotOrigins) return x.slotOrigins;
+  const lit = localStructLiteral(x);
+  if (lit) {
+    const out = new Map();
+    for (const line of lit.lines || []) {
+      if (isDefineNode(line) && isSlotKeyNode(line.left)) out.set(bareKey(line.left.value), { kind: "line", node: line.right });
+      else if (isIdentifierNode(line)) out.set(bareKey(line.value), { kind: "line", node: line });
+      else return null;
+    }
+    return out;
+  }
+  const names = namedSlotNames(x, env);
+  if (!names) return null;
+  const out = new Map();
+  // **撒く器を解決したスコープを一緒に持つ。** 名前が何を指すかはスコープにしか無く、
+  // 撒く元が仮引数（`this`）なら、その並びは**ラムダのスコープの束縛**にしかない。
+  // 後から外側の識別子テーブルで引き直すと見つからない——実際 `(f p) ' foo` は、
+  // 関数の外で `this` を引こうとして「まだ出せない識別子です（foo）」になっていた。
+  for (const k of names) out.set(bareKey(k), { kind: "spread", node: x, env });
+  return out;
+}
+
+/**
+ * **新しい器を作るブロック**（`[ foo : 99 / p~ ]`）のスロット表と出どころ表。
+ *
+ * **書いた行が仕様、撒く行が残りを埋める。** ブロックは新しい器を作る形なので、そこに
+ * 書いた `foo : 99` はその器の foo の定義そのものであり、後から撒いたもので消えては
+ * いけない（interpreter.js の同じ規則。Rust の `Foo { foo: 99, ..other }` と同じ形）。
+ * 器へ入れる形（`a~ b~`）が後勝ちなのと**受け手が違うので規則が違ってよい**。
+ */
+function newContainerSlots(writtenLines, spreadOperand, env) {
+  const slots = new Map();
+  const origins = new Map();
+  for (const line of writtenLines) {
+    if (isDefineNode(line) && isSlotKeyNode(line.left)) {
+      slots.set(bareKey(line.left.value), line.right);
+      origins.set(bareKey(line.left.value), { kind: "line", node: line.right });
+    } else if (isIdentifierNode(line)) {
+      slots.set(bareKey(line.value), line);
+      origins.set(bareKey(line.value), { kind: "line", node: line });
+    } else return null;
+  }
+  const names = namedSlotNames(spreadOperand, env);
+  const srcOrigins = slotOriginsOfSource(spreadOperand, env);
+  if (!names || !srcOrigins) return null;
+  // **値ノードの表は在れば作る。** 仮引数を撒く形では値ノードが無いので作れない
+  // ——そのときスロットの並びを起こすのは `slotOrigins` の側である（layout.js）。
+  const src = namedSlotTypes(spreadOperand, env);
+  for (const k of names) {
+    if (slots.has(k)) continue; // 書いた行には勝てない
+    const o = srcOrigins.get(k);
+    if (!o) return null;
+    origins.set(k, o);
+    if (src && src.has(k)) slots.set(k, src.get(k));
+  }
+  return { slots: slots.size === origins.size ? slots : null, origins };
 }
 
 /**
@@ -533,7 +667,18 @@ function mergedStructSlots(node, env) {
         "上書きが許されるのは両辺の型が一致するときだけです"
     );
   }
-  return new Map([...l, ...r]);
+  // **出どころも一緒に畳む。** 後が勝つ（`Map([...lo, ...ro])`）——ここはブロック形と
+  // 逆である。ブロックは新しい器を作るので書いた行が仕様だが、`a~ b~` は a の器へ b の
+  // 中を入れる形なので、入れた方が勝つ。**受け手が違うので規則が違う。**
+  const lo = slotOriginsOfSource(node.left, env);
+  const ro = slotOriginsOfSource(node.right, env);
+  const origins = lo && ro ? new Map([...lo, ...ro]) : null;
+  // **左が何かで、上書きになるか複写になるかが決まる。** 左が名前なら既に在る器なので
+  // マージは上書き（結果は左そのもの）、左がその場のリテラルならその器はいま作られた
+  // ものなので、入れることがそのまま複写になる。Pass 4 が出せるのは後者だけである。
+  const lx = isSpreadNode(node.left) ? node.left.operand : node.left;
+  const mergeBase = localStructLiteral(lx) ? "literal" : node.left.mergeBase || (isIdentifierNode(lx) ? "name" : "unknown");
+  return { slots: new Map([...l, ...r]), origins, mergeBase };
 }
 
 // スロットの種別。名前付きか連番かは**中身にしか無い**ので、識別子なら束縛まで辿る。
@@ -1115,8 +1260,7 @@ function computeAtomType(node, env) {
       // ——演算子記号を鍵にした表（`` `+` : `add` ``）を書けるようにするために要る。
       // interpreter.js の `isSlotKeyNode` と同じ基準にしてある。**片方だけ広げると、
       // 同じソースが解釈器では構造体・機械語では match_case になる**（実際そうなった）。
-      const slotKey = (n) => isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
-      const explicit = (l) => isDefineNode(l) && slotKey(l.left);
+      const explicit = (l) => isDefineNode(l) && isSlotKeyNode(l.left);
       if (node.lines.every(explicit)) {
         node.slotKind = "named";
         return "Struct";
@@ -1124,6 +1268,28 @@ function computeAtomType(node, env) {
       if (node.lines.length >= 2 && node.lines.every((l) => explicit(l) || isIdentifierNode(l))) {
         node.slotKind = "named";
         return "Struct";
+      }
+      // **撒く行を含むブロックも構造体である**（`[ foo : 99 / p~ ]`）。
+      //
+      // ここが解釈器（`isStructFieldLine`）と割れていた——あちらは3枝目
+      // （`isStructSpreadLine`）を持っているのに、こちらは `key : 値` と裸の識別子しか
+      // 認めていなかった。同じ判定が2箇所にあって片方だけ広い、というこのリポジトリで
+      // 繰り返し出ている形である。結果、撒く行を含むブロックには `slotKind` が立たず
+      // `layoutOfStruct` が並びを起こせないので、Pass 4 は「場所を持てません」で止まって
+      // いた——解釈器だけが答えを返す状態だった。
+      if (node.lines.length >= 2 && node.lines.every((l) => explicit(l) || isIdentifierNode(l) || isSpreadNode(l)) && node.lines.some(isSpreadNode)) {
+        // 撒く行は末尾にしか置けない（interpreter.js の `spreadLinesAreLast` と同じ規則）。
+        // 位置で意味は変わらないが、同じものに綴りを2つ用意しないための固定である。
+        const si = node.lines.findIndex(isSpreadNode);
+        if (si === node.lines.length - 1) {
+          const table = newContainerSlots(node.lines.slice(0, -1), node.lines[si].operand, env);
+          if (table) {
+            node.slotKind = "named";
+            if (table.slots) node.mergedSlots = table.slots;
+            node.slotOrigins = table.origins;
+          }
+          return "Struct";
+        }
       }
     }
     // 関数本体（match_case の並び）の型は、各 arm の型の**直和**である（§7.3）。
@@ -1348,7 +1514,9 @@ function computeAtomType(node, env) {
         const merged = mergedStructSlots(node, env);
         if (merged) {
           node.slotKind = "named";
-          node.mergedSlots = merged;
+          node.mergedSlots = merged.slots;
+          if (merged.origins) node.slotOrigins = merged.origins;
+          node.mergeBase = merged.mergeBase;
           return "Struct";
         }
       }
@@ -3433,6 +3601,13 @@ function clearTypeAnnotations(node) {
   delete node.elementType;
   delete node.repr;
   delete node.slotKind;
+  // **スロットの表も周回ごとに捨てる。** `slotKind` だけ消して表を残すと、次の周回で
+  // 表が作り直せなかったとき（撒く元の並びがまだ解けていない、など）**前の周回の表が
+  // 残ったまま**になる。`layoutOfStruct` は表を先に見るので、それは古い並びで場所を
+  // 決めるということである——同じ事実が2つの周回に跨って2つ在る状態を作らない。
+  delete node.mergedSlots;
+  delete node.slotOrigins;
+  delete node.mergeBase;
   delete node.operandType;
   for (const k of ["left", "right", "operand", "middle"]) clearTypeAnnotations(node[k]);
   for (const l of node.lines || []) clearTypeAnnotations(l);
