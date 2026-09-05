@@ -416,6 +416,13 @@ function paramNamesOf(paramNode) {
  * `paramNamesOf` と分けてあるのは、単相化（`collectMonomorphs`）が見るのは「名前で
  * 呼べる仮引数」だけであり、分割代入された仮引数は関数ポインタになりえないためである。
  */
+// スロットのキーになれるノード。識別子と文字列リテラル。**3箇所（interpreter.js の
+// `isSlotKeyNode`、pass3.js の `slotKey`、ここ）で同じ基準でなければならない**——
+// 片方だけ広げると、同じソースが解釈器では構造体・機械語では match_case になる。
+function isSlotKeyAtom(n) {
+	return isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
+}
+
 function paramShapesOf(paramNode) {
 	if (isIdentifierNode(paramNode)) return [{ kind: "bare", name: paramNode.value }];
 	if (!paramNode || paramNode.type !== "params") return [];
@@ -2247,6 +2254,30 @@ function genExpr(node, env, em, scope, tail = false) {
 		return 1;
 	}
 
+	// **名前は静的に綴れなければならない。** `obj ' k~` は `k` の**中身**を名前として引く
+	// が、名前付きスロットの物理配置は名前順で決まる（stack_abi.md §7.1）ので、綴りが
+	// コンパイル時に分からなければ引く場所が決まらない。`k` が定数へ束縛されていれば
+	// `constStructField` が畳む——畳めないのは実行時に鍵が決まる形であり、それは
+	// 実行時ディスパッチであって Sign は持たない（compiler_pipeline.md §3）。
+	//
+	// ここで止めないと `genIndex` が黙って `__` を出す。解釈器は値を返すので、
+	// **同じソースが解釈器と機械語で違う答えになる**——実測でそうなっていた。
+	if (n.type === "operation" && n.name === "get_prop") {
+		const k = unwrap(n.right);
+		if (k && k.desugaredFrom === "index-rest" && slotKeySpelling(k, env) === null) {
+			// **鍵が名前か添字かは、鍵の型で決まる**（容器の型ではない）。`(dup s) ' 1~` の
+			// ような数の鍵は添字であって名前ではなく、genIndex が正しく出せる——容器側の
+			// atomType で分けようとして、この形を全部巻き込んだことがある（qemu 14件）。
+			const inner = unwrap(k.left);
+			if (inner && inner.atomType === "Char") {
+				return em.fail(
+					n,
+					"名前が静的に決まりません（`obj ' k~`）。名前付きスロットの物理配置は名前順で決まるので、" +
+						"鍵の綴りがコンパイル時に分からないと引く場所が決まりません。鍵を定数へ束縛するか、名前を直接書いてください"
+				);
+			}
+		}
+	}
 	if (n.type === "operation" && n.name === "get_prop" && !n.runtimeIndexProblem) {
 		const out = genIndex(n, env, em, scope);
 		if (out !== null) return out;
@@ -3200,7 +3231,7 @@ function constStructDefine(node) {
 	if (!v || !Array.isArray(v.lines) || v.lines.length < 1) return false;
 	return v.lines.every((line) => {
 		const l = unwrap(line);
-		if (!isDefineNode(l) || !isIdentifierNode(l.left)) return false;
+		if (!isDefineNode(l) || !isSlotKeyAtom(l.left)) return false;
 		const val = unwrap(l.right);
 		return !!val && val.type === "atom" && (val.kind === "number" || val.kind === "address");
 	});
@@ -3325,10 +3356,31 @@ function constAddressOf(node, env) {
 	return null;
 }
 
+/**
+ * 名前で引く形の鍵を、綴りとして取り出す。**`obj ' k~` は `k` の中身を名前として使う**
+ * （Pass 2 が残した `desugaredFrom: "index-rest"` の印で見分ける）。`k` が定数の文字列へ
+ * 束縛されていれば、その綴りがそのまま名前になるので、静的に畳める。
+ * 実行時に決まる鍵は畳めない——そこは null を返して呼び出し側の判断へ渡す。
+ */
+function slotKeySpelling(key, env) {
+	if (isSlotKeyAtom(key)) return key.value;
+	if (key && key.desugaredFrom === "index-rest" && env) {
+		const inner = unwrap(key.left);
+		if (isSlotKeyAtom(inner) && inner.kind === "string") return inner.value;
+		if (isIdentifierNode(inner)) {
+			const b = envLookup(env, inner.value);
+			const v = b && b.valueNode ? unwrap(b.valueNode) : null;
+			if (v && v.type === "atom" && v.kind === "string") return v.value;
+		}
+	}
+	return null;
+}
+
 function constStructField(node, env) {
 	if (!node || node.type !== "operation" || node.name !== "get_prop") return null;
 	const key = unwrap(node.right);
-	if (!isIdentifierNode(key)) return null; // 名前で引く形だけ（添字は別の道）
+	const spelling = slotKeySpelling(key, env);
+	if (spelling === null) return null; // 名前で引く形だけ（添字は別の道）。名前は識別子でも文字列でもよい
 	const base = unwrap(node.left);
 	if (!isIdentifierNode(base) || !env) return null;
 	const b = envLookup(env, base.value);
@@ -3336,8 +3388,8 @@ function constStructField(node, env) {
 	if (!v || !Array.isArray(v.lines)) return null;
 	for (const line of v.lines) {
 		const l = unwrap(line);
-		if (!isDefineNode(l) || !isIdentifierNode(l.left)) return null; // 全行が `名前 : 値` でなければ構造体ではない
-		if (l.left.value !== key.value) continue;
+		if (!isDefineNode(l) || !isSlotKeyAtom(l.left)) return null; // 全行が `名前 : 値` でなければ構造体ではない
+		if (l.left.value !== spelling) continue;
 		const val = unwrap(l.right);
 		// 定数だけ畳む。式なら実行時に決まるので、そこは通常の道へ返す。
 		return val && val.type === "atom" && (val.kind === "number" || val.kind === "address") ? val : null;

@@ -1048,7 +1048,13 @@ function computeAtomType(node, env) {
     // のは連番スロット（`slotKind: "positional"`）の側であり、両者は互いの順序を漏らさない。
     // 「名前が関心事か、順序が関心事か」がこの2つを分ける唯一の軸である（§2）。
     if (!node.isFunctionBody) {
-      const explicit = (l) => isDefineNode(l) && isIdentifierNode(l.left);
+      // **名前は識別子でも文字列でも綴れる。** スロットの意味論は「名前→値の有限写像」で
+      // あり（function_guide.md）、名前が識別子として綴れるかどうかは別の話である
+      // ——演算子記号を鍵にした表（`` `+` : `add` ``）を書けるようにするために要る。
+      // interpreter.js の `isSlotKeyNode` と同じ基準にしてある。**片方だけ広げると、
+      // 同じソースが解釈器では構造体・機械語では match_case になる**（実際そうなった）。
+      const slotKey = (n) => isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
+      const explicit = (l) => isDefineNode(l) && slotKey(l.left);
       if (node.lines.every(explicit)) {
         node.slotKind = "named";
         return "Struct";
