@@ -42,8 +42,36 @@ function isIdentifierNode(n) {
   return !!n && n.type === "atom" && n.kind === "identifier";
 }
 
+/**
+ * **スロットの名前になれるノード。** 識別子と文字列リテラルである（`t : / `+` : 3` の
+ * ように、識別子として綴れない名前は文字列で書く）。
+ *
+ * この基準は interpreter.js の `isSlotKeyNode`、pass3.js の `slotKey`、pass4.js の
+ * `isSlotKeyAtom`、そしてここ——**計5箇所で一致していなければならない**。ここだけ
+ * 識別子に限っていたため、文字列キーの構造体は行が1つも拾われず、`layoutOfStruct` が
+ * `null`（配置できない）ではなく **size 0 のもっともらしいレイアウト**を返していた。
+ * 混在（`foo : 1` と ``+` : 2`）ではスロットが黙って1つ消えた。
+ */
+function isSlotKeyNode(n) {
+  return isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
+}
+
+/**
+ * **スロットの名前は、綴りではなく中身である。** 区切り（識別子の `<>`、文字列の
+ * バッククォート）は名前の一部ではない——interpreter.js が `slice(1, -1)` で
+ * どちらも同じに剥がしているのと同じ規則である。
+ *
+ * 名前付きスロットの物理配置は**名前のソート順**で決まる（stack_abi.md §7.1）ので、
+ * ここで区切りを残すと並びが変わる。``~x`` と `foo` は、中身で比べれば
+ * `foo` が先、バッククォート込みで比べれば ``~x`` が先——**同じ構造体が
+ * 別の配置になる**。`==` で等しい構造体は同じ物理配置を持つ、という §7.1 の保証が壊れる。
+ */
 function bareName(value) {
-  return typeof value === "string" && value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1) : value;
+  if (typeof value !== "string" || value.length < 2) return value;
+  const head = value[0], tail = value[value.length - 1];
+  if (head === "<" && tail === ">") return value.slice(1, -1);
+  if (head === "`" && tail === "`") return value.slice(1, -1);
+  return value;
 }
 
 /**
@@ -490,12 +518,16 @@ function layoutOfStruct(node, conf) {
   if (node.slotKind === "named") {
     const entries = [];
     (node.lines || []).forEach((line, ordinal) => {
-      if (isDefineNode(line) && isIdentifierNode(line.left)) {
+      if (isDefineNode(line) && isSlotKeyNode(line.left)) {
         entries.push({ name: bareName(line.left.value), ordinal, node: line.right });
       } else if (isIdentifierNode(line)) {
         entries.push({ name: bareName(line.value), ordinal, node: line });
       }
     });
+    // **拾えなかった行が1つでもあれば配置しない。** 拾えた分だけで並べると、
+    // 消えたスロットのぶん小さい「もっともらしいレイアウト」が出て、確保も添字も
+    // 静かにずれる。決まらないことは null で言う（原理4）。
+    if (entries.length !== (node.lines || []).length) return null;
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     return packSlots(entries, conf, "named");
   }

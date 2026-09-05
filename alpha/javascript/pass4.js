@@ -3362,15 +3362,25 @@ function constAddressOf(node, env) {
  * 束縛されていれば、その綴りがそのまま名前になるので、静的に畳める。
  * 実行時に決まる鍵は畳めない——そこは null を返して呼び出し側の判断へ渡す。
  */
+// スロット名の綴りから区切りを剥がす。layout.js の `bareName` と同じ規則でなければ
+// ならない——名前付きスロットの物理配置は名前順で決まるので、片方だけ区切りを残すと
+// 「レイアウトが言う場所」と「pass4 が探す名前」がずれる。
+function slotName(v) {
+	if (typeof v !== "string" || v.length < 2) return String(v);
+	const head = v[0], tail = v[v.length - 1];
+	if ((head === "<" && tail === ">") || (head === "`" && tail === "`")) return v.slice(1, -1);
+	return v;
+}
+
 function slotKeySpelling(key, env) {
-	if (isSlotKeyAtom(key)) return key.value;
+	if (isSlotKeyAtom(key)) return slotName(key.value);
 	if (key && key.desugaredFrom === "index-rest" && env) {
 		const inner = unwrap(key.left);
-		if (isSlotKeyAtom(inner) && inner.kind === "string") return inner.value;
+		if (isSlotKeyAtom(inner) && inner.kind === "string") return slotName(inner.value);
 		if (isIdentifierNode(inner)) {
 			const b = envLookup(env, inner.value);
 			const v = b && b.valueNode ? unwrap(b.valueNode) : null;
-			if (v && v.type === "atom" && v.kind === "string") return v.value;
+			if (v && v.type === "atom" && v.kind === "string") return slotName(v.value);
 		}
 	}
 	return null;
@@ -3389,7 +3399,7 @@ function constStructField(node, env) {
 	for (const line of v.lines) {
 		const l = unwrap(line);
 		if (!isDefineNode(l) || !isSlotKeyAtom(l.left)) return null; // 全行が `名前 : 値` でなければ構造体ではない
-		if (l.left.value !== spelling) continue;
+		if (slotName(l.left.value) !== spelling) continue;
 		const val = unwrap(l.right);
 		// 定数だけ畳む。式なら実行時に決まるので、そこは通常の道へ返す。
 		return val && val.type === "atom" && (val.kind === "number" || val.kind === "address") ? val : null;
