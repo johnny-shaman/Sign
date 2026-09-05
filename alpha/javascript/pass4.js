@@ -1982,6 +1982,21 @@ function genExpr(node, env, em, scope, tail = false) {
 		//
 		// 範囲外は `__` を返す。書き込み側（`#`）が niche を書き込み先ではないと見て弾く
 		// ので、不正な番地へ書くことにはならない。
+		// **名前付きスロットへ書く道はまだ無い。**
+		//
+		// type_system.md は `'`（添字・フィールド）が「書き込める場所」（`Implicit`）を生むと
+		// 書いているが、実装が受け取れるのは器の要素だけである。ここを素通りさせると下の
+		// 「匿名式」へ落ちて**その場のコピー**へ書く——書き込みは通るのに元へ届かない。
+		// 解釈器は Unit を返して何も起きないので、**同じソースが両側で違う落ち方をして、
+		// どちらも診断ゼロ**だった。
+		//
+		// 構造体を書き換えられるようにするかはまだ決めていない。決まらないことは言う（原理4）。
+		if (t && t.type === "operation" && t.name === "get_prop") {
+			const bt = unwrap(t.left);
+			if (bt && bt.atomType === "Struct") {
+				return em.fail(n, "構造体のスロットへは書けません（`$[p ' foo] # 値`）。書ける先は名前の束縛と器の要素だけです");
+			}
+		}
 		if (t && t.type === "operation" && t.name === "get_prop" && t.left && t.right) {
 			const et = t.atomType;
 			const m1 = et ? measure({ atomType: et }, { target: em.conf.target, charset: em.conf.charset }) : null;

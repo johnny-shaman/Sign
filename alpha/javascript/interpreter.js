@@ -2010,8 +2010,26 @@ function evalAddress(operandNode, env) {
     // $[list ' idx]: リスト要素への本物の参照（list_cheat_sheet.mdのget_prop対象）。
     const l = evaluate(inner.left, env);
     const idx = evaluate(inner.right, env);
-    if (!Array.isArray(l) || typeof idx !== "number" || idx < 0 || idx >= l.length) return UNIT;
-    return makeAddress(() => l[idx], (v) => { l[idx] = v; });
+    if (Array.isArray(l) && typeof idx === "number" && idx >= 0 && idx < l.length) {
+      return makeAddress(() => l[idx], (v) => { l[idx] = v; });
+    }
+    // **名前付きスロットへ書く道はまだ無い。**
+    //
+    // type_system.md は `'`（添字・フィールド）が「書き込める場所」（`Implicit`）を生むと
+    // 書いているが、実装は器の要素しか受け取れない。**黙って別のものになる**のが問題で、
+    // ここは Unit を返して何も起きず、機械語側は `$匿名式` の道へ落ちてその場のコピーへ
+    // 書いていた——同じソースが両側で違う落ち方をして、どちらも診断ゼロだった。
+    //
+    // 決まらないことは言う（原理4）。構造体を書き換えられるようにするかどうかは
+    // まだ決めていないので、決めるまでは名指しで止める。
+    if (isNamedSlots(observe(l))) {
+      env.diagnostics.push({
+        level: "error",
+        message: "構造体のスロットへは書けません（`$[p ' foo] # 値`）。書ける先は名前の束縛と器の要素だけです",
+      });
+      return UNIT;
+    }
+    return UNIT;
   }
   // それ以外（リテラル・式・ラムダ式など、その場で作った値）。
   //
@@ -2133,10 +2151,16 @@ function evaluate(node, env) {
       // 定義そのものなので、後から撒いたもので消えてはいけない——撒く行が埋めるのは
       // 「書かれなかった残り」である（Rust の `Foo { foo: 99, ..other }` と同じ形）。
       //
-      // 既にある器へ入れる形（`a~ b~`）は別の構文で、そちらは受け手が a、後勝ちである。
-      // **受け手が違うので規則が違ってよい**——新しく作るときは書いた行が仕様、既にある
-      // 器へ入れるときは入れた方が勝つ。ここを後勝ちにしていたため、Store の set
+      // 器へ入れる形（`a~ b~`）は別の構文で、そちらは a が受け手、後勝ちである。
+      // **受け手が違うので規則が違ってよい**——新しく作るときは書いた行が仕様、器へ
+      // 入れるときは入れた方が勝つ。ここを後勝ちにしていたため、Store の set
       // （`[foo : 99 / this~]`）で書いた 99 が撒いた 10 に戻されていた。
+      //
+      // **「受け手」はいま鍵の勝ち負けの話であって、場所の話ではない。** `a~ b~` は
+      // 実装としては新しい器を作り、`a` は無傷である（下の merge 経路）。a の場所を
+      // そのまま使い回すか——つまり `a` を見ている他の誰かにも見えるか——は**まだ
+      // 決めていない**。仕様（list_model.md §5.3、coproduct_resolver.md §5）も同一性と
+      // 確保については一文も書いていない。語が実体より先に行かないよう明記しておく。
       const written = new Set();
       for (const line of node.lines) {
         if (isStructSpreadLine(line)) continue;
