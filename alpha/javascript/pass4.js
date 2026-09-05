@@ -423,6 +423,39 @@ function isSlotKeyAtom(n) {
 	return isIdentifierNode(n) || (!!n && n.type === "atom" && n.kind === "string");
 }
 
+/**
+ * **構造体ブロックか。** `p : / foo : 10 / …` は match の並びと**同じ形**をしている
+ * ので、`lines` の並びでは見分けられない。見分けているのは Pass 3 で、構造体には
+ * `atomType: "Struct"` が付き、match の並びには枝の結果型が付く。
+ *
+ * ここを形だけで見ていたため、値として使われた構造体が genMatch に吸われ、フィールド名を
+ * 枝の条件式として出そうとしていた。**フィールド名がたまたまトップレベル定数へ束縛されて
+ * いると診断が消え、機械語だけが別の答えを返す**——`q : 7` があるところで
+ * `p : / q : 10 / r : 20` を値として使うと、解釈器は `{q:10, r:20}`、機械語は 7 を条件に
+ * 使った match_case を出して 10 を返していた（診断0件）。
+ *
+ * **`atomType` だけでは足りない。** 括弧の中身も1行のブロックとして現れ、枝の結果が余積に
+ * なった match の並びも `Struct` 型になる——実測で `(dup s)` と `c = `a` : c c (v rest)` の
+ * 両方が `atomType: "Struct"` の block だった。**全行が「スロット名 : 値」であること**まで
+ * 見て、はじめて構造体である（Pass 3 の slotKey 判定と同じ基準）。
+ */
+function isStructBlock(n) {
+	if (!n || !Array.isArray(n.lines) || n.lines.length === 0) return false;
+	if (n.atomType !== "Struct") return false;
+	if (n.slotKind === "named" || n.mergedSlots) return true;
+	// 撒く行を含む形（`[zz : 1 / p~]`）には Pass 3 が slotKind を立てないが、構造体である。
+	// **撒く行が現に在ること**を要求する——要求しないと、スロット名の形をした枝を持つ
+	// match の並び（`a : (1,2)` のような形）まで構造体に見えてしまう。
+	let sawExpand = false;
+	for (const line of n.lines) {
+		const l = unwrap(line);
+		if (l && l.type === "operation" && l.name === "expand") { sawExpand = true; continue; }
+		if (isDefineNode(l) && isSlotKeyAtom(l.left)) continue;
+		return false;
+	}
+	return sawExpand;
+}
+
 function paramShapesOf(paramNode) {
 	if (isIdentifierNode(paramNode)) return [{ kind: "bare", name: paramNode.value }];
 	if (!paramNode || paramNode.type !== "params") return [];
@@ -850,7 +883,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		return 1;
 	}
 
-	if (Array.isArray(n.lines) && (n.lines.length > 1 || (n.lines.length === 1 && isDefineNode(n.lines[0])))) {
+	if (!isStructBlock(n) && Array.isArray(n.lines) && (n.lines.length > 1 || (n.lines.length === 1 && isDefineNode(n.lines[0])))) {
 		return genMatch(n, env, em, scope, tail);
 	}
 
@@ -2396,6 +2429,50 @@ function genExpr(node, env, em, scope, tail = false) {
 			return 1;
 		}
 	}
+	// **名前付きスロットの構造体を実体化する。** 連番（`product`）と同じ置き方だが、場所を
+	// 決めるのは宣言順ではなく**名前のソート順**である（stack_abi.md §7.1）。`lay.slots` が
+	// その並びで、各スロットの `ordinal` が宣言順の何行目かを指す——**評価は宣言順、格納は
+	// 名前順**で、両者を結ぶのが `ordinal` である。ここを取り違えると値が黙って別のスロット
+	// へ入るので、連番側と同じくスロット数の照合を先に置く。
+	if (isStructBlock(n) && !sretHere && n.escapesFrame === false) {
+		const lines = (n.lines || []).map(unwrap);
+		// マージ（`mergedSlots`）の ordinal は Map の反復順であって宣言行を指さないので、
+		// 行から値を引くこの手は使えない。決まらないことは言う（原理4）。
+		if (n.mergedSlots) return em.fail(n, "マージした構造体はまだ置けません（スロットの並びが宣言行に対応しません）");
+		const lay = layoutOfStruct(n, { target: em.conf.target, charset: em.conf.charset, env });
+		if (!lay || !lay.slots || lay.slots.length !== lines.length) {
+			return em.fail(n, "構造体の並びが決まりません（撒く行を含む形はまだ場所を持てません）");
+		}
+		if (!allocaAllowed(em, n, "Struct を組み立てる")) return false;
+		// **先に全スロットを評価する。** 確保してから評価すると、`sp` が動いた後でスロットの
+		// 番地がずれる（連番側と同じ理由）。
+		const sbase = em.slot;
+		const at = [];
+		const widths = [];
+		for (const line of lines) {
+			at.push(em.slot);
+			const w = genExpr(isDefineNode(line) ? line.right : line, env, em, scope);
+			if (w === false) return false;
+			widths.push(w);
+		}
+		const sbytes = Math.ceil(lay.size / 16) * 16;
+		em.emit(`sub sp, sp, #${sbytes}`, `${lines.length} スロットの Struct（${lay.size} byte、名前順）`);
+		em.movedSp = true;
+		for (const sl of lay.slots) {
+			const k = sl.ordinal;
+			if (!(k >= 0 && k < widths.length)) return em.fail(n, "スロットの宣言順が引けません");
+			for (let r = 0; r < widths[k]; r++) {
+				em.load(SCRATCH[0], (at[k] + r) * 8);
+				em.emit(`str ${SCRATCH[0]}, [sp, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}）` : undefined);
+			}
+		}
+		em.pop(em.slot - sbase);
+		const spo = em.push();
+		if (spo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+		em.emit(`mov ${SCRATCH[0]}, sp`, "ptr（Struct は形が型にあるので1本）");
+		em.store(SCRATCH[0], spo);
+		return 1;
+	}
 	if (COPRODUCT_BUILD_OPS.has(n.name) && (n.escapesFrame === false || sretHere) && slotsOfNode(n, em.conf, env) === 2) {
 		// **括弧の中が連接なら剥いではいけない。** `a (b c) d` は `[a, "bc", d]` であり、
 		// 括弧が「ここまでで1つの要素」と言っている（余積は右辺を1要素として足す）。
@@ -3431,7 +3508,14 @@ function genIndex(node, env, em, scope) {
 		const slay = sb && sb.atomType === "Struct" && carried === 1 ? layoutOfStruct(sb, { target: conf.target, charset: conf.charset, env }) : null;
 		const si = slay && slay.slots ? constAddressOf(node.right, env) : null;
 		if (slay && si !== null && si >= 0n && si < BigInt(slay.slots.length)) {
-			const slot = slay.slots[Number(si)];
+			// **`p ' N` は宣言順のN番目である**（stack_abi.md §7.1「`uart ' 2` と書いても
+			// 「offset 8」の意味にはならない——3番目に**宣言した**フィールドが返る」）。
+			// 物理配置は名前順なので `slots` の並びで引くと別のスロットを読む：
+			// `foo : 10 / bar : 2.5` では pass3 も解釈器も `p ' 0` を foo（Int）と読むのに、
+			// `slots[0]` は offset 0 の bar（Float）である。宣言順は各スロットが `ordinal`
+			// として持っているので、名前付きはそれで引く（連番は並びがそのまま宣言順）。
+			const slot = slay.slotKind === "named" ? slay.slots.find((sl) => sl.ordinal === Number(si)) : slay.slots[Number(si)];
+			if (!slot) return em.fail(node, `スロット ${si} が引けません`);
 			const regs = Math.max(1, Math.ceil(slot.size / 8));
 			if (!genScalar(node.left, env, em, scope, "Struct は {ptr} の1本で運びます")) return false;
 			const bo = (em.slot - 1) * 8;
@@ -4414,6 +4498,7 @@ function mayCarryReference(node) {
 
 /** match の並びか（`genExpr` の分岐と同じ判定を使う——別々に書くと片方だけ当たる）。 */
 function isMatchBlock(n) {
+	if (isStructBlock(n)) return false;
 	return !!(n && Array.isArray(n.lines) && (n.lines.length > 1 || (n.lines.length === 1 && isDefineNode(n.lines[0]))));
 }
 
@@ -4595,6 +4680,10 @@ function markEscapes(nodes, returnedParams) {
 		const u = n;
 		if (!u || typeof u !== "object") return;
 		if (u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name)) u.escapesFrame = escaping;
+		// 構造体ブロックも器である。`COPRODUCT_BUILD_OPS` は operation しか拾わないので、
+		// ここで印を付けないと `escapesFrame` が undefined のまま残る——**判定していない
+		// ことを「出て行く」と決めたことにしてしまい**、フレームに置ける形すら置けない。
+		if (isStructBlock(u)) u.escapesFrame = escaping;
 		// 呼び出しの引数は、呼び先がその位置を返すときだけ出て行く。
 		if (u.type === "operation" && (u.name === "apply" || u.name === "partial_apply")) {
 			const { base, args } = applyChain(u);
