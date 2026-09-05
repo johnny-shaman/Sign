@@ -15,7 +15,7 @@ tiers : [ 14 , 14 , 15 , 15 ]
 
 tier_at : c i ?
 	i = ||ops|| : 0
-	(ops ' i) = c : tiers ' i
+	(ops ' @i) = c : tiers ' @i
 	tier_at c (i + 1)
 
 tier_of : c ? tier_at c 0
@@ -43,7 +43,7 @@ last_term : [~ts] i j ?
 `終わりが分かっているので外から書ける。String どうしの並置は連結（吸収則）`
 
 mul_out : [~ts] i j ?
-	j = (i + 1) : ts ' i
+	j = (i + 1) : ts ' @i
 	`[[` (ts ' (j - 2)) `] ` (mul_out ts i (j - 2)) ` ` (ts ' (j - 1)) `]`
 
 add_out : [~ts] i j ?
