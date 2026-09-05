@@ -2423,6 +2423,57 @@ function collectCallsiteParamTypes(nodes, env) {
       }
       continue;
     }
+    // **構造体を受ける仮引数には、並び（オフセット表）を届ける。**
+    //
+    // 名前でフィールドを引く（`s ' foo`）には、名前がどのオフセットかを Pass 4 が知って
+    // いなければならない。それを持っているのは呼び出しサイトの実引数だけである——仮引数
+    // そのものには値が無いので、`layoutOfStruct` は束縛から並びを起こせない。
+    //
+    // ここを `[foo bar ~obj]` の形にだけ付けていたため、**同じ「構造体を受ける仮引数」
+    // なのに書き方で情報の質が変わっていた**：`[foo bar ~o] ? foo` は実機まで通るのに、
+    // `s ? s ' foo` と `[~this] ? this ' foo` は「まだ出せない識別子です」で落ちた。
+    // 決めるのは受け取り方の構文ではなく、**渡ってくるものが構造体かどうか**である。
+    // 仮引数が1つだけの裸の形（`f : s ? …`）は `params` ノードにならず、識別子がそのまま
+    // 置かれる。**同じ「器を受ける仮引数」なので、ここで形の違いに引っかかってはいけない。**
+    if (rhs.scope && (paramNode && (paramNode.type === "params" || isIdentifierNode(paramNode)))) {
+      const oneBare = isIdentifierNode(paramNode);
+      const pents = oneBare ? [{ name: paramNode.value }] : entries;
+      const isBracket = !oneBare && !!paramNode.bracket;
+      const sites = callsitesOf(nodes, node.left.value, env);
+      if (sites.length > 0) {
+        pents.forEach((e, i) => {
+          if (!e) return;
+          // **器そのものを受ける名前はどれか。**
+          //
+          // ブラケット形は実引数を1つだけ食って分解する（Eager パターン、list_model.md
+          // §2.4）ので、器を受けるのは rest だけ——先頭たちはフィールドを1つずつ受ける
+          // ので、器の並びを置いたら嘘になる。裸の並びは位置で対応し、そこでは仮引数
+          // そのものが器を受ける。裸の並びの中に置いたブラケット（`[~this]` を複数行の
+          // 仮引数リストへ入れた形）は `e.pattern` に内側の並びを持ち、器を受けるのは
+          // その rest である——構造体の分割代入を糖衣へ展開するとこの形になる。
+          const recv = e.pattern
+            ? e.pattern.find((q) => q && q.rest && q.name) || null
+            : isBracket
+              ? (e.rest ? e : null)
+              : (e.rest ? null : e);
+          if (!recv || !recv.name) return;
+          const ai = isBracket ? 0 : i;
+          let lay = null;
+          for (const args of sites) {
+            if (args.length <= ai) { lay = null; break; }
+            const l = layoutOfStruct(args[ai], { target: "aarch64_qemu", charset: "ascii", env: args.scope || env });
+            // 呼び出しサイトが1つでも違う並びを渡すなら、静的には決まらない。
+            if (!l || l.slotKind !== "named") { lay = null; break; }
+            if (lay && JSON.stringify(lay.slots) !== JSON.stringify(l.slots)) { lay = null; break; }
+            lay = l;
+          }
+          if (!lay) return;
+          const bnd = envLookup(rhs.scope, recv.name);
+          if (bnd && !bnd.shape) { bnd.shape = lay; changed = true; }
+          if (bnd && bnd.atomType !== "Struct") { bnd.atomType = "Struct"; changed = true; }
+        });
+      }
+    }
     if (paramNode && paramNode.type === "params" && paramNode.bracket) {
       const bsites = callsitesOf(nodes, node.left.value, env);
       const bscope = rhs.scope;

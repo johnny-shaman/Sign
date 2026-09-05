@@ -1207,6 +1207,33 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("蓄積子：長さ", ACC + "||go [`z` , `w`] [`a` , `b` , `c`]||");
 	for (let i = 0; i < 5; i++) agree(`蓄積子：${i} 番`, ACC + `(go [\`z\` , \`w\`] [\`a\` , \`b\` , \`c\`]) ' ${i}`);
 	agree("組の1番目は器のまま", "s : `ab`\n||(s , `Z`) ' 0||");
+
+	// **名前付きスロットの構造体。**
+	//
+	// 物理配置は名前のソート順（stack_abi.md §7.1）だが、`p ' N` が指すのは**宣言順の**
+	// N番目である。ここが割れていて pass4 だけが物理配置の N 番目を読んでいた——`foo`
+	// （宣言0・配置2）を 0 番で引けることが、名前引きと連番引きを同時に確かめる形になる。
+	//
+	// 「命令が出た」では足りないので実機の**値**で見る。構造体ブロックが match の並びと
+	// 取り違えられていたとき、フィールド名がトップレベル定数に束縛されていると診断ゼロで
+	// 別の答えを返していた——診断ではなく値でしか捕まらない形だった。
+	const ST = "p :\n\tfoo : 10\n\tbar : 20\n\tbaz : 30\n";
+	agree("構造体：名前で引く", ST + "p ' foo");
+	agree("構造体：名前で引く（末）", ST + "p ' baz");
+	agree("構造体：連番は宣言順 0", ST + "p ' 0");
+	agree("構造体：連番は宣言順 2", ST + "p ' 2");
+	agree("構造体：渡して名前で引く", ST + "f : [~this] ? this ' foo\nf p");
+	agree("構造体：渡して名前で引く（末）", ST + "f : [~this] ? this ' baz\nf p");
+	agree("構造体：裸の仮引数で受ける", ST + "f : s ? s ' bar\nf p");
+	agree("構造体：渡した先で連番", ST + "f : s ? s ' 1\nf p");
+	agree("構造体：分割代入 2つ", ST + "f : [foo bar ~this] ? foo + bar\nf p");
+	agree("構造体：分割代入 3つ", ST + "f : [foo bar baz ~o] ? foo + bar + baz\nf p");
+	agree("構造体：糖衣で分割代入", ST + "g :\n\t\t[~this]\n\t\tfoo : this ' foo\n\t\tbar : this ' bar\n\t? foo + bar\ng p");
+	agree("構造体：糖衣で分割代入（末）", ST + "g :\n\t\t[~this]\n\t\tfoo : this ' foo\n\t\tbaz : this ' baz\n\t? foo + baz\ng p");
+	// キーは識別子でなくてよい（綴れない名前は文字列で書く）。
+	agree("構造体：文字列キー", "t :\n\t`+` : 3\n\t`*` : 5\nt ' `+`");
+	// スロットの値は定数でなくてよい（畳めない道を通る）。
+	agree("構造体：スロットが式", "n : 4\nq :\n\ta : n + 1\n\tb : n * 2\nq ' b");
 }
 
 console.log(`\n${passed}/${total} passed`);

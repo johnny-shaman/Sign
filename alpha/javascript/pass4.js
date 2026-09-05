@@ -3484,6 +3484,35 @@ function constStructField(node, env) {
 	return null;
 }
 
+/**
+ * **スロット1つを読む命令。** 幅と符号でニーモニックが変わる（1/2/4/8 byte）。
+ *
+ * 入口の `fields` 分解と `genIndex` の両方がここを通る——**2箇所で同じものを計算すると
+ * 必ずズレる**。実際ズレていて、連番添字の道は幅を見ずに常に `ldr`（8 byte）を出して
+ * いたので、1 byte のスロットを読むと隣のスロットまで巻き込んでいた。
+ */
+function slotLoadInsn(slot, dst, base, off) {
+	const sg = SIGNEDNESS[slot.type] === "signed";
+	const w = dst.replace(/^x/, "w");
+	const at = `[${base}, #${off}]`;
+	if (slot.size === 1) return `${sg ? "ldrsb" : "ldrb"} ${sg ? dst : w}, ${at}`;
+	if (slot.size === 2) return `${sg ? "ldrsh" : "ldrh"} ${sg ? dst : w}, ${at}`;
+	if (slot.size === 4) return `${sg ? "ldrsw" : "ldr"} ${sg ? dst : w}, ${at}`;
+	return `ldr ${dst}, ${at}`;
+}
+
+/**
+ * **仮引数として受けた構造体の並び。** 仮引数そのものには値が無いので `layoutOfStruct`
+ * は並びを起こせない——起こせるのは呼び出しサイトの実引数だけである。Pass 3 がそこから
+ * 起こした並びを束縛へ置いてあるので（`binding.shape`）、名前で引くときはそこを見る。
+ */
+function bindingShapeOf(node, env) {
+	if (!isIdentifierNode(node) || !env) return null;
+	const b = envLookup(env, node.value);
+	const sh = b && b.shape;
+	return sh && sh.slotKind === "named" && Array.isArray(sh.slots) ? sh : null;
+}
+
 function genIndex(node, env, em, scope) {
 	const conf = em.conf;
 	// **定数の構造体は畳む**（レジスタ束はここで消える）。
@@ -3505,7 +3534,14 @@ function genIndex(node, env, em, scope) {
 		// かったので素通りしていたが、スロットの幅を `passingOf` で埋めるようにした途端、
 		// カーソルがここへ落ちて「1本で運びます」と断られた。前提は明示して確かめる。
 		const carried = sb ? slotsOfNode(sb, conf, env) : null;
-		const slay = sb && sb.atomType === "Struct" && carried === 1 ? layoutOfStruct(sb, { target: conf.target, charset: conf.charset, env }) : null;
+		const slay =
+			sb && sb.atomType === "Struct" && carried === 1
+				? layoutOfStruct(sb, { target: conf.target, charset: conf.charset, env }) || bindingShapeOf(sb, env)
+				: null;
+		// 引き方は2つ——連番と名前。**どちらもスロットを1つ決めるだけ**で、読み出しの命令は
+		// 同じである。決めるところだけ分けて、出すところは1本にまとめる。
+		let slot = null;
+		let what = null;
 		const si = slay && slay.slots ? constAddressOf(node.right, env) : null;
 		if (slay && si !== null && si >= 0n && si < BigInt(slay.slots.length)) {
 			// **`p ' N` は宣言順のN番目である**（stack_abi.md §7.1「`uart ' 2` と書いても
@@ -3514,8 +3550,21 @@ function genIndex(node, env, em, scope) {
 			// `foo : 10 / bar : 2.5` では pass3 も解釈器も `p ' 0` を foo（Int）と読むのに、
 			// `slots[0]` は offset 0 の bar（Float）である。宣言順は各スロットが `ordinal`
 			// として持っているので、名前付きはそれで引く（連番は並びがそのまま宣言順）。
-			const slot = slay.slotKind === "named" ? slay.slots.find((sl) => sl.ordinal === Number(si)) : slay.slots[Number(si)];
+			slot = slay.slotKind === "named" ? slay.slots.find((sl) => sl.ordinal === Number(si)) : slay.slots[Number(si)];
 			if (!slot) return em.fail(node, `スロット ${si} が引けません`);
+			what = String(si);
+		} else if (slay && slay.slotKind === "named") {
+			// **名前で引く。** 名前はコンパイル時にオフセットへ解決され、Pass 4 には残らない
+			// （type_system.md）。定数の構造体は上の `constStructField` が畳んで消えるので、
+			// ここへ来るのは実行時に運ばれてくる構造体——仮引数で受けたものである。
+			const spell = slotKeySpelling(unwrap(node.right), env);
+			if (spell !== null) {
+				slot = (slay.slots || []).find((sl) => sl.name === spell);
+				if (!slot) return em.fail(node, `構造体に ${spell} というスロットがありません`);
+				what = spell;
+			}
+		}
+		if (slot) {
 			const regs = Math.max(1, Math.ceil(slot.size / 8));
 			if (!genScalar(node.left, env, em, scope, "Struct は {ptr} の1本で運びます")) return false;
 			const bo = (em.slot - 1) * 8;
@@ -3528,7 +3577,10 @@ function genIndex(node, env, em, scope) {
 				outs.push(o);
 			}
 			for (let r = 0; r < regs; r++) {
-				em.emit(`ldr ${SCRATCH[1]}, [${SCRATCH[0]}, #${slot.offset + r * 8}]`, r === 0 ? `スロット ${si}（+${slot.offset}、${slot.type}）` : undefined);
+				em.emit(
+					regs === 1 ? slotLoadInsn(slot, SCRATCH[1], SCRATCH[0], slot.offset) : `ldr ${SCRATCH[1]}, [${SCRATCH[0]}, #${slot.offset + r * 8}]`,
+					r === 0 ? `スロット ${what}（+${slot.offset}、${slot.type}）` : undefined
+				);
 				em.store(SCRATCH[1], outs[r]);
 			}
 			return regs;
@@ -6795,16 +6847,7 @@ function genFunction(name, lambdaNode, env, em, mono) {
 				em.load(SCRATCH[1], inc.off, `構造体の ptr`);
 				// 引くのは**バイトのずれ**であって添字ではない（`loadElem` は添字を取る）。
 				// 名前がオフセットへ解決されている以上、そこは即値で書ける。
-				const sg = SIGNEDNESS[slot.type] === "signed";
-				const ld =
-					slot.size === 1
-						? `${sg ? "ldrsb" : "ldrb"} ${sg ? SCRATCH[0] : SCRATCH[0].replace(/^x/, "w")}, [${SCRATCH[1]}, #${slot.offset}]`
-						: slot.size === 2
-							? `${sg ? "ldrsh" : "ldrh"} ${sg ? SCRATCH[0] : SCRATCH[0].replace(/^x/, "w")}, [${SCRATCH[1]}, #${slot.offset}]`
-							: slot.size === 4
-								? `${sg ? "ldrsw" : "ldr"} ${sg ? SCRATCH[0] : SCRATCH[0].replace(/^x/, "w")}, [${SCRATCH[1]}, #${slot.offset}]`
-								: `ldr ${SCRATCH[0]}, [${SCRATCH[1]}, #${slot.offset}]`;
-				em.emit(ld, `フィールド ${bareName(nm)}（+${slot.offset}）`);
+				em.emit(slotLoadInsn(slot, SCRATCH[0], SCRATCH[1], slot.offset), `フィールド ${bareName(nm)}（+${slot.offset}）`);
 				em.store(SCRATCH[0], off);
 				params.push(nm);
 				paramOffsets.push(off);
