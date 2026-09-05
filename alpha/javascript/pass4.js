@@ -7074,6 +7074,24 @@ function genFunction(name, lambdaNode, env, em, mono) {
 		}
 	}
 
+	// **撒いただけのものは返せない。** 後置 `~` は「器を開いて中身を撒く」であり、受け手
+	// （組み立て中の器）がある位置でだけ意味を持つ。返値の位置には受け手が無いので、
+	// 撒いた並びがそのまま出て行く——名前付きスロットならそこで名前が落ちる。
+	//
+	// interpreter.js の makeClosure が同じ判定を持ち、コメントに「静的に分かる違反は弾く
+	// （原理4）」と書いてあるのに評価時に置かれていた。だから機械語側は素通りして、
+	// `f : [~this] ? this~` が診断ゼロで**生のスタック番地**を返していた。
+	{
+		const body = unwrap(lambdaNode.right);
+		if (body && body.type === "operation" && body.name === "expand" && body.position === "postfix") {
+			em.diagnostics.push({
+				severity: "error",
+				message: name + ": 撒いただけのものは返せません（? x~）。後置 ~ は器を組み立てる位置でだけ意味を持ち、返値の位置には受け手が無いため、名前付きスロットなら名前が落ちて値の並びになります。器をそのまま返すなら ~ を外してください",
+				node: lambdaNode,
+			});
+			return;
+		}
+	}
 	const ok = genExpr(lambdaNode.right, env, em, scope, true);
 	if (ok !== false) {
 		// 返値の幅ぶん x0/x1 へ載せる。末尾呼び出しで出て行った経路は値を持たない。
