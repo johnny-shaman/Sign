@@ -73,10 +73,12 @@ function isStructFieldLine(n) {
   return (isDefineNode(n) && isSlotKeyNode(n.left)) || isIdentifierNode(n) || isStructSpreadLine(n);
 }
 
-// **撒く行は末尾にしか置けない。** 名前はコンパイル時に固定オフセットへ解決されるので、
-// 鍵が重なれば後の行がその場所へ上書きする。撒く位置を末尾に固定すると「撒いたものが
-// 勝つ」の一択になり、書き手も読み手も順序を数えなくてよくなる——並べ方で意味が変わる
-// 余地を残さない、という他の規則と同じ扱いである。
+// **撒く行は末尾にしか置けない。**
+//
+// 撒く行が埋めるのは「書かれなかった鍵」なので、**位置で意味は変わらない**
+// （`[foo : 99 / this~]` と `[this~ / foo : 99]` は同じもの）。それでも末尾に固定するのは、
+// 同じものに綴りを2つ用意しないためである——並べ方で意味が変わる余地を残さない、という
+// 他の規則と同じ扱い。
 function spreadLinesAreLast(lines) {
   const i = lines.findIndex(isStructSpreadLine);
   if (i === -1) return true;
@@ -339,12 +341,21 @@ function bindBracketParams(entries, value, env) {
     }
     envDefine(env, "<" + key + ">", v);
   }
+  // **名前を挙げても、器からは何も減らない。**
+  //
+  // `[foo bar ~this]` の `this` は**渡ってきた器そのもの**であって「残り」ではない。
+  // 属性を2つ読んだからといって要素からその属性が消えるわけがない、というのと同じで、
+  // 名前を挙げるのは「ここへローカルとして持ってくる」だけである。だから `||this||` は
+  // 分割代入で変わらないし、`this ' foo` も引ける。
+  //
+  // カッコは参照を一つ渡す、という決め事もそのまま——渡るのは器のポインタ1本である。
+  // 以前ここで「残り」を作っていたので、機械語（器そのものを束縛する）と食い違い、
+  // `[bar ~this] ? ||this||` が解釈器 2 / 実機 3 になっていた。
+  //
+  // 取り出した名前を落としたいなら、それは組み直しの側の話である（`[foo : … / this~]` は
+  // 書いた行が仕様なので、撒いた古い値に上書きされない）。
   const restEntry = entries.find((e) => e.rest);
-  if (restEntry) {
-    const rest = {};
-    for (const k of Object.keys(value)) if (!claimedKeys.has(k)) rest[k] = value[k];
-    envDefine(env, restEntry.name, rest);
-  }
+  if (restEntry) envDefine(env, restEntry.name, value);
   return env;
 }
 
@@ -2110,24 +2121,37 @@ function evaluate(node, env) {
     ) {
       env.diagnostics.push({
         level: "error",
-        message: "撒く行（`x~`）は構造体の末尾にしか置けません。鍵が重なったら後の行が上書きするので、撒く位置を末尾へ固定して「撒いたものが勝つ」に揃えています",
+        message: "撒く行（`x~`）は構造体の末尾にしか置けません。撒く行が埋めるのは書かれなかった鍵だけなので位置で意味は変わりませんが、同じものに綴りを2つ用意しないため末尾へ固定しています",
       });
     }
     if (isStructBlock(node)) {
       const structEnv = newRuntimeEnv(env);
       const dict = {};
+      // **書いた行が仕様、撒く行が残りを埋める。**
+      //
+      // ブロックは**新しい器を作る**形である。そこに書いた `foo : 99` はその器の foo の
+      // 定義そのものなので、後から撒いたもので消えてはいけない——撒く行が埋めるのは
+      // 「書かれなかった残り」である（Rust の `Foo { foo: 99, ..other }` と同じ形）。
+      //
+      // 既にある器へ入れる形（`a~ b~`）は別の構文で、そちらは受け手が a、後勝ちである。
+      // **受け手が違うので規則が違ってよい**——新しく作るときは書いた行が仕様、既にある
+      // 器へ入れるときは入れた方が勝つ。ここを後勝ちにしていたため、Store の set
+      // （`[foo : 99 / this~]`）で書いた 99 が撒いた 10 に戻されていた。
+      const written = new Set();
+      for (const line of node.lines) {
+        if (isStructSpreadLine(line)) continue;
+        if (isIdentifierNode(line)) written.add(line.value.slice(1, -1));
+        else if (isDefineNode(line) && isSlotKeyNode(line.left)) written.add(line.left.value.slice(1, -1));
+      }
       for (const line of node.lines) {
         // **撒く行**（`this~`）: 名前付きスロットをそのまま溶かし込む。分解で取り出した
         // 残りを組み直しへ戻す道であり、`[a : … / b : … / this~]` が set にあたる。
         //
-        // **鍵が重なったら上書きである。** 名前はコンパイル時に固定オフセットへ解決され、
-        // フィールドへの書き込みはその場所への store でしかない（function_guide.md
-        // 「名前はコンパイル時にオフセットへ解決され、Pass 4 には残らない」）。同じ場所へ
-        // 2度書けば後の方が残る、というだけのことなので、行の順序がそのまま優先順位になる。
-        // 書いた行を残したいなら撒くのを先に置く（`[this~ / a : …]`）。
+        // **書いた行には勝てない。** 埋めるのは書かれなかった鍵だけである。撒く行どうしで
+        // 重なったときは後の行が勝つ——そこは埋める順の話であって、仕様と埋め草の話ではない。
         if (isStructSpreadLine(line)) {
           const spread = observe(evaluate(line.operand, structEnv));
-          if (isNamedSlots(spread)) Object.assign(dict, spread);
+          if (isNamedSlots(spread)) for (const k of Object.keys(spread)) if (!written.has(k)) dict[k] = spread[k];
           continue;
         }
         if (isIdentifierNode(line)) {
