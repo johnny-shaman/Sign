@@ -130,6 +130,31 @@ function machineIs(note, source, want, layer = 1) {
 	}
 }
 
+/**
+ * **同じ名前が同じ実体であることを見る。** 値では捕まらない形のためにある。
+ *
+ * 構造体を使うたびに組み直しても、読み出す値は毎回同じなので `agree` は通ってしまう
+ * ——違うのは**実体がいくつできるか**である。`$名前` の指す先も、マージが書き込む先も
+ * 「どの実体か」で変わるので、そこは命令の側（`sub sp` の回数）を見るしかない。
+ */
+function buildsOnce(note, source) {
+	total++;
+	let got;
+	try {
+		const { nodes, env } = compile(source, { charset: "ascii" });
+		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
+		got = r.diagnostics.length ? "出せない：" + r.diagnostics[0].message : (r.text.match(/sub\s+sp, sp/g) || []).length;
+	} catch (e) {
+		got = "機械で例外：" + e.message;
+	}
+	if (typeof got === "number" && got <= 1) {
+		passed++;
+		console.log(`ok   ${note.padEnd(34)} sub sp ${got} 回`);
+	} else {
+		console.log(`FAIL ${note.padEnd(34)} 組み直している（${typeof got === "number" ? `sub sp ${got} 回` : got}）`);
+	}
+}
+
 // ---- 算術 ----
 agree("足す", "f : n ? n + 1\nf 41");
 agree("引く", "f : n ? n - 1\nf 43");
@@ -1282,6 +1307,52 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("入れ子を返す：中間", SR3 + "p : g 5\n(p ' b) ' c");
 	agree("入れ子を返す：外側", SR3 + "p : g 5\np ' a");
 	agree("入れ子を返す：兄弟2つ", "h : n ? [\n\tx : [\n\t\tu : n\n\t]\n\ty : [\n\t\tv : n + 7\n\t]\n]\np : h 3\n((p ' x) ' u) + ((p ' y) ' v)");
+}
+
+// ---- 構造体は名前ごとに**一つの場所**を持つ ----
+//
+// スカラーと器は `$` を取ると `.data` に1箇所置かれるのに、構造体だけその道が無かった。
+// `internBinding` が「1つの値＋1つの幅」しか持てなかったためで、幅の違うスロットが並ぶ
+// 構造体は表せない——`$p` は「アドレスを取れるのはフレームに在るものだけです」で断られ、
+// 値として使うたびにフレームへ組み直されていた。
+{
+	const ST = "p :\n\tfoo : 10\n\tbar : 20\n\tbaz : 30\n";
+	agree("一つの場所：名前で引く", ST + "p ' foo");
+	agree("一つの場所：連番は宣言順", ST + "p ' 2");
+	agree("一つの場所：渡して引く", ST + "f : s ? s ' bar\nf p");
+	// **`$` を取っても読める。** ここで畳みを止めている（番地を取られた束縛は書き換え
+	// られうるので、読みは場所を辿らなければならない）ので、この行は `.data` に置いた
+	// 像を実際に読む——`layoutOfStruct` が言う offset と1バイトでもずれれば別の値が出る。
+	agree("一つの場所：$ を取ってから読む", ST + "q : $p\np ' foo");
+	agree("一つの場所：$ を取っても連番", ST + "q : $p\np ' 2");
+	agree("一つの場所：$ を取っても渡せる", ST + "q : $p\nf : s ? s ' bar\nf p");
+
+	// **幅の違うスロットが並ぶ。** ここが `internBinding` に置けなかった形そのものである。
+	// 文字列のスロットは運ぶ姿（`{ptr, len}` の 16 byte）で置く——中身が読めることと、
+	// そこに何バイト置かれるかは別の問いである。
+	const MIX = "p :\n\ta : 1\n\ts : `abc`\n\tb : 2\n";
+	agree("幅違い：前のスロット", MIX + "p ' a");
+	agree("幅違い：後ろのスロット", MIX + "p ' b");
+	agree("幅違い：文字列スロットの中身", MIX + "(p ' s) ' 1");
+	agree("幅違い：文字列スロットの長さ", MIX + "||p ' s||");
+	agree("幅違い：渡して読む", MIX + "f : x ? (x ' a) + (x ' b)\nf p");
+	// 詰め物のある並び（1 byte のスロットの後ろに 8 byte のスロットが来る形）。
+	// 隙間を埋め損なうと後ろのスロットが手前へずれて、静かに別の値になる。
+	const PAD = "p :\n\ta : `x`\n\tb : `y`\n\tn : 5\n";
+	agree("詰め物：先頭", PAD + "p ' a");
+	agree("詰め物：2番目", PAD + "p ' b");
+	agree("詰め物：境界の向こう", PAD + "p ' n");
+	agree("詰め物：渡して読む", PAD + "f : s ? (s ' b) + (s ' n)\nf p");
+
+	// **同じ名前は同じ実体である。**
+	//
+	// これは値では捕まらない——組み直しても読み出す値は同じなので、`(f p) + (f p) + (f p)`
+	// は前から 30 を返していた。違うのは**実体がいくつできるか**で、実測では `sub sp` が
+	// 3回出て `p` が3つできていた。`$p` の指す先も、マージ（`a~ b~`）が書き込む先も
+	// 「どの実体か」で変わるので、ここは命令の側を見るしかない。
+	buildsOnce("一つの場所：3回渡しても組み直さない", ST + "f : s ? s ' foo\n(f p) + (f p) + (f p)");
+	agree("一つの場所：3回渡した値", ST + "f : s ? s ' foo\n(f p) + (f p) + (f p)");
+	buildsOnce("幅違い：定義でも組まない", MIX + "p ' b");
 }
 
 console.log(`\n${passed}/${total} passed`);
