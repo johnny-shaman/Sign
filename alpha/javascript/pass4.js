@@ -2446,6 +2446,13 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 場所は2通り。フレームから出ないなら自分のフレーム、出るなら呼び出し側が用意した
 		// スロット（`em.sretDest`）である——**置き方は同じで、違うのは底が誰のものかだけ**。
 		if (!sretHere && !allocaAllowed(em, n, "Struct を組み立てる")) return false;
+		// **返値スロットの中では、自分の枠を先に取る。** 取ってからスロットの値を評価する
+		// ので、その途中で組まれる入れ子は自分の後ろを取る。ここを取らずに評価すると、
+		// 内側も `em.sretDest`（＝親の先頭）を自分の宛先だと読み、**親のスロットを踏んで**
+		// ptr として親自身の番地を書く——実測で `str x11, [x8, #0]` の次が `str x0, [x8, #0]`、
+		// さらに `str x8, [x8, #8]` になり、解釈器 99 に対し診断ゼロで 1 を返していた。
+		const myOff = sretHere ? em.sretBump || 0 : 0;
+		if (sretHere) em.sretBump = myOff + Math.ceil(lay.size / 16) * 16;
 		// **先に全スロットを評価する。** 確保してから評価すると、`sp` が動いた後でスロットの
 		// 番地がずれる（連番側と同じ理由）。
 		const sbase = em.slot;
@@ -2460,6 +2467,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		const SDST = "x11";
 		if (sretHere) {
 			em.load(SDST, em.sretDest, "返値スロット（sret）");
+			if (myOff > 0) em.emit(`add ${SDST}, ${SDST}, #${myOff}`, `入れ子ぶん後ろへ（+${myOff}）`);
 		} else {
 			const sbytes = Math.ceil(lay.size / 16) * 16;
 			em.emit(`sub sp, sp, #${sbytes}`, `${lines.length} スロットの Struct（${lay.size} byte、名前順）`);
@@ -2955,6 +2963,23 @@ function emitUnit(em, offs, kind = null) {
  */
 // 左辺が規則か（レンジ・イテレータ）。規則はレジスタに乗り、添字は算術で出る。
 /** `Struct` のスロット数（形が型にあるので静的に出る）。Struct でなければ null。 */
+/**
+ * **構造体の実体が要るバイト数の総和（自分＋入れ子の子たち）。**
+ *
+ * スロットに置かれるのは `{ptr}` の 8 byte なので、`lay.size` は**自分の枠だけ**を
+ * 数えている。フレームに置くならそれでよい（子は子で `sub sp` する）が、**返す**ときは
+ * 場所を用意するのは呼ぶ側なので、子のぶんまで含めて渡さなければならない。
+ *
+ * 置き方は「親のすぐ後ろに、名前順で前順に並べる」。**上界を数える側とバイトを書く側が
+ * 同じ歩き方をする**ことが要で、ここを2箇所で決めると必ずズレる。
+ */
+function structFootprint(lay) {
+	if (!lay) return 0;
+	let n = Math.ceil(lay.size / 16) * 16;
+	for (const sl of lay.slots || []) if (sl.shape) n += structFootprint(sl.shape);
+	return n;
+}
+
 function structSlots(node, em, env) {
 	const u = unwrap(node);
 	if (!u || u.atomType !== "Struct") return null;
@@ -6642,7 +6667,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 			const slay = layoutOfStruct(shape, { target: em.conf.target, charset: em.conf.charset });
 			if (slay && slay.size) {
 				plan.set(bareName(node.left.value), {
-					konst: slay.size,
+					konst: structFootprint(slay),
 					terms: [],
 					width: 1,
 					builds,
@@ -6825,6 +6850,8 @@ function genFunction(name, lambdaNode, env, em, mono) {
 	// 返す形は元の定義が決めているので、素の名前でも引く——ここを見落とすと、多相な
 	// 関数だけが sret から取り残される（実際 `take_while` がそうなっていた）。
 	em.sretDest = null;
+	// 返値スロットの中で、入れ子をどこまで置いたか（親のすぐ後ろから前順に伸びる）。
+	em.sretBump = 0;
 	const sretKey = bareName(name).split("$")[0];
 	const sretEntry = em.sretPlan && (em.sretPlan.get(bareName(name)) || em.sretPlan.get(sretKey));
 	if (sretEntry && sretEntry.needsSlot) {
