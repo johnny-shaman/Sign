@@ -514,7 +514,20 @@ function elementShapeOfList(node, conf) {
     items = flattenProduct(items[0]);
   }
   if (!items.length) return null;
-  return layoutOfStruct(items[0], conf);
+  const first = layoutOfStruct(items[0], conf);
+  if (!first) return null;
+  // **「要素はどれも同じ形である」を確かめる。** そう書いておきながら先頭1つの並びを
+  // 返していたので、名前の違う構造体が並ぶと**先頭の表を他の要素に当てて別のスロットを
+  // 読んでいた**——`p{a,b}` と `q{b,c}` を並べて `(l ' 1) ' b` を引くと、解釈器は 3、
+  // 機械語は診断ゼロで 4（p の並び a@0/b@8 を q に当てて q の c を読む）。
+  //
+  // 揃わないなら並びは出ない。同じ検査は pass3 の呼び出しサイト照合にも在る。
+  const key = JSON.stringify(first.slots);
+  for (let i = 1; i < items.length; i++) {
+    const l = layoutOfStruct(items[i], conf);
+    if (!l || JSON.stringify(l.slots) !== key) return null;
+  }
+  return first;
 }
 
 /**

@@ -2958,7 +2958,10 @@ function emitUnit(em, offs, kind = null) {
 function structSlots(node, em, env) {
 	const u = unwrap(node);
 	if (!u || u.atomType !== "Struct") return null;
-	const lay = layoutOfStruct(u, { target: em.conf.target, charset: em.conf.charset, env });
+	// 仮引数として受けた構造体も数えられなければならない。`layoutOfStruct` だけでは
+	// 値ノードの無い束縛で null になり、幅1本＝スカラー扱いへ落ちて **1** を返していた
+	// ——`f : [~this] ? ||this||` が、解釈器 3 に対して診断ゼロで 1。
+	const lay = structShapeOf(u, env, { target: em.conf.target, charset: em.conf.charset, env });
 	return lay && lay.slots && lay.slots.length > 0 ? lay.slots.length : null;
 }
 
@@ -6406,7 +6409,7 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 		return b ? b.atomType : null;
 	};
 	return keep.map((idx) => {
-		const sh = allShapes[idx];
+		let sh = allShapes[idx];
 		if (!sh) return { shape: null, error: "裸の仮引数・デフォルト付き・`[h ~t]`・`[~x]` を出せます（裸の rest はまだ）" };
 		if (sh.kind === "bare") {
 			// **`[~x]` は宣言そのものが「器である」と言っている。** 型の解決を待たずに
@@ -6434,6 +6437,20 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 			// **規則かどうかは入口の判定を変える。** 尽きているかを `len` で見るか
 			// `start` と `end` の関係で見るかが違う（`emitIsUnit`）。
 			return { shape: sh, regs: w, rule: isRuleNode(view, em.conf, lambdaNode.scope) };
+		}
+		// **構文だけでは読み方が決まらない。** `[bar ~this]` は `[h ~t]`（器の頭と残り）とも
+		// `[名前 ~残り]`（構造体を名前で分ける）とも読める——同じ形である。決めるのは型だと
+		// `fields` の枝が自分で書いているのに、`paramShapesOf` は型を見られないので**見た目
+		// だけで先に** `destructure` を返していた。並びが引けるなら、それは構造体である。
+		//
+		// ここを直さないと、頭が1つの分割代入だけが器の頭として読まれる：`[bar ~this] ? bar`
+		// が診断ゼロで**生のスタック番地**を返していた（頭が2つ以上の `[foo bar ~this]` は
+		// `fields` の枝へ入るので正しく動く、という非対称な壊れ方）。
+		if (sh.kind === "destructure" && sh.head && sh.rest && !sh.heads) {
+			const rb0 = lambdaNode.scope ? envLookup(lambdaNode.scope, sh.rest) : null;
+			if (rb0 && rb0.shape && rb0.shape.slotKind === "named") {
+				sh = { kind: "fields", names: [sh.head], heads: [sh.head], rest: sh.rest };
+			}
 		}
 		// **名前で分ける形は `{ptr}` 1本で受ける。** 構造体は形が型にあるので長さが要らない
 		// （stack_abi.md §4.6）。名前はコンパイル時にオフセットへ解決されるので、入口で
