@@ -38,7 +38,7 @@
 import { reduceToMachineType, widthsOf, UNIT_NICHE_ASM, charSizeOf, charLimitOf, DEFAULT_CHARSET, SIGNEDNESS, literalDigits, literalParts } from "./target_info.js";
 import { envLookup } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
-import { passingOf, measure, layoutOfStruct, elementShapeOfList, flattenProduct } from "./layout.js";
+import { passingOf, measure, layoutOfStruct, elementShapeOfList, flattenProduct, isExpandNode, mergeBaseIdentifier } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 // AAPCS64（stack_abi.md §4.2）。引数は x0〜x7、返値は x0、一時は x9〜x15。
@@ -425,8 +425,7 @@ function isSlotKeyAtom(n) {
 
 /** 後置 `~`（撒く／器そのものを指す）か。マージ `a~ b~` は両辺がこの形である。 */
 function isExpandPostfix(n) {
-	const u = unwrap(n);
-	return !!u && u.type === "operation" && u.position === "postfix" && u.name === "expand" && !!u.operand;
+	return isExpandNode(unwrap(n));
 }
 
 /**
@@ -2539,7 +2538,12 @@ function genExpr(node, env, em, scope, tail = false) {
 			if (!baseNode || !baseShape || baseShape.slotKind !== "named") {
 				return em.fail(n, "マージの左の器の並びが引けません");
 			}
-			if (JSON.stringify(baseShape.slots) !== JSON.stringify(lay.slots)) {
+			// **見るのは「場所が同じか」であって「表が同じか」ではない。** 鍵の和集合で
+			// 取った器は、まだ入っていない鍵に `absent` の印を持つ——印が違うだけで別の並びと
+			// 読むと、和集合で場所を伸ばした意味が無くなる（伸ばした先へ書けない）。
+			// 比べるのは名前と位置と幅である。
+			const place = (ss) => ss.map((x) => x.name + "@" + x.offset + ":" + x.size).join(" ");
+			if (place(baseShape.slots) !== place(lay.slots)) {
 				return em.fail(n, "鍵が増えるマージはまだ出せません（在る器に収まらないので、定義の場所で鍵の和集合ぶんを取る仕組みが要ります）");
 			}
 		}
@@ -2639,6 +2643,16 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 行から値を引くこの手は使えない。決まらないことは言う（原理4）。
 		if (n.mergedSlots) return em.fail(n, "マージした構造体はまだ置けません（スロットの並びが宣言行に対応しません）");
 		const lay = layoutOfStruct(n, { target: em.conf.target, charset: em.conf.charset, env });
+		// **鍵の和集合で伸びたスロットは、フレームへ組む道では埋められない。**
+		//
+		// 静的な像なら `__` の niche を置ける（`structImageOf` / `absentSlotLines`）ので、
+		// 普通はそちらが先に成立してこの枝には来ない。来るのは像が置けない形——8 byte 未満
+		// のスロットのように 64 ビットの niche が入らないとき——だけである。
+		// **「撒く行を含む形」とは別の理由**なので、下の文面へ混ぜない（混ぜると読んだ人が
+		// 撒く行を探して見つからない）。
+		if (lay && lay.slots && lay.slots.some((s) => s.absent)) {
+			return em.fail(n, "鍵が増えるマージのために和集合で取った器を、フレームへ組む道はまだありません（静的な像に置ける器だけが和集合で場所を持てます）");
+		}
 		if (!lay || !lay.slots || lay.slots.length !== lines.length) {
 			return em.fail(n, "構造体の並びが決まりません（撒く行を含む形はまだ場所を持てません）");
 		}
@@ -3434,6 +3448,23 @@ function slotImageLines(slot, value, env, em) {
 }
 
 /**
+ * **まだ何も入っていないスロットの像。** 置けなければ null。
+ *
+ * 鍵の和集合で取ったスロット（`layout.js` の `withUnionSlots`）は、場所は在るが中身が
+ * まだ無い。そこに置くのは `__` である——完全性公理そのままで、「そこには何も無い」が
+ * 値になる。ゼロで埋めると `0` は真なので、**無いものが在ることになってしまう**。
+ *
+ * 幅ごとに `__` の表し方が違う（1本なら niche、2本なら len = 0）——`genExpr` が返値の
+ * `__` を幅で作り分けているのと同じ規則である。8 byte 未満のスロットには 64 ビットの
+ * niche が入らないので、そこは「置けない」と言う（原理4）。
+ */
+function absentSlotLines(slot) {
+	if (slot.size === 8) return [`	.quad ${UNIT}`];
+	if (slot.size === 16) return ["	.quad 0", "	.quad 0"]; // `{ptr, len}` は len = 0 が `__`
+	return null;
+}
+
+/**
  * **構造体を「一つの場所」として書き出す**バイト列。置けなければ null。
  *
  * 並びを決めるのは `layoutOfStruct` であって、ここではない——各スロットを
@@ -3453,13 +3484,20 @@ function structImageOf(node, env, em) {
 	if (!isStructBlock(n) || n.mergedSlots) return null;
 	const lay = layoutOfStruct(n, { target: em.conf.target, charset: em.conf.charset, env });
 	const lines = (n.lines || []).map(unwrap);
-	if (!lay || !lay.slots || lay.slots.length !== lines.length) return null;
+	// **書いた行と、和集合で取っただけの鍵。** 前者は宣言順の `ordinal` で行と1対1、
+	// 後者は行を持たない（`absent`）。書いた行のぶんが1つでも欠けていれば置かない。
+	if (!lay || !lay.slots || lay.slots.filter((s) => !s.absent).length !== lines.length) return null;
 	const body = [];
 	let at = 0;
 	for (const sl of lay.slots) {
-		const line = lines[sl.ordinal];
-		if (!isDefineNode(line)) return null;
-		const piece = slotImageLines(sl, line.right, env, em);
+		let piece;
+		if (sl.absent) {
+			piece = absentSlotLines(sl);
+		} else {
+			const line = lines[sl.ordinal];
+			if (!isDefineNode(line)) return null;
+			piece = slotImageLines(sl, line.right, env, em);
+		}
 		if (!piece) return null;
 		// 重なったら置かない。決まらないことは黙って別の答えにせず、道を譲る（原理4）。
 		if (sl.offset < at) return null;
@@ -3599,16 +3637,13 @@ function markAddressTaken(nodes, env) {
 		// 組み直される実体では、書いた先と後で読む先が別になる（`$` の対象・ブラケット
 		// 仮引数と同じ理由で、印を付ける場所も同じここである）。
 		//
-		// **左の端を辿るのは `mergeBaseNode` 1つの仕事である。** ここで別に書いていたため、
-		// 書いた行が2つ以上で節点が `construct` ではなく `concat` になる形を取り逃していた
-		// ——`p~ [ foo : 1 / bar : 2 ]~` は印が付かず、`p ' foo` が古い定数へ畳まれて
-		// **診断ゼロで 30（元の値）**を返していた。同じ事実を2箇所で決めない。
-		if (n.type === "operation" && COPRODUCT_BUILD_OPS.has(n.name) && isExpandPostfix(n.right)) {
-			const t = mergeBaseNode(n);
-			if (isIdentifierNode(t)) {
-				const b = envLookup(env, t.value);
-				if (b) b.addressTaken = true;
-			}
+		// **形を見分けるのは `mergeBaseIdentifier` 1箇所である**（layout.js）。同じ形を
+		// 「場所が要る」と「場所の大きさが要る」の2箇所で別々に判定すると、片方だけが
+		// 広い／狭いという形で必ず食い違う。
+		{
+			const t = mergeBaseIdentifier(n);
+			const b = t ? envLookup(env, t.value) : null;
+			if (b) b.addressTaken = true;
 		}
 		// **ブラケット仮引数へ渡した束縛にも場所が要る。** カッコは参照を取るという意味
 		// なので（C の `f(&x)`）、呼び先はそこへ書ける。呼ぶ側が呼び出しごとに組み直すと、
@@ -3635,6 +3670,36 @@ function markAddressTaken(nodes, env) {
 						if (ab) ab.addressTaken = true;
 					}
 				}
+			}
+		}
+		for (const k of ["left", "right", "operand"]) visit(n[k]);
+		for (const l of n.lines || []) visit(l);
+		for (const e of n.entries || []) visit(e.default);
+	};
+	for (const n of nodes) visit(n);
+}
+
+/**
+ * **鍵が増えるマージが在れば、その器は和集合ぶんの場所を取っている。** 層の門を通す。
+ *
+ * 判定は「和集合で伸びたスロット（`absent`）が現に在るか」である——`p~ [ foo : 9 ]~` の
+ * ように鍵が増えないマージは器の大きさを変えないので、確保も増えない。**マージが書いて
+ * あることではなく、場所が伸びたことが層の問い**である。
+ *
+ * 見分ける形は `markAddressTaken` と同じ `mergeBaseIdentifier` を引く（layout.js）。
+ */
+function checkSlotUnionLayer(nodes, env, em) {
+	if (!env || em.conf.layer === undefined || em.conf.layer >= 1) return;
+	const seen = new Set();
+	const conf = { target: em.conf.target, charset: em.conf.charset, env };
+	const visit = (n) => {
+		if (!n || typeof n !== "object" || seen.has(n)) return;
+		seen.add(n);
+		const t = mergeBaseIdentifier(n);
+		if (t) {
+			const lay = layoutOfStruct(t, conf);
+			if (lay && lay.slots && lay.slots.some((s) => s.absent)) {
+				allocaAllowed(em, n, `鍵が増えるマージのために ${bareName(t.value)} を鍵の和集合で取る`);
 			}
 		}
 		for (const k of ["left", "right", "operand"]) visit(n[k]);
@@ -3929,12 +3994,20 @@ function structShapeOf(node, env, conf, depth = 0) {
  * いるが、**どのノードか**は畳んでいない。書き先にするには節点そのものが要る。
  */
 function mergeBaseNode(x) {
+	// **形の判定は `mergeBaseIdentifier`（layout.js）1箇所である。** ここがするのは
+	// **降りること**だけ——書いた行が2つ以上なら節点が入れ子になる（`p~ [foo : 1 / bar : 2]~`
+	// は `concat` の下にもう1段ある）ので、左の端まで降りてから同じ判定を当てる。
+	//
+	// `markAddressTaken` は木を再帰で歩くので降りる必要が無く、節点ごとに判定を当てれば
+	// 足りる。**問いが違う**——あちらは「この節点はマージか」、こちらは「この式全体の
+	// 左の端は何か」である。判定を共有しているので、片方だけ広い／狭いにはならない。
 	let u = unwrap(x);
-	// **余積を作る演算はどれも来る。** 書いた行が2つ以上なら節点は `construct` ではなく
-	// `concat` になる——`p~ [foo : 1 / bar : 2]~` がそれで、`construct` だけ歩いていたので
-	// 左の端に辿り着けず「並びが引けません」で止まっていた。
-	while (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name) && u.left) u = unwrap(u.left);
-	if (u && u.type === "operation" && u.position === "postfix" && u.name === "expand") return unwrap(u.operand);
+	while (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name)) {
+		const t = mergeBaseIdentifier(u);
+		if (t) return unwrap(t);
+		if (!u.left) break;
+		u = unwrap(u.left);
+	}
 	return null;
 }
 
@@ -7556,6 +7629,10 @@ function generateAsm(nodes, env, options = {}) {
 	// **番地を取られた束縛を、命令へ畳む前に洗い出す。** 場所が在るかどうかは書かれた
 	// ものが決めるのであって、行の順序が決めるのではない。
 	markAddressTaken(nodes, env);
+	// **鍵が増えるマージは、鍵の和集合ぶんの場所を取る。** 確保なので layer 1 以上である
+	// （layer_relations.md §3.3.1、option_ms_schema.md §4）。和集合は compile.js が
+	// Pass 3 の前に確定させているので、ここで見るのは「実際に鍵が増えたか」だけ。
+	checkSlotUnionLayer(nodes, env, em);
 	// **どの位置の仮引数がそのまま返るか**は呼び出しサイトでも要る——渡す器の場所を
 	// 決めるのは、呼び先がそれを返すかどうかだからである。
 	em.returnedParams = collectReturnedParams(nodes);
