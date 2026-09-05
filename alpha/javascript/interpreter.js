@@ -73,6 +73,16 @@ function isStructFieldLine(n) {
   return (isDefineNode(n) && isSlotKeyNode(n.left)) || isIdentifierNode(n) || isStructSpreadLine(n);
 }
 
+// **撒く行は末尾にしか置けない。** 名前はコンパイル時に固定オフセットへ解決されるので、
+// 鍵が重なれば後の行がその場所へ上書きする。撒く位置を末尾に固定すると「撒いたものが
+// 勝つ」の一択になり、書き手も読み手も順序を数えなくてよくなる——並べ方で意味が変わる
+// 余地を残さない、という他の規則と同じ扱いである。
+function spreadLinesAreLast(lines) {
+  const i = lines.findIndex(isStructSpreadLine);
+  if (i === -1) return true;
+  return i === lines.length - 1;
+}
+
 // **名前付きスロットを撒く行**（`this~`）。分解した残りを組み直しへ戻すために要る。
 //
 // 分解（`[a b ~this]`）と組み直し（`[a : … / b : … / this~]`）で、Store の余代数の
@@ -103,7 +113,7 @@ function isStructBlock(node) {
   const lines = node.lines;
   if (!Array.isArray(lines) || lines.length === 0) return false;
   if (lines.every((l) => isDefineNode(l) && isSlotKeyNode(l.left))) return true;
-  return lines.length >= 2 && lines.every(isStructFieldLine);
+  return lines.length >= 2 && lines.every(isStructFieldLine) && spreadLinesAreLast(lines);
 }
 
 // ---- 実行時環境（Pass1の静的envとは別物、実際の値を保持する） ----
@@ -399,6 +409,21 @@ function bindParams(paramsNode, argValues, closureEnv) {
 }
 
 function makeClosure(paramsNode, bodyNode, env) {
+  // **撒いただけのものは返せない。** 後置 `~` は「器を開いて中身を撒く」であり、
+  // 受け手（組み立て中の器）がある位置でだけ意味を持つ。関数の返値の位置には受け手が
+  // 無いので、撒いた並びがそのまま観測へ出て行く——名前付きスロットならそこで**名前が
+  // 落ちて値の並びへ潰れる**（`f : [foo ~this] ? this~` が `{bar:2,baz:3}` ではなく
+  // `[2,3]` になっていた）。器をそのまま返したいなら `~` を付けない。
+  //
+  // 静的に分かる違反は弾く（原理4）。見るのは書かれた形だけで、実行時の値は要らない。
+  if (isStructSpreadLine(bodyNode)) {
+    env.diagnostics.push({
+      level: "error",
+      message:
+        "撒いただけのものは返せません（`? x~`）。後置 `~` は器を組み立てる位置でだけ意味を持ち、" +
+        "返値の位置には受け手が無いため、名前付きスロットなら名前が落ちて値の並びになります。器をそのまま返すなら `~` を外してください",
+    });
+  }
   return { __lambda__: true, params: paramsNode, body: bodyNode, env };
 }
 
@@ -2056,6 +2081,21 @@ function evaluate(node, env) {
     // 参照は前のキーを見られる）。
     // 関数本体は構造体にならない。構造体を返したいならカッコで囲む
     // （`f : x y ? [ / a : x / b : y / ]`）——境界はカッコである。
+    // **撒く行が末尾でないと、黙って別のものになる。** 構造体の形をしているのに撒く位置
+    // だけが違うブロックは、上の判定を外れて逐次評価へ落ちる——最終行の値が返るだけで、
+    // 書き手には何も伝わらない。静的に分かる違反は名指しする（原理4）。
+    if (
+      !node.isFunctionBody &&
+      Array.isArray(node.lines) &&
+      node.lines.length >= 2 &&
+      node.lines.every(isStructFieldLine) &&
+      !spreadLinesAreLast(node.lines)
+    ) {
+      env.diagnostics.push({
+        level: "error",
+        message: "撒く行（`x~`）は構造体の末尾にしか置けません。鍵が重なったら後の行が上書きするので、撒く位置を末尾へ固定して「撒いたものが勝つ」に揃えています",
+      });
+    }
     if (isStructBlock(node)) {
       const structEnv = newRuntimeEnv(env);
       const dict = {};
