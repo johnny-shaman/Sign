@@ -2062,15 +2062,15 @@ function evaluate(node, env) {
       for (const line of node.lines) {
         // **撒く行**（`this~`）: 名前付きスロットをそのまま溶かし込む。分解で取り出した
         // 残りを組み直しへ戻す道であり、`[a : … / b : … / this~]` が set にあたる。
-        // 既に置いた鍵は上書きしない——**書かれた行の方が新しい**。分解の残りには
-        // 消費した鍵が入っていないので通常は衝突しないが、順序で意味が変わらない方を採る。
+        //
+        // **鍵が重なったら上書きである。** 名前はコンパイル時に固定オフセットへ解決され、
+        // フィールドへの書き込みはその場所への store でしかない（function_guide.md
+        // 「名前はコンパイル時にオフセットへ解決され、Pass 4 には残らない」）。同じ場所へ
+        // 2度書けば後の方が残る、というだけのことなので、行の順序がそのまま優先順位になる。
+        // 書いた行を残したいなら撒くのを先に置く（`[this~ / a : …]`）。
         if (isStructSpreadLine(line)) {
           const spread = observe(evaluate(line.operand, structEnv));
-          if (isNamedSlots(spread)) {
-            for (const k of Object.keys(spread)) {
-              if (!Object.prototype.hasOwnProperty.call(dict, k)) dict[k] = spread[k];
-            }
-          }
+          if (isNamedSlots(spread)) Object.assign(dict, spread);
           continue;
         }
         if (isIdentifierNode(line)) {
