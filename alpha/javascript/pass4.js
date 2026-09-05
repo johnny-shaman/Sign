@@ -2434,7 +2434,7 @@ function genExpr(node, env, em, scope, tail = false) {
 	// その並びで、各スロットの `ordinal` が宣言順の何行目かを指す——**評価は宣言順、格納は
 	// 名前順**で、両者を結ぶのが `ordinal` である。ここを取り違えると値が黙って別のスロット
 	// へ入るので、連番側と同じくスロット数の照合を先に置く。
-	if (isStructBlock(n) && !sretHere && n.escapesFrame === false) {
+	if (isStructBlock(n) && (sretHere || n.escapesFrame === false)) {
 		const lines = (n.lines || []).map(unwrap);
 		// マージ（`mergedSlots`）の ordinal は Map の反復順であって宣言行を指さないので、
 		// 行から値を引くこの手は使えない。決まらないことは言う（原理4）。
@@ -2443,7 +2443,9 @@ function genExpr(node, env, em, scope, tail = false) {
 		if (!lay || !lay.slots || lay.slots.length !== lines.length) {
 			return em.fail(n, "構造体の並びが決まりません（撒く行を含む形はまだ場所を持てません）");
 		}
-		if (!allocaAllowed(em, n, "Struct を組み立てる")) return false;
+		// 場所は2通り。フレームから出ないなら自分のフレーム、出るなら呼び出し側が用意した
+		// スロット（`em.sretDest`）である——**置き方は同じで、違うのは底が誰のものかだけ**。
+		if (!sretHere && !allocaAllowed(em, n, "Struct を組み立てる")) return false;
 		// **先に全スロットを評価する。** 確保してから評価すると、`sp` が動いた後でスロットの
 		// 番地がずれる（連番側と同じ理由）。
 		const sbase = em.slot;
@@ -2455,21 +2457,27 @@ function genExpr(node, env, em, scope, tail = false) {
 			if (w === false) return false;
 			widths.push(w);
 		}
-		const sbytes = Math.ceil(lay.size / 16) * 16;
-		em.emit(`sub sp, sp, #${sbytes}`, `${lines.length} スロットの Struct（${lay.size} byte、名前順）`);
-		em.movedSp = true;
+		const SDST = "x11";
+		if (sretHere) {
+			em.load(SDST, em.sretDest, "返値スロット（sret）");
+		} else {
+			const sbytes = Math.ceil(lay.size / 16) * 16;
+			em.emit(`sub sp, sp, #${sbytes}`, `${lines.length} スロットの Struct（${lay.size} byte、名前順）`);
+			em.movedSp = true;
+			em.emit(`mov ${SDST}, sp`, "組む先");
+		}
 		for (const sl of lay.slots) {
 			const k = sl.ordinal;
 			if (!(k >= 0 && k < widths.length)) return em.fail(n, "スロットの宣言順が引けません");
 			for (let r = 0; r < widths[k]; r++) {
 				em.load(SCRATCH[0], (at[k] + r) * 8);
-				em.emit(`str ${SCRATCH[0]}, [sp, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}）` : undefined);
+				em.emit(`str ${SCRATCH[0]}, [${SDST}, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}）` : undefined);
 			}
 		}
 		em.pop(em.slot - sbase);
 		const spo = em.push();
 		if (spo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
-		em.emit(`mov ${SCRATCH[0]}, sp`, "ptr（Struct は形が型にあるので1本）");
+		em.emit(`mov ${SCRATCH[0]}, ${SDST}`, "ptr（Struct は形が型にあるので1本）");
 		em.store(SCRATCH[0], spo);
 		return 1;
 	}
@@ -6537,6 +6545,11 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 				build = u;
 				return;
 			}
+			// 構造体ブロックも器を組む。`COPRODUCT_BUILD_OPS` は operation しか拾わない。
+			if (isStructBlock(u) && u.escapesFrame !== false) {
+				build = u;
+				return;
+			}
 			for (const k of ["left", "right", "operand"]) findBuild(x[k]);
 			for (const l of x.lines || []) findBuild(l);
 		};
@@ -6559,6 +6572,24 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		// **幅は返す器が決める。** 組む節があればそれが言うし、無ければ返値の型が言う——
 		// 組まずに下から受け取って返す関数（`mark`）も、返すのは同じ形の器である。
 		const shape = build || lam.right;
+		// **Struct の上界はバイト数そのものである。** 要素数の道（`konst × width`）は「要素が
+		// 何個で、1つが何バイトか」を掛けるが、構造体は要素の並びではなく**形が型に入って
+		// いる**——`layoutOfStruct` がバイト数を直接答えるので、掛け算に載せず konst を
+		// バイト数・width を 1 として置く。0_design_principles.md のサイズ表に String と
+		// List の行しか無いのは、構造体がこの道を通らないからである。
+		if (isStructBlock(shape)) {
+			const slay = layoutOfStruct(shape, { target: em.conf.target, charset: em.conf.charset });
+			if (slay && slay.size) {
+				plan.set(bareName(node.left.value), {
+					konst: slay.size,
+					terms: [],
+					width: 1,
+					builds,
+					needsSlot: builds || arms.some((a) => returnsCallResult(a, known)),
+				});
+			}
+			continue;
+		}
 		const et = shape ? shape.elementType || (shape.atomType === "String" ? "Char" : null) : null;
 		const pass = et ? passingOf({ atomType: et }, { target: em.conf.target, charset: em.conf.charset }) : null;
 		const m = pass && pass.mode === "reference"
