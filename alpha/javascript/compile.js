@@ -28,6 +28,7 @@ import { buildEnv, bindEnv, envLookup, EXPORT_MARKERS } from "./pass1.js";
 import { reduceAll, desugarIndexRest } from "./pass2.js";
 import { specializeGenericParams } from "./pass1b.js";
 import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./pass3.js";
+import { collectSlotUnions } from "./layout.js";
 import { findStreamFunctions, generatePullers, groupStreamFunctions, CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 function isIdentifierNode(n) {
@@ -286,6 +287,16 @@ function compile(source, options = {}) {
   // カーソルの入口で、前の方（元の関数）は Pass 4 が飛ばす対象である。
   for (const g of options.__cursorGroups || []) markCursorEntries(nodes, g.entries, g.entries, g.group);
   const specializations = runPass1b(nodes, env);
+  // **鍵が増えるマージのぶんまで、器の並びを先に決める。**
+  //
+  // `p~ [ zzz : 1 ]~` は p の器へ入れる形だが鍵が1本増える。増える鍵が `aa` なら名前順
+  // なので既存のスロットが全部ずれるので、少しずつ伸ばす手は無い——全プログラムを見る
+  // のだから、和集合はコンパイル時の事実として先に確定させる（layout.js）。
+  //
+  // **Pass 3 より前でなければならない。** Pass 3 は仮引数へ届ける並び（`binding.shape`）
+  // を `layoutOfStruct` のスナップショットとして焼くので、後から和集合を足すとそこだけ
+  // 古い並びが残り、`f p` の中の `this ' foo` が隣のスロットを読む。
+  collectSlotUnions(nodes, env);
   // Pass 3 の型注釈と Pass 3b（`__` へ収束する経路の静的記録）は同じ走査で行う。
   const diagnostics = [];
   annotateAll(nodes, env, diagnostics);

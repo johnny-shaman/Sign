@@ -23,6 +23,7 @@ import { generateAsm } from "../pass4.js";
 import { evaluate, newRuntimeEnv, UNIT, observe, isUnit } from "../interpreter.js";
 import { runAsm, asInt, available, toolReport } from "../qemu_run.js";
 import { findStreamFunctions, generatePullers } from "../stream_desugar.js";
+import { mergeBaseIdentifier } from "../layout.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const parser = peggy.generate(fs.readFileSync(path.join(__dirname, "..", "sign.pegjs"), "utf8"));
@@ -1390,6 +1391,103 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 中を入れる形で、結果は a そのもの——黙って新しい器を作ると `a` を見ている他の誰かに
 	// 変更が見えなくなる。**意味が変わる**ので、出さずに名指しする（原理4）。
 	checkNamed("左が名前のマージは名指しで止まる", MG + "r :\n\tfoo : 7\nr~ p~\nr ' foo");
+
+	// ---- 鍵が増えるマージ：場所は**鍵の和集合**で取る ----
+	//
+	// `p~ [ zzz : 1 ]~` は p の器へ入れる形だが鍵が1本増える。p が自分の鍵ぶんしか場所を
+	// 持っていなければ入らないし、増える鍵が `aa` なら**名前順なので既存のスロットが全部
+	// ずれる**——少しずつ伸ばす方式（`ReDim Preserve`）は取れない。だが全プログラムを
+	// 見るのだから和集合はコンパイル時の事実で、定義の場所で一度だけ取れば位置は動かない。
+	//
+	// **書き込みの道（上で名指しして止めている側）はまだ無い**ので、ここで測れるのは
+	// 場所の側だけである。マージの文を両方から落として流す——落としても和集合は残る
+	// （`compile` が Pass 3 の前に確定させている）ので、見えるのは「場所は和集合で取られ、
+	// まだ何も入っていない鍵は `__` を返す」ことになる。書き込みの道が通れば、この節は
+	// そのまま `agree` へ戻せる。
+	const isMergeDefine = (n) => !!(n && n.type === "operation" && n.name === "define" && mergeBaseIdentifier(n.right));
+	const agreePlace = (note, source) => {
+		total++;
+		let a, b;
+		try {
+			const { nodes } = compile(source, { charset: "ascii" });
+			const renv = newRuntimeEnv(null, "ascii");
+			let r = UNIT;
+			for (const n of nodes.filter((x) => !isMergeDefine(x))) r = evaluate(n, renv);
+			a = isUnit(r) ? "__" : String(observe(r) ?? "__");
+		} catch (e) {
+			a = "解釈で例外：" + e.message;
+		}
+		try {
+			const { nodes, env } = compile(source, { charset: "ascii" });
+			const g = generateAsm(nodes.filter((x) => !isMergeDefine(x)), env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
+			b = g.diagnostics.length ? "出せない：" + g.diagnostics[0].message : String(asInt(runAsm(g.text)[0]) ?? "__");
+		} catch (e) {
+			b = "機械で例外：" + e.message;
+		}
+		if (a === b) {
+			passed++;
+			console.log(`ok   ${note.padEnd(34)} ${a}`);
+		} else {
+			console.log(`FAIL ${note.padEnd(34)} 解釈=${a} / 機械=${b}`);
+		}
+	};
+	const UN = (k) => MG + `q : p~ [\n\t${k} : 1\n]~\n`;
+	agreePlace("和集合：後ろに増えても foo は無事", UN("zzz") + "p ' foo");
+	agreePlace("和集合：後ろに増えても bar も無事", UN("zzz") + "p ' bar");
+	// **まだ何も入っていない鍵は `__`。** 場所は在るが中身が無い——ゼロで埋めると
+	// `0` は真なので、無いものが在ることになってしまう（完全性公理）。
+	agreePlace("和集合：まだ入っていない鍵は __", UN("zzz") + "p ' zzz");
+	// **ここがこの仕組みの核心。** `aa` は名前順で先頭に入るので既存の2つが後ろへ動く。
+	// 動いても読む側は和集合の並びを見ているので当たる——**両者が同じ表を引くこと**が、
+	// 途中で伸ばせないことの答えである。
+	agreePlace("和集合：前に増えても foo は無事", UN("aa") + "p ' foo");
+	agreePlace("和集合：前に増えても bar も無事", UN("aa") + "p ' bar");
+	agreePlace("和集合：前に増えた鍵も __", UN("aa") + "p ' aa");
+	// 連番は宣言順のままである（和集合で増えた鍵は自分の鍵の後ろに続く）。
+	agreePlace("和集合：連番は宣言順 0", UN("aa") + "p ' 0");
+	agreePlace("和集合：連番は宣言順 1", UN("aa") + "p ' 1");
+	// **仮引数へ届ける並びも和集合である。** Pass 3 は呼び出しサイトの実引数から並びを
+	// 起こして束縛へ焼く（`binding.shape`）。和集合を Pass 3 より後で足すとそこだけ古い
+	// 並びが残り、`aa` のように前に入る鍵では `this ' foo` が**隣のスロット**を読む。
+	agreePlace("和集合：渡して引く", UN("aa") + "f : s ? s ' foo\nf p");
+	agreePlace("和集合：ブラケットで分けて引く", UN("aa") + "f : [foo ~o] ? foo\nf p");
+
+	// **幅が混ざっても同じ。** `__` の表し方は幅で違う（1本なら niche、2本なら len = 0）。
+	const MS = "p :\n\ts : `abc`\n\tk : 5\n";
+	agreePlace("和集合：文字列スロットの隣に増える", MS + "q : p~ [\n\tz : 1\n]~\np ' k");
+	agreePlace("和集合：増えた鍵が文字列（len = 0）", MS + "q : p~ [\n\tt : `xy`\n]~\n||p ' t||");
+	agreePlace("和集合：増えたのが文字列でも隣は無事", MS + "q : p~ [\n\tt : `xy`\n]~\np ' k");
+	// **8 byte 未満のスロットには 64 ビットの niche が入らない。** 像が置けないので、
+	// 黙ってゼロで埋めず（`0` は真である）名指しして止まる（原理4）。
+	{
+		total++;
+		const note = "和集合：像に置けない幅は名指しで止まる";
+		const { nodes, env } = compile("p :\n\ta : `x`\n\tb : `y`\nq : p~ [\n\tc : `z`\n]~\np ' a", { charset: "ascii" });
+		const g = generateAsm(nodes.filter((x) => !isMergeDefine(x)), env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
+		const hit = g.diagnostics.map((d) => d.message).find((m) => /和集合で取った器を、フレームへ組む道はまだありません/.test(m));
+		if (hit) {
+			passed++;
+			console.log(`ok   ${note.padEnd(34)} 名指し`);
+		} else {
+			console.log(`FAIL ${note.padEnd(34)} ${g.diagnostics.map((d) => d.message).join(" / ") || "（診断なし）"}`);
+		}
+	}
+
+	// **和集合ぶんの場所を取るので layer 1 以上。** 鍵が増えないマージは器の大きさを
+	// 変えないので、門が見るのは「マージが書いてあるか」ではなく「場所が伸びたか」である。
+	{
+		total++;
+		const note = "和集合：layer 0 は確保の門で止まる";
+		const { nodes, env } = compile(UN("zzz") + "p ' foo", { charset: "ascii" });
+		const g = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 0 });
+		const hit = g.diagnostics.map((d) => d.message).find((m) => /layer: 0 では場所を取れません（鍵が増えるマージ/.test(m));
+		if (hit) {
+			passed++;
+			console.log(`ok   ${note.padEnd(34)} 層の門番`);
+		} else {
+			console.log(`FAIL ${note.padEnd(34)} ${g.diagnostics.map((d) => d.message).join(" / ") || "（診断なし）"}`);
+		}
+	}
 }
 
 // ---- 構造体は名前ごとに**一つの場所**を持つ ----

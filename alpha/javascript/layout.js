@@ -42,6 +42,43 @@ function isIdentifierNode(n) {
   return !!n && n.type === "atom" && n.kind === "identifier";
 }
 
+/** 後置 `~`（撒く／器そのものを指す）か。マージ `a~ b~` は両辺がこの形である。 */
+function isExpandNode(n) {
+  return !!n && n.type === "operation" && n.position === "postfix" && n.name === "expand" && !!n.operand;
+}
+
+/** 括りだけの1行ブロックを剥ぐ（pass4 の `unwrap` の、ここで要るぶんだけ）。 */
+function unparen(n) {
+  let x = n;
+  while (x && Array.isArray(x.lines) && x.lines.length === 1 && x.kind !== "abs" && x.kind !== "norm" && !isDefineNode(x.lines[0])) x = x.lines[0];
+  return x;
+}
+
+/**
+ * **左を器として使うマージ**（`a~ b~`）の、左辺の識別子。そうでなければ null。
+ *
+ * この形は2つのことを同時に意味する。**a は書ける場所を持っていなければならない**
+ * （結果は a そのものなので、使うたびに組み直される実体では書いた先と読む先が別になる）
+ * ——それが pass4 の `markAddressTaken` の見ているもの。そして**a の場所は b の鍵まで
+ * 入る大きさでなければならない**——それが `collectSlotUnions` の見ているものである。
+ *
+ * 判定は1つで足りるのに2箇所で書くと、片方だけが広い／狭いという形で必ず食い違う
+ * （このリポジトリで繰り返し出ている壊れ方）。だから**ここ1箇所**に置く。
+ *
+ * **op の名前は余積族のどれでもよい。** 同じ `a~ b~` でも Pass 2 が `construct` に解く
+ * ことも `concat` に解くこともある——実測で、`p` を字下げで書けば `construct`、
+ * ブラケットで書けば `concat` になった。マージだと決めているのは Pass 3 の
+ * 「両辺が Struct」であって op の名前ではない。ここを `construct` だけで見ていたため、
+ * ブラケットで書いた器への上書きは `markAddressTaken` に**黙って拾われていなかった**。
+ */
+function mergeBaseIdentifier(n) {
+  if (!n || n.type !== "operation" || !COPRODUCT_OPS.includes(n.name)) return null;
+  const l = unparen(n.left);
+  if (!isExpandNode(l) || !isExpandNode(unparen(n.right))) return null;
+  const t = unparen(l.operand);
+  return isIdentifierNode(t) ? t : null;
+}
+
 /**
  * **スロットの名前になれるノード。** 識別子と文字列リテラルである（`t : / `+` : 3` の
  * ように、識別子として綴れない名前は文字列で書く）。
@@ -531,6 +568,107 @@ function elementShapeOfList(node, conf) {
 }
 
 /**
+ * **鍵が増えるマージのために、場所を「鍵の和集合」で取る。**
+ *
+ * `p~ [ zzz : 1 ]~` は「p の器へ入れる」形だが、鍵が1本増える。p が自分の鍵ぶんしか
+ * 持っていなければ入らないし、増える鍵が `aa` なら**名前順なので既存のスロットが
+ * 全部ずれる**——少しずつ伸ばす方式（`ReDim Preserve`）は取れない。
+ *
+ * だが**全プログラムを見るのだから、和集合はコンパイル時の事実である**。ある名前を
+ * 左に置くマージは静的に列挙できるので、定義の場所で和集合ぶんを一度だけ取れば、
+ * スロットの位置は途中で動かず、写しは一度も起きない。実行時の `ReDim` が要らない。
+ *
+ * 記録するのは**撒く元のノードだけ**で、そこから何バイトのスロットが出るかは記録しない
+ * ——幅を決めるのは `namedShapeOfSource` → `packSlots` の1本道であって、ここではない。
+ *
+ * **走らせる場所は Pass 3 の型注釈より前**でなければならない。Pass 3 は仮引数へ届ける
+ * 並び（`binding.shape`）を `layoutOfStruct` のスナップショットとして焼く——和集合を
+ * 後から足すと、そのスナップショットだけが古い並びを持つ。`aa` のように前に入る鍵では
+ * `f p` の中の `this ' foo` が **bar の値**を読む、という黙って間違う形になる。
+ *
+ * 足すだけで、消さない。
+ */
+function collectSlotUnions(nodes, env) {
+  if (!env) return;
+  // **名前は定義そのものから引く。** ここは Pass 3 より前なので識別子テーブルの
+  // `valueNode` はまだ空で、`deref` は Pass 1a がトークンから組んだ別のノードへ行き着く
+  // ——そちらへ和集合を付けても、Pass 4 が辿り着く node には載らない（実測で1件も
+  // 効かなかった）。Pass 3 が `binding.valueNode = node.right` と写すのと**同じもの**を、
+  // 表が埋まる前に定義から直接読む。
+  const defs = new Map();
+  for (const n of nodes) {
+    if (isDefineNode(n) && isIdentifierNode(n.left)) defs.set(bareName(n.left.value), n.right);
+  }
+  const resolve = (x) => {
+    let cur = unparen(x);
+    for (let guard = 0; isIdentifierNode(cur) && guard < 32; guard++) {
+      const next = defs.get(bareName(cur.value));
+      if (!next) return null; // 仮引数など、定義を持たない名前
+      cur = unparen(next);
+    }
+    return isIdentifierNode(cur) ? null : cur;
+  };
+  const seen = new Set();
+  const visit = (n, scope) => {
+    if (!n || typeof n !== "object" || seen.has(n)) return;
+    seen.add(n);
+    const here = n.scope || scope;
+    const base = mergeBaseIdentifier(n);
+    if (base) {
+      const target = resolve(base);
+      const src = unparen(unparen(n.right).operand);
+      // **型では見分けられない。** Pass 3 より前なので `atomType` はまだ載っていない。
+      // 見るのは「行を持つ何かへ辿れるか」である。
+      //
+      // 撒く元が同じ器そのものなら鍵は増えない（`p~ p~`）。記録すると
+      // `layoutOfStruct` が自分を待つ形になり、並びが「決まらない」へ落ちる。
+      if (target && Array.isArray(target.lines) && (resolve(src) || src) !== target) {
+        const u = target.slotUnion || (target.slotUnion = []);
+        // 同じ元を二度足さない。足すだけで、消さない。
+        if (!u.some((x) => x.node === src)) u.push({ node: src, env: here });
+      }
+    }
+    for (const k of ["left", "right", "operand"]) visit(n[k], here);
+    for (const l of n.lines || []) visit(l, here);
+    for (const e of n.entries || []) visit(e.default, here);
+  };
+  for (const n of nodes) visit(n, env);
+}
+
+/**
+ * **和集合ぶんまで並びを伸ばす。** 伸ばせなければ null（決まらないことは言う、原理4）。
+ *
+ * 名前のソート順は変わらない。鍵の集合が「自分の鍵 ∪ 左に自分を置くマージが持ち込む鍵」
+ * になるだけである。まだ入っていない鍵には `absent` の印が付く——場所は在るが、そこへは
+ * まだ何も入っていない。`ordinal`（宣言順）は自分の鍵の後ろに続けるので、`p ' 0` の
+ * ような連番の読みは和集合が増えても動かない。
+ */
+function withUnionSlots(entries, node, conf) {
+  if (!node.slotUnion || node.slotUnion.length === 0) return entries;
+  const out = entries.slice();
+  const have = new Set(out.map((e) => e.name));
+  let ordinal = out.length;
+  for (const src of node.slotUnion) {
+    const sh = namedShapeOfSource(src.node, conf, src.env);
+    if (!sh || !sh.slots) return null;
+    for (const s of sh.slots) {
+      if (have.has(s.name)) continue;
+      have.add(s.name);
+      out.push({ name: s.name, ordinal: ordinal++, cell: s, absent: true });
+    }
+  }
+  return out;
+}
+
+/** 名前付きスロットの並びを、和集合ぶんまで伸ばしてから名前順に詰める。 */
+function packNamed(entries, node, conf) {
+  const ext = withUnionSlots(entries, node, conf);
+  if (!ext) return null;
+  ext.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return packSlots(ext, conf, "named");
+}
+
+/**
  * `Struct` のレイアウトを出す。
  *
  * @returns {{ size, align, slotKind, slots: Array<{name?, ordinal, type, offset, size, align}> }|null}
@@ -613,8 +751,7 @@ function layoutOfStructInner(node, conf) {
       if (!s) return null;
       entries.push({ name, ordinal: ordinal++, cell: s });
     }
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return packSlots(entries, conf, "named");
+    return packNamed(entries, node, conf);
   }
 
   // マージの結果はスロット表を直接持つ（list_model.md §5.3）。元の宣言は2つ以上の
@@ -622,8 +759,7 @@ function layoutOfStructInner(node, conf) {
   // 他の名前付き構造体と同じく名前順——マージで作ったからといって配置規則は変わらない。
   if (node.mergedSlots) {
     const entries = [...node.mergedSlots].map(([k, v], ordinal) => ({ name: bareName(k), ordinal, node: v }));
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return packSlots(entries, conf, "named");
+    return packNamed(entries, node, conf);
   }
 
   // 名前付き: 宣言順（連番）を確定させてから、**名前でソートして並べる**（stack_abi.md §7.1）。
@@ -642,8 +778,7 @@ function layoutOfStructInner(node, conf) {
     // 消えたスロットのぶん小さい「もっともらしいレイアウト」が出て、確保も添字も
     // 静かにずれる。決まらないことは null で言う（原理4）。
     if (entries.length !== (node.lines || []).length) return null;
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return packSlots(entries, conf, "named");
+    return packNamed(entries, node, conf);
   }
 
   // 連番: 宣言順がそのまま物理配置。ソートの鍵となる名前が無いためである。
@@ -718,6 +853,9 @@ function packSlots(entries, conf, slotKind) {
       size: m.size,
       align,
       ...(shape ? { shape } : {}),
+      // **場所は在るが、そこへはまだ何も入っていない。** 鍵の和集合で取ったスロットで
+      // ある（`withUnionSlots`）。像を置く側はここを見て `__` の niche で埋める。
+      ...(e.absent ? { absent: true } : {}),
     });
     offset += m.size;
     if (align > maxAlign) maxAlign = align;
@@ -833,4 +971,16 @@ function passingOf(node, conf) {
   return null;
 }
 
-export { measure, layoutOfStruct, elementShapeOfList, formatLayout, alignUp, passingOf, stringLength, flattenProduct };
+export {
+  measure,
+  layoutOfStruct,
+  elementShapeOfList,
+  formatLayout,
+  alignUp,
+  passingOf,
+  stringLength,
+  flattenProduct,
+  isExpandNode,
+  mergeBaseIdentifier,
+  collectSlotUnions,
+};
