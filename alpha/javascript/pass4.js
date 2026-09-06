@@ -1780,6 +1780,9 @@ function genExpr(node, env, em, scope, tail = false) {
 				place(true, SCRATCH[1]);
 			}
 			em.emit(`ldp x29, x30, [sp], #${FRAME_MARK}`, "自分のフレームを畳む");
+			// **飛んだ先が返す本数が、この関数が返す本数である。** 型が答えない形（具体化した
+			// `@p`）でも、飛び先の名前は決まっている——`genFunction` がここを読む。
+			em.tailCallee = callee;
 			em.emit(`b ${callee}`, "末尾呼び出し");
 			return TAIL;
 		}
@@ -1863,7 +1866,27 @@ function genExpr(node, env, em, scope, tail = false) {
 		// （AAPCS64 が16バイトの複合型をそう返すのと同じ置き方）。
 		// **返値の幅もノードが言う。** 規則（レンジ）は `{start, step, end}` で3本になる
 		// ので、型だけを見ると参照（2本）と取り違える。
-		const rw = slotsOfNode(n, em.conf, em.env);
+		// **型が付いていない呼び出しは、呼ばれる側に訊く。** `slotsOfNode` の既定（1本）を
+		// 当てると、呼び先が2本書いていても x1 を読まない——`{ptr, len}` の len が落ちる。
+		// 型が付いているならそちらが正しい（規則は `{start, step, end}` で3本になるので、
+		// 型名だけでは参照と取り違える）。
+		let rw = slotsOfNode(n, em.conf, em.env);
+		// **型が付いていない呼び出しは、呼ばれる側に訊く。**
+		//
+		// `slotsOfNode` の既定（1本）を当てると、呼び先が `{ptr, len}` を書いていても x1 を
+		// 読まず、器が生番地1本になる（診断ゼロ）。具体化した `@p` の呼び出しは pass3 が型を
+		// 付けられないので、ちょうどこの形だった：
+		//
+		//     f : [~s] ? s
+		//     g : p ? @p `abc`
+		//     ||g $f||               解釈 3 ／実機 1
+		//
+		// 表は**出したときの本数**を持っている（`genFunction` が書き戻す）ので、そちらが
+		// 静的な見積もりより正確である。答えが無いときだけ既定に落ちる。
+		if (!n.atomType && em.returnWidths) {
+			const cw = em.returnWidths.has(callee) ? em.returnWidths.get(callee) : em.returnWidths.get(baseName);
+			if (cw !== undefined && cw !== null) rw = cw;
+		}
 		if (rw === null) return em.fail(n, `返値の渡し方が決まりません（${n.atomType}）`);
 		// **返値も引数と同じくレジスタで運ぶ。** AAPCS64 は16バイトを超える複合型を sret へ
 		// 送るが、Sign の関数は全て `main` の内部関数なので（execution_model）呼ぶ側と
@@ -7223,6 +7246,42 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
  * 関数ごとの引数レジスタの並びを先に集める。呼び出しサイトが「省略された引数」の位置を
  * 知るために要る（`genFunction` と同じ `paramRegWidths` を使うので、必ず一致する）。
  */
+/**
+ * **関数ごとに、返す本数を集める。**
+ *
+ * `slotsOfNode` は型注釈が無いノードを1本と数える（整数リテラルのための既定）。
+ * ところが**呼び出しの結果**にその既定を当てると、呼び先が2本書いていても呼ぶ側は
+ * x1 を読まない——`{ptr, len}` の len が落ちて、器が生番地1本になる。具体化した
+ * `@p` の呼び出しは pass3 が型を付けられないので、ちょうどこの形になっていた：
+ *
+ *     f : [~s] ? s
+ *     g : p ? @p `abc`
+ *     ||g $f||                  解釈 3 ／実機 1（診断ゼロ）
+ *
+ * 呼び先が何本返すかは静的に決まっているので、表にしておいて呼ぶ側が引く。列挙は
+ * `collectSignatures` と同じ——**出す関数の集合と、幅を持つ関数の集合は同じでなければ
+ * ならない**（引数の幅で一度踏んだのと同じ話である）。
+ */
+function collectReturnWidths(nodes, em, monos = null) {
+	const out = new Map();
+	const put = (name, lam) => {
+		if (!lam || lam.type !== "operation" || lam.name !== "lambda" || out.has(name)) return;
+		// **型が無い本体は表に載せない。** `slotsOfNode` の既定（1本）をここで固めると、
+		// 「分からない」が「1本だと分かっている」に化ける——呼ぶ側はそれを信じて x1 を
+		// 読まなくなる。分からないことは表に書かない（原理4）。
+		const body = lam.right;
+		if (!body || !body.atomType) return;
+		const w = slotsOfNode(body, em.conf, lam.scope || em.env);
+		if (w !== null && w !== undefined) out.set(name, w);
+	};
+	for (const node of nodes) {
+		if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+		put(bareName(node.left.value), node.right);
+	}
+	for (const [label, lam] of (monos && monos.hoisted) || []) put(label, lam);
+	return out;
+}
+
 function collectSignatures(nodes, em, monos = null) {
 	const sig = new Map();
 	for (const node of nodes) {
@@ -7828,6 +7887,7 @@ function genFunction(name, lambdaNode, env, em, mono) {
 			return;
 		}
 	}
+	em.tailCallee = null;
 	const ok = genExpr(lambdaNode.right, env, em, scope, true);
 	if (ok !== false) {
 		// 返値の幅ぶん x0/x1 へ載せる。末尾呼び出しで出て行った経路は値を持たない。
@@ -7840,11 +7900,22 @@ function genFunction(name, lambdaNode, env, em, mono) {
 		// 症状が重い。`h (g `ab` ``)` は `g` が空文字列で崩壊して `__` になり、それを受けた
 		// `h` も本体に一歩も入らないはずなのに、実機は 7 を返す——**完全性公理（原理5）が
 		// 効かない**、という一番下の土台が崩れる形である。
-		const tailWidth = ok === TAIL ? slotsOfNode(lambdaNode.right, em.conf, env) : null;
+		// 型が答えないなら、飛んだ先に訊く（`b f` の `f` は既に出してあるので表に在る）。
+		const tailByType = ok === TAIL ? slotsOfNode(lambdaNode.right, em.conf, env) : null;
+		const tailByCallee =
+			ok === TAIL && em.tailCallee && em.returnWidths && em.returnWidths.has(em.tailCallee)
+				? em.returnWidths.get(em.tailCallee)
+				: null;
+		const tailWidth = lambdaNode.right && lambdaNode.right.atomType ? tailByType : (tailByCallee !== null ? tailByCallee : tailByType);
 		const width = ok === TAIL ? (tailWidth === null ? 1 : tailWidth) : ok;
 		if (width > ARG_REGS.length) {
 			em.diagnostics.push({ severity: "error", message: `${name}: ${width} 本で返す関数はまだ出せません`, node: lambdaNode });
 		}
+		// **出したときの本数を表へ書き戻す。** 静的な見積もり（型）が答えられない形——
+		// 具体化した `@p` を末尾で飛ぶ関数——でも、出し終えれば本数は決まっている。呼ぶ側
+		// （`_sign_main` は最後に出る）はここを読む。**書く側と読む側が同じ表を引く**のが
+		// 要点で、片方だけが既定の1本に落ちると `{ptr, len}` の len が黙って落ちる。
+		if (em.returnWidths) em.returnWidths.set(name, width);
 		if (ok !== TAIL) {
 			const base = em.slot - ok;
 			// **返す本数は値の形が決める。** 2本で打ち切っていたので、カーソル
@@ -7958,6 +8029,8 @@ function generateAsm(nodes, env, options = {}) {
 	markEscapes(nodes, em.returnedParams);
 	// 呼び出しサイトが省略された引数の位置を知るための署名表。本体を出す前に要る。
 	em.signatures = collectSignatures(nodes, em, monos);
+	// 返す本数も同じ列挙から。呼び出しサイトに型が付かない形（具体化した `@p`）で要る。
+	em.returnWidths = collectReturnWidths(nodes, em, monos);
 	// 返す器の置き場所（sret）。呼ぶ側と呼ばれる側の両方が同じ表を引く必要がある
 	// ——2箇所で別々に大きさを数えると、片方だけが正しい命令列を出す。
 	em.sretPlan = collectSretPlan(nodes, em);
