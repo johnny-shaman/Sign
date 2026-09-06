@@ -2078,8 +2078,19 @@ function joinParamType(cur, next) {
       .some((x) => ["String", "List", "Iterator", "Implicit"].includes(x.trim()));
   // **持ち上げのときだけ合流する。** スカラーは1要素の器なので器へ上げられるが、
   // スカラー同士・器同士で食い違うなら本当に複数の型で呼ばれている——決めない。
-  if (box(cur) && !box(next)) return cur;
-  if (box(next) && !box(cur)) return next;
+  //
+  // **ただし `String` は `List(Char)` である。** どんなスカラーでも上がるわけではない
+  // ——`[300] ≅ 300` が言うのは `List(Int)` であって `String` ではない。ここが `Int` を
+  // `String` へ寄せていたので、呼ぶ側は 8 byte で持ち上げ、呼ばれる側は `Char` の 1 byte
+  // で読み、`g `ab`` と `g 300` を混ぜると 300 が 44（300 & 0xFF）になっていた（診断ゼロ）。
+  // 要素の型が名前に出ない器（`List` / `Iterator` / `Implicit`）はどのスカラーでも上がる。
+  const liftsInto = (boxT, scaT) =>
+    String(boxT || "")
+      .split(" | ")
+      .map((x) => x.trim())
+      .some((x) => (x === "String" ? scaT === "Char" : ["List", "Iterator", "Implicit"].includes(x)));
+  if (box(cur) && !box(next)) return liftsInto(cur, next) ? cur : null;
+  if (box(next) && !box(cur)) return liftsInto(next, cur) ? next : null;
   return null;
 }
 

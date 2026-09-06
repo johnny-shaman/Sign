@@ -186,7 +186,19 @@ checkTrue("空リストの値は __", value("[]") === "__");
 	//
 	// 葉と枝が別の形をしているのは本当なので、決めない（`Atom`）のが正しい（原理4）。
 	checkTrue("Char と List は合流して List", paramType("f : a ? a\nf `x`\nf [1 2]") === "List");
-	checkTrue("Int と String も合流して String", paramType("f : a ? a\nf 1\nf `ab`") === "String");
+	// **`String` へ上がれるのは `Char` だけである。**
+	//
+	// `String ≅ List(Char)` なので、`[x] ≅ x` で `Int` を上げた先は `List(Int)` であって
+	// `String` ではない。ここは長く `String` へ寄せていたが、それは実機で値を壊す規則
+	// だった——呼ぶ側は 8 byte で持ち上げ（`emitLiftToContainer`）、呼ばれる側は `Char` の
+	// 1 byte で読むので、`g `ab`` と `g 300` を混ぜると 300 が **44**（300 & 0xFF）になる。
+	// 診断はゼロだった。
+	//
+	// 葉と枝が別の型なのは本当なので、決めない（`Atom`）のが正しい（原理4）。要素の型が
+	// 名前に出ない器（`List` / `Iterator` / `Implicit`）は、どのスカラーでも上がる。
+	checkTrue("Int は String へは上がらない（String ≅ List(Char)）", paramType("f : a ? a\nf 1\nf `ab`") === "Atom");
+	checkTrue("Char は String へ上がる", paramType("f : a ? a\nf \\x\nf `ab`") === "String");
+	checkTrue("Int は List へは上がる（要素の型が名前に無い）", paramType("f : a ? a\nf 1\nf [1 2]") === "List");
 	checkTrue("Char と Struct は合流しない", paramType("f : a ? a\nf `x`\nf (1 , `x`)") === "Atom");
 
 	// **撒いた文字は文字列へ戻る**（原理7——`String` の μ は強制である）。

@@ -7134,13 +7134,32 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
  * 関数ごとの引数レジスタの並びを先に集める。呼び出しサイトが「省略された引数」の位置を
  * 知るために要る（`genFunction` と同じ `paramRegWidths` を使うので、必ず一致する）。
  */
-function collectSignatures(nodes, em) {
+function collectSignatures(nodes, em, monos = null) {
 	const sig = new Map();
 	for (const node of nodes) {
 		if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
 		const rhs = node.right;
 		if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
 		sig.set(bareName(node.left.value), paramRegWidths(rhs, em));
+	}
+	// **出す関数の集合と、署名を持つ関数の集合は同じでなければならない。**
+	//
+	// デフォルトに書いたラムダは関数内関数の定義であり、`collectMonomorphs` が名前を与えて
+	// トップレベルの実体として出している（`monos.hoisted`）。ところがここはトップレベルの
+	// `名前 : ラムダ` しか数えていなかったので、そこへの呼び出しだけ `sigW` が undefined に
+	// なり、**持ち上げ（1619）も幅の検査（1643）も丸ごと飛んでいた**：
+	//
+	//     f :
+	//     	s
+	//     	p : [~x] ? 7
+	//     ?
+	//     	p s
+	//     f \a                       解釈 7／実機 __（診断ゼロ）
+	//
+	// 片方に足すのではなく、**同じ列挙から引く**のが筋である。
+	for (const [label, lam] of (monos && monos.hoisted) || []) {
+		if (!lam || lam.type !== "operation" || lam.name !== "lambda") continue;
+		if (!sig.has(label)) sig.set(label, paramRegWidths(lam, em));
 	}
 	return sig;
 }
@@ -7839,7 +7858,7 @@ function generateAsm(nodes, env, options = {}) {
 	em.returnedParams = collectReturnedParams(nodes);
 	markEscapes(nodes, em.returnedParams);
 	// 呼び出しサイトが省略された引数の位置を知るための署名表。本体を出す前に要る。
-	em.signatures = collectSignatures(nodes, em);
+	em.signatures = collectSignatures(nodes, em, monos);
 	// 返す器の置き場所（sret）。呼ぶ側と呼ばれる側の両方が同じ表を引く必要がある
 	// ——2箇所で別々に大きさを数えると、片方だけが正しい命令列を出す。
 	em.sretPlan = collectSretPlan(nodes, em);
