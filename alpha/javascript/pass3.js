@@ -3496,6 +3496,7 @@ function annotateTypes(node, env, diagnostics) {
   if (diagnostics) collectUnitReason(node, env, diagnostics);
   if (diagnostics) collectExportMisuse(node, diagnostics);
   if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
+  if (diagnostics) collectRemovedOperator(node, diagnostics);
   // ブロック・ラムダは pass2 が残した子スコープで中身を歩く（無ければ現在のenv）。
   // これが無いと仮引数やブロック内の定義が「未定義識別子」になってしまう。
   const inner = node.scope || env;
@@ -3591,6 +3592,32 @@ function isEmptyContainerLiteral(n) {
   if (u.type === "atom" && u.kind === "string") return String(u.value).length <= 2;
   if (u.type === "block" && Array.isArray(u.lines) && u.lines.length === 0) return true;
   return false;
+}
+
+/**
+ * **`===`（同一性）は廃止された。**
+ *
+ * 唯一の役目は「ねじれ（宣言順の置換）の同定」だったが、それは2つの引き方の差で
+ * 導出できる——`p ' 0` と `p ' 名前` が一致すれば恒等置換である（type_system.md §6.2 が
+ * 元からそう書いていた）。実機でも2命令で出る。
+ *
+ * しかも**宣言順はコンパイル時の性質**なので、実行時の演算子では答えられない。同じ関数で
+ * 置換の違う2つを測ろうとすると「呼び出しサイトごとに違うので決まらない」になる——
+ * 実行時に答えられない問いを演算子として持つ理由が無い。
+ *
+ * 名前もヒープも無いので「同じ物か」に他の観測可能な帰結も残らない。別名は在る
+ * （`a~ b~` は a の器へ書く）が、それは**書いた形から静的に分かる**。
+ */
+function collectRemovedOperator(node, diagnostics) {
+  if (!node || node.type !== "operation" || node.name !== "same") return;
+  diagnostics.push({
+    level: "error",
+    reason: "removed-operator",
+    spec: "type_system.md §6.2",
+    message:
+      `'${node.op}'（同一性）は廃止されました。ねじれ（宣言順の置換）を見たいなら ` +
+      `'p ' 0' と 'p ' 名前' の差で導出できます——一致すれば恒等置換です`,
+  });
 }
 
 function collectScalarCompareOnContainer(node, env, diagnostics) {

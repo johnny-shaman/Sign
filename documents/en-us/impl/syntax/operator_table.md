@@ -45,7 +45,6 @@
 | 5 | `;` | Infix | xor | Exclusive | Exclusive OR | Right operand $X$ (Identity) | Left operand $X$ (Identity) |
 | 6 | `\|` | Infix | or | Or (Passage) | Logical OR (Short-circuit) | Right operand $X$ (Identity) | Left operand $X$ (Short-circuit) |
 | 7 | `&` | Infix | and | And (Combine) | Logical AND (Short-circuit) | `__` (Short-circuit) | `__` (Absorbing) |
-| 8 | `===` | Infix | same | Identity | Identity comparison | `__` (Absorbing) | `__` (Absorbing) |
 | 8 | `==` | Infix | equal | Equal | Structural equality | `__` (Absorbing) | `__` (Absorbing) |
 | 8 | `!==` | Infix | xnot_equal | Not equal | Structural inequality | Right operand $X$ (Identity) | Left operand $X$ (Identity) |
 | 9 | `,` | Infix* | product | Product (Structural) | Right-associative list construction | Identity | Identity |
