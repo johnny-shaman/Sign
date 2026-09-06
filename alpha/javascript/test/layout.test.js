@@ -64,10 +64,10 @@ check("実数2個なら 16 byte", sizeOf("l : [1.0 2.0]"), 16);
 check("名前順に並ぶ", slotsOf("p : [\n\tx : 1\n\ty : 2\n]"), ["x@0", "y@8"]);
 check("宣言順が逆でも物理配置は名前順で同じ", slotsOf("p : [\n\ty : 2\n\tx : 1\n]"), ["x@0", "y@8"]);
 // 宣言順と物理配置がねじれる例。宣言は CR→SR→DR だが、名前順では CR→DR→SR になる。
-// ねじれ自体は型の側（`Struct{CR : Address , 0  DR : String , 2  SR : Int , 1}`）に保存される。
+// ねじれ自体は型の側（`Struct{CR : Address , 0  DR : Char , 2  SR : Int , 1}`）に保存される。
 check(
 	"ねじれてもオフセットは名前順で決まる",
-	slotsOf("uart : [\n\tCR : 0x40011000\n\tSR : 3\n\tDR : `d`\n]"),
+	slotsOf("uart : [\n\tCR : 0x40011000\n\tSR : 3\n\tDR : \\d\n]"),
 	["CR@0", "DR@8", "SR@16"]
 );
 
@@ -95,9 +95,9 @@ check("型が混ざっても宣言順", slotsOf("t : 1 , `ab` , 2.5"), ["[0]@0",
 // 全体を境界へ切り上げるのは `List(Struct)` の各要素が同じ境界に載るためである
 // ——ストライドが揃わないと `base + i × size` が壊れる。
 const packed = { target: "aarch64_qemu", charset: "ascii" };
-check("1 byte の次の 8 byte は境界まで送られる", slotsOf("m : [\n\ta : `x`\n\tb : 1\n]", packed), ["a@0", "b@8"]);
-check("全体の大きさは最大境界へ切り上げる", measure(rhs("m : [\n\ta : `x`\n\tb : 1\n]"), packed).size, 16);
-check("構造体の境界は最大スロットの境界", measure(rhs("m : [\n\ta : `x`\n\tb : 1\n]"), packed).align, 8);
+check("1 byte の次の 8 byte は境界まで送られる", slotsOf("m : [\n\ta : \\x\n\tb : 1\n]", packed), ["a@0", "b@8"]);
+check("全体の大きさは最大境界へ切り上げる", measure(rhs("m : [\n\ta : \\x\n\tb : 1\n]"), packed).size, 16);
+check("構造体の境界は最大スロットの境界", measure(rhs("m : [\n\ta : \\x\n\tb : 1\n]"), packed).align, 8);
 check("alignUp の単体動作", [alignUp(0, 8), alignUp(1, 8), alignUp(8, 8), alignUp(9, 8)], [0, 8, 8, 16]);
 // 要素のストライドも境界へ切り上がる（`List(Struct)` が壊れないため）。
 check("List の stride は要素境界へ切り上げた大きさ", measure(rhs("l : [1 2 3]"), A64).stride, 8);

@@ -191,9 +191,9 @@ checkTrue("__ は niche を積む", (body("f : x ?\n\tx > 3 : __\n\t1\nf 5", "f"
 // 器を返す枝と合流するなら `__` は空の参照である。**ここが「1本と2本」で落ちていた**
 // ——型は既に `Unit` だと言っているのに、幅を1本に決め打ちしていた。
 {
-	const b2 = body("f : s ?\n\t(s ' 0) = ` ` : __\n\ts ' 1~\nf `ab`", "f") || [];
+	const b2 = body("f : s ?\n\t(s ' 0) = \\  : __\n\ts ' 1~\nf `ab`", "f") || [];
 	checkTrue("器と合流する __ は空の参照", b2.includes("mov x12, #0"), b2.join(" / "));
-	check("器と合流しても診断は出ない", asm("f : s ?\n\t(s ' 0) = ` ` : __\n\ts ' 1~\nf `ab`").diagnostics.length, 0);
+	check("器と合流しても診断は出ない", asm("f : s ?\n\t(s ' 0) = \\  : __\n\ts ' 1~\nf `ab`").diagnostics.length, 0);
 }
 
 // ---- `$匿名式` はその場に置いてアドレスを返す（alloca） ----
@@ -1002,7 +1002,7 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 // `{rest.ptr − 幅, rest.len + 1}` で、**確保は要らない**——切り出しの逆向きである。
 {
 	const b = (src) => body(src, "f");
-	const LS = "f : [c ~rest] ?\n\tc = ` ` : f rest\n\tc rest\n";
+	const LS = "f : [c ~rest] ?\n\tc = \\  : f rest\n\tc rest\n";
 	checkTrue("組み直しに確保は要らない", asm(LS + "f `  ab`").diagnostics.length === 0);
 	checkTrue("頭を1要素ぶん戻す", b(LS + "f `  ab`").includes("sub x9, x9, #1"));
 	checkTrue("長さを1つ戻す", b(LS + "f `  ab`").includes("add x9, x9, #1"));
@@ -1022,12 +1022,21 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	// 見るべきは「組み直しの命令を出していないこと」である。
 	checkTrue(
 		"逆順は組み直しではない",
-		!body("f : [c ~rest] ?\n\tc = ` ` : f rest\n\trest c\nf `  ab`", "f").includes("sub x9, x9, #1"),
+		!body("f : [c ~rest] ?\n\tc = \\  : f rest\n\trest c\nf `  ab`", "f").includes("sub x9, x9, #1"),
 	);
-	// 別の分解の組み合わせも組み直しではない。
+	// 別の分解の組み合わせも組み直しではない。**すぐ上の兄弟と同じものを見る。**
+	//
+	// ここは長く「診断が出ること」を見ていたが、出ていたのは組み直しとは無関係な診断
+	// だった——長さ1のバッククォート文字列が `Char` だった頃は `g `x` `y`` の引数が
+	// スカラーになり、それを `[a ~b]` で分解する形が「並べる要素はレジスタ1本の値です」
+	// で落ちていた。**別件の副作用を数えて通っていた**ことになる。
+	//
+	// リテラルの型を書き方で決めるようにして（`\\x` が `Char`、バッククォートは長さ1でも
+	// `String`）分解が真っ当に通るようになり、その副作用が消えた。見るべきは兄弟と同じ
+	// 「組み直しの命令を出していないこと」である。
 	checkTrue(
 		"別の組は組み直しではない",
-		asm("g : [a ~b] [c ~d] ?\n\ta = ` ` : g b d\n\ta d\ng `x` `y`").diagnostics.length > 0,
+		!body("g : [a ~b] [c ~d] ?\n\ta = \\  : g b d\n\ta d\ng `x` `y`", "g").includes("sub x9, x9, #1"),
 	);
 	// 4 byte の charset なら戻す幅も変わる。
 	const u = generateAsm(compile(LS + "f `  ab`", { charset: "utf32" }).nodes, compile(LS + "f `  ab`", { charset: "utf32" }).env,

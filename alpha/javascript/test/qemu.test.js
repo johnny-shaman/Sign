@@ -385,7 +385,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	agree("12個ぜんぶ足す", A12 + "a + b + c + d + e + g + h + i + j + k + l + m\nf 1 2 3 4 5 6 7 8 9 10 11 12");
 	// 器は2本なので、残り1本ではまたげない——その引数から先はスタックである。
 	agree("器がスタックへ回る", "f : a b c d e g h i s ? ||s||\nf 1 2 3 4 5 6 7 8 `xyz`");
-	agree("スタックの器を引く", "f : a b c d e g h i s ? (s ' 1) = `y`\nf 1 2 3 4 5 6 7 8 `xyz`");
+	agree("スタックの器を引く", "f : a b c d e g h i s ? (s ' 1) = \\y\nf 1 2 3 4 5 6 7 8 `xyz`");
 	// 省略された引数はスタック側にも `__` を置く。置かないと前の呼び出しの残骸を
 	// デフォルトの判定に使うことになる。
 	agree("省略しても通る", "f : a b c d e g h i j ?\n\t!j : 99\n\t1\nf 1 2 3 4 5 6 7 8 9");
@@ -425,22 +425,22 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	// **足せることと、足した先が文字であることは別**なので、charset の外へ出たら `__`
 	// になる。見るのは符号なしの上限1つでよい——`Char` は符号なしなので、引き算で負へ
 	// 回った値は巨大な符号なし値になり同じ比較で落ちる。
-	agree("文字に1を足す", "f : c ? c + 1\nf `a`");
-	agree("文字から1を引く", "f : c ? c - 1\nf `b`");
-	agree("文字どうしを足す", "f : a b ? a + b\nf `a` `b`");
-	agree("文字を掛ける", "f : c ? c * 2\nf `0`");
-	agree("上限ちょうどは通る", "f : c ? c + 1\nf `~`");
-	agree("上限を超えたら __", "f : c ? c + 2\nf `~`");
-	agree("負へ回っても __", "f : c ? c - 200\nf `a`");
+	agree("文字に1を足す", "f : c ? c + 1\nf \\a");
+	agree("文字から1を引く", "f : c ? c - 1\nf \\b");
+	agree("文字どうしを足す", "f : a b ? a + b\nf \\a \\b");
+	agree("文字を掛ける", "f : c ? c * 2\nf \\0");
+	agree("上限ちょうどは通る", "f : c ? c + 1\nf \\~");
+	agree("上限を超えたら __", "f : c ? c + 2\nf \\~");
+	agree("負へ回っても __", "f : c ? c - 200\nf \\a");
 	// 整数の算術は検査しない（範囲は charset の話であって整数の話ではない）。
 	agree("整数は検査しない", "f : a ? a + 1000\nf 5");
 	// **断る理由が命令の作り方の側にあるなら、それは対象の制限ではない。** 符号位置も
 	// 長さも `mov` 1つで置いていたため 0xFFFF を超えると名指しで断っていたが、`emitImm`
 	// が `movz`/`movk` の連なりを出せるようになった時点で理由の方が消えていた。
 	// 絵文字は U+1F600 台なので、utf32 では素直に踏む。
-	agree("絵文字の符号位置", "f : c ? c\nf `😀`", "utf32");
-	agree("絵文字を比べる", "f : c ? c = `😀`\nf `😀`", "utf32");
-	agree("面1の文字に足す", "f : c ? c + 1\nf `😀`", "utf32");
+	agree("絵文字の符号位置", "f : c ? c\nf 0u1F600", "utf32");
+	agree("絵文字を比べる", "f : c ? c = 0u1F600\nf 0u1F600", "utf32");
+	agree("面1の文字に足す", "f : c ? c + 1\nf 0u1F600", "utf32");
 	agree("7万字の長さ", "x : `" + "a".repeat(70000) + "`\n||x||");
 	agree("7万字の末尾", "x : `" + "a".repeat(69999) + "z`\nx ' 69999");
 	// **再帰は器の続きへ追記する。** `(s ' 0) (f (s ' 1~))` は「要素 ＋ 再帰の結果」で
@@ -513,7 +513,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	// `T(n) = k + T(n-1)` という漸化式は呼び合う塊で1つであり、解も1つである。
 	//
 	// **自己か相互かは実装側の区別だった。**
-	const MREC = "a : [c ~r] ?\n\tc = `q` : c (b r)\n\tc (a r)\nb : [c ~r] ?\n\tc = `q` : c (a r)\n\tc (b r)\n";
+	const MREC = "a : [c ~r] ?\n\tc = \\q : c (b r)\n\tc (a r)\nb : [c ~r] ?\n\tc = \\q : c (a r)\n\tc (b r)\n";
 	agree("相互再帰：長さ", MREC + "||a `abc`||");
 	for (let i = 0; i < 3; i++) agree(`相互再帰：${i} 番`, MREC + `(a \`abc\`) ' ${i}`);
 	agree("相互再帰：切り替えあり", MREC + "||a `aqbq`||");
@@ -521,7 +521,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	agree("相互再帰：長い入力", MREC + "||a `abcdefgh`||");
 	agree("相互再帰：長い入力の末尾", MREC + "(a `abcdefgh`) ' 7");
 	// 段ごとに2つ出す形（係数2）も同じ漸化式で解ける。
-	const MU2 = "p : [c ~r] ?\n\tc = `q` : c c (s r)\n\tc c (p r)\ns : [c ~r] ?\n\tc = `q` : c c (p r)\n\tc c (s r)\n";
+	const MU2 = "p : [c ~r] ?\n\tc = \\q : c c (s r)\n\tc c (p r)\ns : [c ~r] ?\n\tc = \\q : c c (p r)\n\tc c (s r)\n";
 	agree("相互再帰：段ごとに2つ", MU2 + "||p `ab`||");
 	agree("相互再帰：その末尾", MU2 + "(p `ab`) ' 3");
 	// **撒いた器は写す。** `push : [~st] d ? d st~` は「値1つ ＋ 器の中身」であり、器の方は
@@ -551,7 +551,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	// 戻すだけである。ここを「組む」と数えると、呼ぶ側が場所を用意するのに呼ばれた側は
 	// そこへ書かず、**引数の切片**を返す——その引数が呼ぶ側のフレームに在れば、返した先で
 	// 死んでいる。だから場所は**引数の生産者**へ渡す（透過な呼び先の向こうへ通す）。
-	const SH2 = DUP2 + "sh : [c ~r] ?\n\tc = `x` : r\n\tc r\nm : s ? sh (dup s)\n";
+	const SH2 = DUP2 + "sh : [c ~r] ?\n\tc = \\x : r\n\tc r\nm : s ? sh (dup s)\n";
 	agree("切片を返す呼び先を挟む", SH2 + "||m `ab`||");
 	agree("その落ちる枝", SH2 + "||m `xa`||");
 	for (let i = 0; i < 3; i++) agree(`切片を返す：${i} 番`, SH2 + `(m \`xa\`) ' ${i}`);
@@ -586,11 +586,11 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	agree("分岐して器を返す：器の要素", BR + "(f 5) ' 1");
 	agree("分岐して器を返す：スカラーの枝", BR + "||f 1||");
 	agree("分岐して器を返す：その要素", BR + "(f 1) ' 0");
-	const BC = "h : c ?\n\tc = `a` : c c\n\tc\n";
-	agree("文字でも同じ：器の枝", BC + "||h `a`||");
-	agree("文字でも同じ：スカラーの枝", BC + "||h `b`||");
-	agree("文字でも同じ：その値", BC + "(h `b`) ' 0");
-	const DR = "f : [c ~rest] ?\n\tc = `x` : ``\n\tc (f rest)\n";
+	const BC = "h : c ?\n\tc = \\a : c c\n\tc\n";
+	agree("文字でも同じ：器の枝", BC + "||h \\a||");
+	agree("文字でも同じ：スカラーの枝", BC + "||h \\b||");
+	agree("文字でも同じ：その値", BC + "(h \\b) ' 0");
+	const DR = "f : [c ~rest] ?\n\tc = \\x : ``\n\tc (f rest)\n";
 	agree("分解した残りへ再帰：長さ", DR + "||f `abc`||");
 	for (let i = 0; i < 3; i++) agree(`分解した残りへ再帰：${i} 番`, DR + `(f \`abc\`) ' ${i}`);
 	agree("分解した残りへ再帰：途中で止まる", DR + "||f `abxc`||");
@@ -609,7 +609,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	for (const i of [0, 1, 2, 5]) agree(`追記：2つずつ ${i} 番`, DUP + `(g \`abc\`) ' ${i}`);
 	// **具体化された実体も同じ器を返す。** 名前は `f$is_a` に変わり、関数ポインタの引数は
 	// 命令へ焼き込まれて渡らない——計画表が言う仮引数の位置と、実際に積む位置がずれる。
-	const TW = "is_a : c ? c = `a`\nf : p s ?\n\ts = `` : ``\n\t(@p (s ' 0)) : (s ' 0) (f p (s ' 1~))\n\t``\n";
+	const TW = "is_a : c ? c = \\a\nf : p s ?\n\ts = `` : ``\n\t(@p (s ' 0)) : (s ' 0) (f p (s ' 1~))\n\t``\n";
 	agree("追記：具体化して全部通る", TW + "||f $is_a `aaa`||");
 	agree("追記：具体化して途中で止まる", TW + "||f $is_a `aab`||");
 	agree("追記：具体化して即止まる", TW + "||f $is_a `baa`||");
@@ -623,7 +623,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	agree("デフォルトの関数を使う", "dbl : y ? y * 2\nf :\n\tx\n\tg : $dbl\n? @g x\nf 5");
 	agree("デフォルトを上書きする", "dbl : y ? y * 2\ntri : y ? y * 3\nf :\n\tx\n\tg : $dbl\n? @g x\nf 5 $tri");
 	// 述語をデフォルトで持つ再帰。`take_while` と同じ形が、呼び出し側で述語を書かずに済む。
-	agree("述語をデフォルトで持つ", "is_a : c ? c = `a`\ntw : \n\ts\n\tp : $is_a\n?\n\ts = `` : ``\n\t(@p (s ' 0)) : (s ' 0) (tw (s ' 1~) p)\n\t``\n||tw `aab`||");
+	agree("述語をデフォルトで持つ", "is_a : c ? c = \\a\ntw : \n\ts\n\tp : $is_a\n?\n\ts = `` : ``\n\t(@p (s ' 0)) : (s ' 0) (tw (s ' 1~) p)\n\t``\n||tw `aab`||");
 	// **デフォルトに書いたラムダは関数内関数である。** トップレベルで `dbl : y ? y * 2`
 	// と書くのと同じことを仮引数リストの中でしているだけなので、`$` は要らず `g x` と
 	// 直接呼ぶ——`@` が要るのは `$` を書いたときの対である。
@@ -872,7 +872,7 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 	agree("長さ2なら器のまま", "f : s ? (s ' (1 ~+ 1 ~ 2)) ' 1\nf `abc`");
 	agree("端点が同じレンジ", "f : n ? [3 ~ 3]\nf 1");
 	agree("端点が同じレンジを引く", "f : n ? [3 ~ 3] ' 0\nf 1");
-	agree("長さ1の切り出しで計算", "f : s ? (s ' (1 ~+ 1 ~ 1)) = `b`\nf `abc`");
+	agree("長さ1の切り出しで計算", "f : s ? (s ' (1 ~+ 1 ~ 1)) = \\b\nf `abc`");
 	// **終端の無い形でも、器の長さが分かれば決まる。** リテラルの器なら静的に出る
 	// ——決まるものは決める（原理4は「決まらないものを決めるな」であって、その逆ではない）。
 	agree("末尾1文字（リテラル）", "s : `abc`\nf : n ? s ' 2~\nf 1");
@@ -926,9 +926,9 @@ agree("尽きたら __", "f : x ?\n\tx > 10 : 1\nf 7");
 // 合流がすべて「1本と2本」で落ちていた。型は既に `Unit` だと言っているのだから、幅の話は
 // 合流の側で決まる。
 {
-	const SKIP = "skip : [c ~rest] ?\n\tc = ` ` : skip rest\n\tc rest~\n";
-	agree("器と合流する __", "f : s ?\n\t(s ' 0) = ` ` : __\n\ts ' 1~\ng : s ? (f s) ' 0\ng ` ab`");
-	agree("器と合流する __（偽）", "f : s ?\n\t(s ' 0) = ` ` : __\n\ts ' 1~\ng : s ? (f s) ' 0\ng `xab`");
+	const SKIP = "skip : [c ~rest] ?\n\tc = \\  : skip rest\n\tc rest~\n";
+	agree("器と合流する __", "f : s ?\n\t(s ' 0) = \\  : __\n\ts ' 1~\ng : s ? (f s) ' 0\ng ` ab`");
+	agree("器と合流する __（偽）", "f : s ?\n\t(s ' 0) = \\  : __\n\ts ' 1~\ng : s ? (f s) ' 0\ng `xab`");
 	agree("空白を落として引く", SKIP + "f : s ? (skip s) ' 0\nf `   xyz`");
 	agree("空白を落として2番目", SKIP + "f : s ? (skip s) ' 1\nf `   xyz`");
 	agree("全部空白なら __", SKIP + "f : s ? (skip s) ' 0\nf `   `");
@@ -970,7 +970,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 // `lstrip : [c ~rest] ? … c rest` の `c rest` は渡された器そのもので、確保は要らない
 // （`{rest.ptr − 幅, rest.len + 1}`）。器を作るのではなく参照を戻すだけである。
 {
-	const LS = "lstrip : [c ~rest] ?\n\tc = ` ` : lstrip rest\n\tc rest\n";
+	const LS = "lstrip : [c ~rest] ?\n\tc = \\  : lstrip rest\n\tc rest\n";
 	agree("組み直して先頭を引く", LS + "f : s ? (lstrip s) ' 0\nf `  ab`\n");
 	agree("組み直して2番目を引く", LS + "f : s ? (lstrip s) ' 1\nf `  ab`\n");
 	agree("削るものが無い", LS + "f : s ? (lstrip s) ' 0\nf `ab`\n");
@@ -981,13 +981,13 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 取り違えても気づけない。
 	// 後置 `~` が要るのは**余積の側**（返す器を組むところ）であって、引数として渡す
 	// ところではない——`lstrip rest` は器を1つ渡しているだけである。
-	const LT = "lstrip : [c ~rest] ?\n\tc = ` ` : lstrip rest\n\tc rest~\n";
+	const LT = "lstrip : [c ~rest] ?\n\tc = \\  : lstrip rest\n\tc rest~\n";
 	agree("撒く形で組み直す", LT + "f : s ? (lstrip s) ' 0\nf `  abcd`\n");
 	agree("撒く形の2番目", LT + "f : s ? (lstrip s) ' 1\nf `  abcd`\n");
 	agree("撒く形の3番目", LT + "f : s ? (lstrip s) ' 2\nf `  abcd`\n");
 	agree("撒く形の外", LT + "f : s ? (lstrip s) ' 9\nf `  abcd`\n");
 	// 先頭を落として組み直さない形（残りだけ返す）とも突き合わせる。
-	const SH = "strip_head : [c ~rest] ?\n\tc = `#` : rest\n\tc rest\n";
+	const SH = "strip_head : [c ~rest] ?\n\tc = \\# : rest\n\tc rest\n";
 	agree("先頭を落とす", SH + "f : s ? (strip_head s) ' 0\nf `#ab`\n");
 	agree("落とさない", SH + "f : s ? (strip_head s) ' 0\nf `ab`\n");
 }
@@ -1034,10 +1034,10 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	for (let n = 0; n <= 4; n++) agreeDesugared(`糖衣：${n} 進めて引く`, DUP + `f : s ? ${pull("(dup s)", n)}\nf \`abc\`\n`);
 	agreeDesugared("糖衣：尽きたら __", DUP + `f : s ? ${pull("(dup s)", 9)}\nf \`ab\`\n`);
 	// 枝で並べる本数が変わる形。`a` は2つ、それ以外は1つ。
-	const V = "v : [c ~rest] ?\n\tc = `a` : c c (v rest)\n\tc (v rest)\n";
+	const V = "v : [c ~rest] ?\n\tc = \\a : c c (v rest)\n\tc (v rest)\n";
 	for (let n = 0; n <= 3; n++) agreeDesugared(`糖衣：枝で変わる ${n}`, V + `f : s ? ${pull("(v s)", n)}\nf \`ba\`\n`);
 	// 仲間へ移る形（引用の中と外）。カーソルの `arm` が群をまたいで動く。
-	const P = "p : [c ~rest] ?\n\tc = `-` : c (q rest)\n\tc (p rest)\nq : [c ~rest] ?\n\tc = `-` : c (p rest)\n\tc c (q rest)\n";
+	const P = "p : [c ~rest] ?\n\tc = \\- : c (q rest)\n\tc (p rest)\nq : [c ~rest] ?\n\tc = \\- : c (p rest)\n\tc c (q rest)\n";
 	for (let n = 0; n <= 4; n++) agreeDesugared(`糖衣：仲間へ移る ${n}`, P + `f : s ? ${pull("(p s)", n)}\nf \`a-bc\`\n`);
 	// 入力を飛ばす形。
 	const SK = "sk : [c ~rest] ? c (sk (rest ' 1~))\n";
@@ -1175,7 +1175,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 実行時の大きさになる——sret なら呼ぶ側が上界で取ってあるので通る。top-level の
 	// `||a~ , x||` は今も名指しで断られる（黙って違う値にはならない）。
 	agree("撒いた器を左に置いても", "f : [~a] x ? a~ , x\n||f [`1` , `2`] `Z`||");
-	for (let i = 0; i < 3; i++) agree(`左に撒いて：${i} 番`, `f : [~a] x ? a~ , x\n(f [\`1\` , \`2\`] \`Z\`) ' ${i}`);
+	for (let i = 0; i < 3; i++) agree(`左に撒いて：${i} 番`, `f : [~a] x ? a~ , x\n(f [\\1 , \\2] \\Z) ' ${i}`);
 	agree("右に撒いても同じ長さ", "f : [~a] x ? x , a~\n||f [`1` , `2`] `Z`||");
 
 	// **左から積む再帰**（蓄積子）。器を増やすのではなく、**参照の中身の長さが伸びるだけ**
@@ -1215,8 +1215,8 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 		.split("\n")
 		.filter((l) => !/^expr [\\[]/.test(l))
 		.join("\n");
-	agree("parser.sn：出力の長さ", PARSER + "\n||expr [\`1\` , \`+\` , \`2\`]||");
-	for (let i = 0; i < 9; i++) agree(`parser.sn：${i} 文字目`, PARSER + `\n(expr [\`1\` , \`+\` , \`2\` , \`*\` , \`3\`]) ' ${i}`);
+	agree("parser.sn：出力の長さ", PARSER + "\n||expr [\\1 , \\+ , \\2]||");
+	for (let i = 0; i < 9; i++) agree(`parser.sn：${i} 文字目`, PARSER + `\n(expr [\\1 , \\+ , \\2 , \\* , \\3]) ' ${i}`);
 	agree("トークン列：個数", "||[`10` , `+` , `2`]||");
 	agree("トークン列：語の長さ", "||[`10` , `+` , `2`] ' 0||");
 	agree("トークン列：1文字の語", "||[`10` , `+` , `2`] ' 1||");
@@ -1231,7 +1231,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("器の要素を並べる：3つ", "||[`ab` , `cd` , `ef`]||");
 	const ACC = "go : [~acc] [~ts] ? (go (acc~ , (ts ' 0)) (ts ' 1~)) | acc\n";
 	agree("蓄積子：長さ", ACC + "||go [`z` , `w`] [`a` , `b` , `c`]||");
-	for (let i = 0; i < 5; i++) agree(`蓄積子：${i} 番`, ACC + `(go [\`z\` , \`w\`] [\`a\` , \`b\` , \`c\`]) ' ${i}`);
+	for (let i = 0; i < 5; i++) agree(`蓄積子：${i} 番`, ACC + `(go [\\z , \\w] [\\a , \\b , \\c]) ' ${i}`);
 	agree("組の1番目は器のまま", "s : `ab`\n||(s , `Z`) ' 0||");
 
 	// **名前付きスロットの構造体。**
@@ -1532,15 +1532,15 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 一番きれいな観測：**同じ器が、定数として `.rodata` に置かれれば通り、実行時に組むと
 	// 止まる**（`slotImageLines` は `slot.size` を見ている）。原因が `Char` という型ではなく
 	// **オフセット**であることは、あいだに Int を挟んで両方 8 境界へ載せると通ることで切り分く。
-	const CH2 = "a : `x`\n\tb : `y`";
+	const CH2 = "a : \\x\n\tb : \\y";
 	agree("スロット幅：定数の器", "p :\n\t" + CH2 + "\np ' a");
 	agree("スロット幅：実行時に組む", "mk : n ? [\n\t" + CH2 + "\n]\n(mk 0) ' a");
 	agree("スロット幅：無名の器を直に", "[\n\t" + CH2 + "\n] ' a");
 	agree("スロット幅：2枚目も読める", "mk : n ? [\n\t" + CH2 + "\n]\n(mk 0) ' b");
-	agree("スロット幅：あいだに Int（8境界）", "mk : n ? [\n\ta : `x`\n\tm : 1\n\tz : `y`\n]\n(mk 0) ' z");
-	agree("スロット幅：撒くマージ", "p : [\n\tb : `y`\n]\nq : [\n\ta : `x`\n\tp~\n]\nq ' b");
-	agree("スロット幅：撒く先の1バイトも無事", "p : [\n\tb : `y`\n]\nq : [\n\ta : `x`\n\tp~\n]\nq ' a");
-	agree("スロット幅：入れ子の1バイト", "mk : n ? [\n\ta : `x`\n\tb : [\n\t\tc : `y`\n\t]\n]\n((mk 0) ' b) ' c");
+	agree("スロット幅：あいだに Int（8境界）", "mk : n ? [\n\ta : \\x\n\tm : 1\n\tz : \\y\n]\n(mk 0) ' z");
+	agree("スロット幅：撒くマージ", "p : [\n\tb : \\y\n]\nq : [\n\ta : \\x\n\tp~\n]\nq ' b");
+	agree("スロット幅：撒く先の1バイトも無事", "p : [\n\tb : \\y\n]\nq : [\n\ta : \\x\n\tp~\n]\nq ' a");
+	agree("スロット幅：入れ子の1バイト", "mk : n ? [\n\ta : \\x\n\tb : [\n\t\tc : \\y\n\t]\n]\n((mk 0) ' b) ' c");
 	// 対照：8 byte どうしなら元から合っていた。
 	agree("スロット幅：Int 2枚", "mk : n ? [\n\ta : 1\n\tb : 2\n]\n(mk 0) ' b");
 	agree("スロット幅：String スロットの隣", "mk : n ? [\n\ta : `xy`\n\tb : 7\n]\n(mk 0) ' b");

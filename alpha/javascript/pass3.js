@@ -1285,7 +1285,7 @@ function literalAtomTypeFromKind(node) {
     // `__ 1 2 3` が `[1 2 3]` になるのは、`` `` `` が「以降をテキストとして連結する」と
     // 宣言しているからである（type_system.md §余積族の型変換テーブル）。ここを `Unit` に
     // すると余積の吸収則が効かなくなり、テキスト連結が List 構築へ落ちる。
-    case "string": return [...node.value.slice(1, -1)].length === 1 ? "Char" : "String";
+    case "string": return "String";
     case "char": return "Char";
     case "address": return "Address";
     case "register": return "Address";

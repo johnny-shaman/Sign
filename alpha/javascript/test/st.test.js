@@ -114,7 +114,7 @@ check("宣言順が違えば連番が入れ替わる（ねじれが型に保存�
 ]);
 // 並びと連番が食い違う例。宣言は CR→SR→DR だが物理配置は CR→DR→SR になる
 // ——名前付きスロットに位置の確約が無いこと（stack_abi.md §7.1）が型に現れている。
-check("ねじれもスロット型も1行で読める", entries("uart : [\n\tCR : 0x40011000\n\tSR : 0\n\tDR : `d`\n]"), [
+check("ねじれもスロット型も1行で読める", entries("uart : [\n\tCR : 0x40011000\n\tSR : 0\n\tDR : \\d\n]"), [
 	"uart : Struct{CR : Address , 0  DR : Char , 2  SR : Int , 1}",
 ]);
 check("連番スロットは順序どおりにスロット型を並べる", entries("t : 1 , `abc` , 2.5"), [
@@ -213,7 +213,7 @@ check("ブラケットにも付けない", entries("f : [a ~b] ? a"), ["f : [a b
 // Int でも昇格するので y が Float とは限らない。デフォルトは中身そのものを語る。
 check("デフォルトが整数なら Int", entries("f :\n\tx\n\ty : 1\n? y"), ["f : Atom Int -> Int"]);
 check("デフォルトが実数なら Float", entries("f :\n\tx\n\ty : 1.0\n? y"), ["f : Atom Float -> Float"]);
-check("デフォルトが1文字なら Char", entries("f :\n\tx\n\ty : `s`\n? y"), ["f : Atom Char -> Char"]);
+check("デフォルトが1文字なら Char", entries("f :\n\tx\n\ty : \\s\n? y"), ["f : Atom Char -> Char"]);
 check("デフォルトがリストなら List", entries("f :\n\tx\n\ty : [1 2 3]\n? y"), ["f : Atom List -> List"]);
 check("デフォルトは使用箇所より優先する（値は Int、式が Float へ昇格）", entries("f :\n\ty : 1\n? y + 0.0"), [
 	"f : Int -> Float",
@@ -327,7 +327,7 @@ check("両端の型が違えば、そのまま左端の仮引数と右端の返�
 	"m : Float -> Int",
 ]);
 // 多段合成でも決めるのは両端だけである（間の関数は型の受け渡しにしか関与しない）。
-check("多段合成でも両端が決める", entries("f : x ? 0.0 + x\ng : x ? x * 2\nk : x ? x = `s`\nc : f g k"), [
+check("多段合成でも両端が決める", entries("f : x ? 0.0 + x\ng : x ? x * 2\nk : x ? x = \\s\nc : f g k"), [
 	"f : Float -> Float",
 	"g : Int -> Int",
 	"k : Char -> Char",
@@ -415,7 +415,7 @@ check("貪欲な畳み込みは器を1つ受ける", entries("add : [+]"), [
 check("相手のリテラルが型を決める（実数）", entries("fl : [+ 1.0]"), ["fl : Float -> Float"]);
 check("アドレスでも同じ", entries("off : [+ 0x10]"), ["off : Address -> Address"]);
 check("比較演算子も同じ規則（値返却型比較）", entries("gt : [> 3]"), ["gt : Int -> Int"]);
-check("比較は同種同士なので String も決まる", entries("eq : [= `a`]"), ["eq : Char -> Char"]);
+check("比較は同種同士なので String も決まる", entries("eq : [= \\a]"), ["eq : Char -> Char"]);
 // 構造比較（`==` / `!==`）はリストや構造体にも効くので、要素の族が定まらない。
 // 分からないことを「分かった」と書かないのが `.st` の原則なので、仮引数は分割代入の形
 // （`[x xs~]`）のまま——要素型を名乗らない——で書き写す。
@@ -556,7 +556,7 @@ check("デフォルト式の中の使用も拾う", entries("g : s ? 0.0 + s\nh 
 ]);
 // 逆算した型はラムダのスコープへ書き戻す。書き戻さないと本体でその仮引数を読んだときに
 // Pass 1a が置いた下限（`Atom`）しか見えず、返値型が実際より緩くなる。
-check("デフォルトが式でも本体まで型が届く", entries("id : s ? s = `a`\nc :\n\traw\n\tb : id raw\n?\n\tb"), [
+check("デフォルトが式でも本体まで型が届く", entries("id : s ? s = \\a\nc :\n\traw\n\tb : id raw\n?\n\tb"), [
 	"id : Char -> Char",
 	"c : Char Char -> Char",
 ]);
@@ -566,7 +566,7 @@ check("デフォルトが式でも本体まで型が届く", entries("id : s ? s
 // arm の型が既に直和（再帰呼び出しの返値など）だと、それを1個の要素として数えてしまい、
 // 周回のたびに `String | List | String | List | …` と伸び続ける。直和は冪等（`A | A = A`）
 // であり結合的でもあるのだから、入れ子を保つ理由が無い。
-check("入れ子の直和は展開して重複を落とす", entries("f : n ?\n\tn = 0 : `s`\n\tn = 1 : 1.0\n\tf (n - 1)"), [
+check("入れ子の直和は展開して重複を落とす", entries("f : n ?\n\tn = 0 : \\s\n\tn = 1 : 1.0\n\tf (n - 1)"), [
 	"f : Int -> Char | Float",
 ]);
 
@@ -585,7 +585,7 @@ check("パターン内の要素から器が決まる", entries("f : col [h ~t] ?
 // `null` は「まだ分からない」であって型ではない。束は `__`（底）から始めて単調に上がる
 // 設計なので、途中の周回で読めなかったからといって底を壊してはいけない——相互再帰では
 // 初回に必ず相手が未確定になるため、上書きすると二度と上がれなくなる。
-check("相互再帰の返値が両方決まる", entries("a : n ?\n\tn = 0 : `s`\n\tb (n - 1)\nb : n ?\n\tn = 0 : `t`\n\ta (n - 1)"), [
+check("相互再帰の返値が両方決まる", entries("a : n ?\n\tn = 0 : \\s\n\tb (n - 1)\nb : n ?\n\tn = 0 : \\t\n\ta (n - 1)"), [
 	"a : Int -> Char",
 	"b : Int -> Char",
 ]);
@@ -627,7 +627,7 @@ check(
 //
 // 比較が値を返す（comparison.md「真なら LHS、偽なら `__`」）のも同じ設計の現れで、
 // 真理値を作る代わりに値をそのまま通す。だから述語は**その値の型**になる。
-check("値を返す述語は値の型になる", entries("is_digit : c ? `0` <= c <= `9`"), ["is_digit : Char -> Char"]);
+check("値を返す述語は値の型になる", entries("is_digit : c ? \\0 <= c <= \\9"), ["is_digit : Char -> Char"]);
 check("比較そのものも値を返す", entries("pos : x ? x > 0"), ["pos : Int -> Int"]);
 // 恒等射を明示的に返す書き方だけが Layer 2 に名前を持たない。`.st` は `_` と書く
 // ——裸の `_` は Sign 自身の恒等射記法なので（unit.md §378）、記号としてこれが正しい。
@@ -656,7 +656,7 @@ check("String の添字は Char", entries("s : `abc`\np : s ' 0"), ["s : String"
 check("部分列の添字は器の型", entries("l : [1 2 3]\np : l ' 1~"), ["l : List(Int)", "p : List(Int)"]);
 // 名前付きスロットは名前で、連番スロットはリテラルの添字でそのスロットの型を引く
 // ——スロットごとに型が違ってよいのが直積の意味だからである。
-check("名前付きスロットはその名前の型", entries("d : [\n\tx : 1\n\ty : `s`\n]\np : d ' y").slice(1), ["p : Char"]);
+check("名前付きスロットはその名前の型", entries("d : [\n\tx : 1\n\ty : \\s\n]\np : d ' y").slice(1), ["p : Char"]);
 check("連番スロットはその位置の型", entries("t : 1 , `a` , 2.5\np : t ' 2").slice(1), ["p : Float"]);
 
 
@@ -671,7 +671,7 @@ check("別の関数へ展開しても同じ", entries("g : a ? 0.0 + a\nf : ~xs 
 	"g : Float -> Float",
 	"f : Float~ -> Float",
 ]);
-check("1文字でも同じ", entries("g : c ? c = `a`\nf : ~cs ? g cs~"), ["g : Char -> Char", "f : Char~ -> Char"]);
+check("1文字でも同じ", entries("g : c ? c = \\a\nf : ~cs ? g cs~"), ["g : Char -> Char", "f : Char~ -> Char"]);
 // 多段でも周回のうちに伝わる（返値型・仮引数型と同じ不動点で回っている）。
 check("多段の逆流", entries("g : a ? 0.0 + a\nh : ~ys ? g ys~\nf : ~xs ? h xs~"), [
 	"g : Float -> Float",
@@ -835,7 +835,7 @@ check("Scalar | Int は Scalar", entries("f : a b ?\n\ta > b : a + b\n\t1").map(
 	"Scalar",
 ]);
 // 族と関係の無い枝は畳まない。`String` と `List` はどちらも他方を含まない。
-check("含み合わない枝は残る（String と List は互いを含まない）", entries("f : x ?\n\tx : `s`\n\t[1 2 3]").map((l) => l.split("->")[1].trim()), ["Char | List"]);
+check("含み合わない枝は残る（String と List は互いを含まない）", entries("f : x ?\n\tx : \\s\n\t[1 2 3]").map((l) => l.split("->")[1].trim()), ["Char | List"]);
 
 // **分解は同型の両側から読める。** 既存の規則は「要素の型が分かれば器の型も決まる」という
 // 向きしか持っていなかったので、器の側からしか情報が無い場合に要素が族のまま残っていた。

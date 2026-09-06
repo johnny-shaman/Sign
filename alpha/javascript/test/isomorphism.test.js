@@ -185,7 +185,7 @@ checkTrue("空リストの値は __", value("[]") === "__");
 	// だった。どちらも1レジスタなので幅の検査も通り、診断も出ない。
 	//
 	// 葉と枝が別の形をしているのは本当なので、決めない（`Atom`）のが正しい（原理4）。
-	checkTrue("Char と List は合流して List", paramType("f : a ? a\nf `x`\nf [1 2]") === "List");
+	checkTrue("Char と List は合流して List", paramType("f : a ? a\nf \\x\nf [1 2]") === "List");
 	// **`String` へ上がれるのは `Char` だけである。**
 	//
 	// `String ≅ List(Char)` なので、`[x] ≅ x` で `Int` を上げた先は `List(Int)` であって

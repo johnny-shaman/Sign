@@ -232,7 +232,7 @@ check("器が並ぶ形は均さない", streams("f : [c ~rest] ?\n\tc = `;` : c 
 	const look = (s, n) => { while (s) { const b = s.bindings instanceof Map ? s.bindings.get(n) : s.bindings[n]; if (b) return b; s = s.parent; } return null; };
 	const clean = (s) => String(s).replace(/[<>]/g, "");
 	// 器を1つ受けて頭を渡す形。糖衣が掛かっても、渡る先の仮引数は要素の型（`Char`）である。
-	const SRC = "hit : ch ?\n\tch = `a` : ch\n\t__\ns : [c ~rest] ?\n\thit c : c (s rest)\n\tc (s rest)\nf : x ? s x\nf `abc`\n";
+	const SRC = "hit : ch ?\n\tch = \\a : ch\n\t__\ns : [c ~rest] ?\n\thit c : c (s rest)\n\tc (s rest)\nf : x ? s x\nf `abc`\n";
 	for (const ds of [false, true]) {
 		const { nodes } = compile(SRC, { charset: "ascii", desugarStreams: ds });
 		const d = nodes.find((n) => n.name === "define" && clean(n.left.value) === "hit" && !n.supersededByDesugar);
