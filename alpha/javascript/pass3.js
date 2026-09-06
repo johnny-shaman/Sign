@@ -3497,6 +3497,7 @@ function annotateTypes(node, env, diagnostics) {
   if (diagnostics) collectExportMisuse(node, diagnostics);
   if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
   if (diagnostics) collectRemovedOperator(node, diagnostics);
+  if (diagnostics) collectMorphismAsKey(node, diagnostics);
   // ブロック・ラムダは pass2 が残した子スコープで中身を歩く（無ければ現在のenv）。
   // これが無いと仮引数やブロック内の定義が「未定義識別子」になってしまう。
   const inner = node.scope || env;
@@ -3608,6 +3609,32 @@ function isEmptyContainerLiteral(n) {
  * 名前もヒープも無いので「同じ物か」に他の観測可能な帰結も残らない。別名は在る
  * （`a~ b~` は a の器へ書く）が、それは**書いた形から静的に分かる**。
  */
+/**
+ * **射で器を引くことはできない。**
+ *
+ * `!__` は恒等射（「何もしない射」）であって鍵ではない。ところが恒等射は**機械の上では
+ * `0`** で表され、`' 0` は正当な添字なので、`x ' !__` が黙って `x ' 0` に化けていた
+ * ——`[1 2 3] ' !__` が実機で 1（先頭要素）、``abc` ' !__` が 97（先頭の文字）を返す。
+ * 解釈器は `__` を返すので、診断ゼロで食い違っていた。
+ *
+ * かつて仕様は `x ' !__` に「コンストラクタ由来の確認」という役目を与え、`===` と対で
+ * 同一性を担うと書いていた。その `===` を廃止した（ねじれは2つの引き方の差で導出できる）
+ * ので、この構文も役目を失った。役目の無い構文を静かに動かしておかない（原理4）。
+ */
+function collectMorphismAsKey(node, diagnostics) {
+  if (!node || node.type !== "operation" || node.name !== "get_prop") return;
+  const k = node.right;
+  if (!k || k.atomType !== "Identity") return;
+  diagnostics.push({
+    level: "error",
+    reason: "morphism-as-key",
+    spec: "type_system.md §6.2",
+    message:
+      `射で器を引くことはできません（''' の右辺が恒等射です）。恒等射は機械の上では 0 なので、` +
+      `そのままでは '' 0'（先頭）と区別が付きません——鍵は名前・文字列・連番のいずれかで書きます`,
+  });
+}
+
 function collectRemovedOperator(node, diagnostics) {
   if (!node || node.type !== "operation" || node.name !== "same") return;
   diagnostics.push({

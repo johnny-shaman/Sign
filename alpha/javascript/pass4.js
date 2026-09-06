@@ -4227,6 +4227,12 @@ function mergeBaseNode(x) {
 
 function genIndex(node, env, em, scope) {
 	const conf = em.conf;
+	// **射は鍵ではない。** 恒等射（`!__`）は機械の上では `0` なので、そのまま通すと
+	// `' 0`（先頭）と区別が付かない——`[1 2 3] ' !__` が 1 を、``abc` ' !__` が 97 を返して
+	// いた（解釈器は `__`）。`===` を廃止したことでこの構文は役目も失っている。
+	if (node.right && node.right.atomType === "Identity") {
+		return em.fail(node, "射で器を引くことはできません（'" + node.op + "' の右辺が恒等射です）——鍵は名前・文字列・連番のいずれかで書きます");
+	}
 	// **定数の構造体は畳む**（レジスタ束はここで消える）。
 	const folded = constStructField(node, env);
 	if (folded) return genExpr(folded, env, em, scope);

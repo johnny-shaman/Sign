@@ -1047,5 +1047,32 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	checkTrue("括ったスライス", slice("f : s ? s ' (1 ~+ 1)\nf `abc`"));
 	checkTrue("二重に括っても", slice("f : s ? s ' ((1 ~+ 1))\nf `abc`"));
 }
+
+// **射は鍵ではない。**
+//
+// 恒等射（`!__`）は「何もしない射」であって鍵ではない。ところが恒等射は**機械の上では
+// `0`** で表され、`' 0` は正当な添字なので、`x ' !__` が黙って `x ' 0` に化けていた
+// ——`[1 2 3] ' !__` が実機で 1（先頭要素）、``abc` ' !__` が 97（先頭の文字）を返す。
+// 解釈器は `__` を返すので、診断ゼロで食い違っていた。
+//
+// かつて仕様は `x ' !__` に「コンストラクタ由来の確認」という役目を与え、`===` と対で
+// 同一性を担うと書いていた。その `===` を廃止した（ねじれは2つの引き方の差で導出できる）
+// ので、この構文も役目を失っている。
+checkTrue(
+	"射で器を引くのは名指しする（リスト）",
+	asm("l : [1 2 3]\nl ' !__").diagnostics.some((d) => d.message.includes("射で器を引くことはできません"))
+);
+checkTrue(
+	"射で器を引くのは名指しする（文字列）",
+	asm("s : `abc`\ns ' !__").diagnostics.some((d) => d.message.includes("射で器を引くことはできません"))
+);
+checkTrue(
+	"射で器を引くのは名指しする（積）",
+	asm("p :\n\tx : 3\n\ty : 4\np ' !__").diagnostics.some((d) => d.message.includes("射で器を引くことはできません"))
+);
+// 連番と名前は今まで通り引ける（射だけを断っている）。
+check("連番は引ける", asm("l : [1 2 3]\nl ' 0").diagnostics.length, 0);
+check("名前は引ける", asm("p :\n\tx : 3\np ' x").diagnostics.length, 0);
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
