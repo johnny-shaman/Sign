@@ -1270,6 +1270,12 @@ function genExpr(node, env, em, scope, tail = false) {
 	if (n.type === "operation" && (n.name === "equal" || n.name === "xnot_equal") && n.position === "infix") {
 		const lS = slotsOfNode(n.left, em.conf, env);
 		const rS = slotsOfNode(n.right, em.conf, env);
+		// **積は名前で突き合わせる。** `==` は Hom集合の一致なので宣言順を見ない
+		// （type_system.md §6.2）。物理配置は名前順に揃っているので、鍵の集合が同じなら
+		// 並びも同じ——スロットを順に見ればよい。
+		if (n.left && n.right && n.left.atomType === "Struct" && n.right.atomType === "Struct") {
+			return genStructCompare(n, env, em, scope);
+		}
 		// 両方が1本で運ばれるなら、構造は無いので中身をそのまま比べる（`5 == 5`）。
 		if (lS === 1 && rS === 1) {
 			const mL = reduceToMachineType(n.left && n.left.atomType, em.conf.target);
@@ -4715,6 +4721,71 @@ function genBoxOperand(x, env, em, scope) {
  * 段8 の構造比較はその適用外である（comparison.md §2.1——単位元そのものが `__` に
  * なりうるため）。常に「真なら左辺、偽なら `__`」の単純規則で出す。
  */
+/**
+ * **積どうしの構造比較（`==` / `!==`）。**
+ *
+ * `==` は Hom集合の一致であって同一性ではない——**宣言順を見ない**（type_system.md §6.2:
+ * `point : [x : 3 / y : 4]` と `point2 : [y : 4 / x : 3]` は等しい）。物理配置は名前順に
+ * 揃えてあるので（stack_abi.md §7.1）、鍵の集合が同じなら並びも同じであり、スロットを
+ * 順に突き合わせるだけでよい。宣言順（`ordinal`）は**見ない**のが要点である。
+ *
+ * **鍵の集合が違えば静的に偽である。** Hom集合が違うので、実行時に見るものが無い
+ * ——命令を1本も出さずに答えが決まる。
+ */
+function genStructCompare(node, env, em, scope) {
+	const conf = { target: em.conf.target, charset: em.conf.charset, env };
+	const ls = structShapeOf(node.left, env, conf);
+	const rs = structShapeOf(node.right, env, conf);
+	if (!ls || !rs || ls.slotKind !== "named" || rs.slotKind !== "named") {
+		return em.fail(node, "積の並びが決まらないので比べられません");
+	}
+	const wantEqual = node.name === "equal";
+	// **中身をもう一段辿るスロットはまだ出せない。** 器のスロット（`{ptr, len}` の 16 byte）と
+	// 入れ子の積は、ポインタを比べても同一性になってしまい構造比較にならない（原理4）。
+	for (const sl of ls.slots) {
+		if (sl.shape || sl.size === 16) {
+			return em.fail(node, `スロット ${sl.name} は中身をもう一段辿る必要があるので、積の比較はまだ出せません`);
+		}
+	}
+	// 鍵（名前と幅）が揃っているか。宣言順は見ない——`==` が見ていない性質である。
+	const keyOf = (sh) => sh.slots.map((x) => x.name + ":" + x.size).join(",");
+	const sameKeys = keyOf(ls) === keyOf(rs);
+	const lw = genScalar(node.left, env, em, scope, "積は {ptr} の1本で運びます");
+	if (lw === false) return false;
+	const lo = (em.slot - 1) * 8;
+	const rw = genScalar(node.right, env, em, scope, "積は {ptr} の1本で運びます");
+	if (rw === false) return false;
+	const ro = (em.slot - 1) * 8;
+	const diff = em.newLabel("stne");
+	const end = em.newLabel("stend");
+	if (sameKeys) {
+		for (const [i, sl] of ls.slots.entries()) {
+			const sr = rs.slots[i];
+			em.load(SCRATCH[0], lo, i === 0 ? "左の積の ptr" : undefined);
+			em.emit(slotLoadInsn(sl, "x14", SCRATCH[0], sl.offset), `スロット ${sl.name}（+${sl.offset}、${sl.size} byte）`);
+			em.load(SCRATCH[0], ro);
+			em.emit(slotLoadInsn(sr, "x15", SCRATCH[0], sr.offset));
+			em.emit("cmp x14, x15");
+			em.emit(`b.ne ${diff}`);
+		}
+	} else {
+		// 鍵が違う＝ Hom集合が違う。実行時に見るものは無い。
+		em.emit(`b ${diff}`, "鍵の集合が違うので偽（静的に決まる）");
+	}
+	const put = (isTrue) => {
+		if (isTrue) em.load(SCRATCH[0], lo, "真なら左辺");
+		else em.emit(`movz ${SCRATCH[0]}, #0x8000, lsl #48`, "偽は __");
+		em.store(SCRATCH[0], lo);
+	};
+	put(wantEqual);
+	em.emit(`b ${end}`);
+	em.label(diff);
+	put(!wantEqual);
+	em.label(end);
+	em.pop(1); // 右辺の1本を返す。結果は左辺のスロットにある。
+	return 1;
+}
+
 function genScalarStructCompare(node, env, em, scope) {
 	const why = "GPR 幅の値の構造比較だけを出せます";
 	if (!genScalar(node.left, env, em, scope, why)) return false;
