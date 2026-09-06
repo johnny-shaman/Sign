@@ -4783,12 +4783,22 @@ function genMatch(node, env, em, scope, tail = false) {
 			if (sliced === false) return false;
 			if (sliced !== null) return true;
 		}
-		const w = wide === null ? genExpr(line, env, em, armScope(line), tail) : wide;
+		// **幅が違うと分かっている枝は、末尾に畳まない。**
+		//
+		// 飛んでしまうと値はこの関数を素通りするので、`w === TAIL` の道は幅の照合を
+		// まるごと飛ばす——1本しか書かない関数へ `b` で飛び、呼ぶ側は x1 の残骸を `len`
+		// として読む（`h : n ? `b`` は 1文字＝1本、合流は2本）。畳まなければ普通の呼び出し
+		// になり、下の持ち上げ（スライス／`.rodata`）か名指しの断りに落ちる。
+		const lineW = slotsOfNode(line, em.conf, env);
+		const armTail = tail && !(lineW !== null && lineW !== width);
+		const w = wide === null ? genExpr(line, env, em, armScope(line), armTail) : wide;
 		if (armAppend) armAppend._sretInto = undefined;
 		if (w === false) return false;
 		if (w === TAIL) {
 			// 飛んで行った枝は値を置かない。空けた分を戻して帳尻を合わせる。
 			if (direct) for (let k = 0; k < width; k++) em.push();
+			// 幅が読めない枝を飛ばしたなら、呼ぶ側が読む本数を誰も保証していない。
+			if (lineW === null) return em.fail(line, `末尾で飛ぶ枝の返す本数が決まりません（${line.atomType}）`);
 			return TAIL;
 		}
 		if (direct && w === width) return true; // 既に `outs` に在る
@@ -7742,7 +7752,17 @@ function genFunction(name, lambdaNode, env, em, mono) {
 	const ok = genExpr(lambdaNode.right, env, em, scope, true);
 	if (ok !== false) {
 		// 返値の幅ぶん x0/x1 へ載せる。末尾呼び出しで出て行った経路は値を持たない。
-		const width = ok === TAIL ? 1 : ok;
+		//
+		// **飛んだ経路も、返す本数は型が決める。** 飛んだ先が2本返す関数なら、この関数も
+		// 2本返している——`b` で出て行くのだから当然である。ところがここは「値を置かな
+		// かった」ことを「1本」と数えていたので、崩壊の出口（`emitUnitRegs`）が x1 を
+		// 置かず、呼ぶ側は前の呼び出しの残骸を `len` として読んでいた。
+		//
+		// 症状が重い。`h (g `ab` ``)` は `g` が空文字列で崩壊して `__` になり、それを受けた
+		// `h` も本体に一歩も入らないはずなのに、実機は 7 を返す——**完全性公理（原理5）が
+		// 効かない**、という一番下の土台が崩れる形である。
+		const tailWidth = ok === TAIL ? slotsOfNode(lambdaNode.right, em.conf, env) : null;
+		const width = ok === TAIL ? (tailWidth === null ? 1 : tailWidth) : ok;
 		if (width > ARG_REGS.length) {
 			em.diagnostics.push({ severity: "error", message: `${name}: ${width} 本で返す関数はまだ出せません`, node: lambdaNode });
 		}
