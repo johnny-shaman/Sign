@@ -2546,10 +2546,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			em.movedSp = true;
 			let at = base;
 			for (let k = 0; k < slotNodes.length; k++) {
-				for (let r = 0; r < widths[k]; r++) {
-					em.load(SCRATCH[0], (at + r) * 8);
-					em.emit(`str ${SCRATCH[0]}, [sp, #${lay.slots[k].offset + r * 8}]`, r === 0 ? `スロット ${k}` : undefined);
-				}
+				if (emitSlotWrite(em, n, lay.slots[k], widths[k], at, "sp", `スロット ${k}（+${lay.slots[k].offset}、${lay.slots[k].size} byte）`) === false) return false;
 				at += widths[k];
 			}
 			em.pop(at - base);
@@ -2700,9 +2697,12 @@ function genExpr(node, env, em, scope, tail = false) {
 			// ときは並びのどちらかが違うものを見ている——黙って詰めると隣を踏む。
 			if (ss.size !== sl.size) return em.fail(n, `撒く器の ${sl.name} と幅が合いません（${ss.size} と ${sl.size}）`);
 			em.load(SCRATCH[1], src.at * 8, `撒く器の ptr（${sl.name} を写す）`);
+			// 読むのも書くのも `slot.size` の幅で。8 byte 固定だと 1 byte のスロットが隣を
+			// 踏み、境界を跨いだ書き込みは実機で止まる。
 			for (let r = 0; r * 8 < sl.size; r++) {
-				em.emit(`ldr ${SCRATCH[0]}, [${SCRATCH[1]}, #${ss.offset + r * 8}]`);
-				em.emit(`str ${SCRATCH[0]}, [${MDST}, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}、撒いた器の +${ss.offset} から浅く写す）` : undefined);
+				const wsz = Math.min(8, sl.size - r * 8);
+				em.emit(slotLoadInsn({ ...sl, size: wsz }, SCRATCH[0], SCRATCH[1], ss.offset + r * 8));
+				em.emit(slotStoreInsn(wsz, SCRATCH[0], MDST, sl.offset + r * 8), r === 0 ? `スロット ${sl.name}（+${sl.offset}、${sl.size} byte、撒いた器の +${ss.offset} から浅く写す）` : undefined);
 			}
 		}
 		em.pop(em.slot - mbase);
@@ -2756,10 +2756,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		for (const sl of lay.slots) {
 			const k = sl.ordinal;
 			if (!(k >= 0 && k < widths.length)) return em.fail(n, "スロットの宣言順が引けません");
-			for (let r = 0; r < widths[k]; r++) {
-				em.load(SCRATCH[0], (at[k] + r) * 8);
-				em.emit(`str ${SCRATCH[0]}, [${SDST}, #${sl.offset + r * 8}]`, r === 0 ? `スロット ${sl.name}（+${sl.offset}）` : undefined);
-			}
+			if (emitSlotWrite(em, n, sl, widths[k], at[k], SDST, `スロット ${sl.name}（+${sl.offset}、${sl.size} byte）`) === false) return false;
 		}
 		em.pop(em.slot - sbase);
 		const spo = em.push();
@@ -3984,6 +3981,44 @@ function slotLoadInsn(slot, dst, base, off) {
 	if (slot.size === 2) return `${sg ? "ldrsh" : "ldrh"} ${sg ? dst : w}, ${at}`;
 	if (slot.size === 4) return `${sg ? "ldrsw" : "ldr"} ${sg ? dst : w}, ${at}`;
 	return `ldr ${dst}, ${at}`;
+}
+
+/**
+ * **スロット1つを書く命令。** `slotLoadInsn` の対である。
+ *
+ * 読む側は幅でニーモニックを選んでいたのに、**書く側にはこれが無かった**——器を組む
+ * 3か所（名前付き・連番・撒くマージ）はどれも「レジスタ何本か」の粒度で `str`（8 byte）
+ * を出し、`slot.size` を一度も見ていない。1 byte のスロットが2つ隣り合う器
+ * （`[ a : `x` / b : `y` ]`）は offset 0 と 1 へ8バイトずつ書くので、2本目が境界を跨ぐ
+ * ——MMU を立てない実機（qemu/start.s）では Device-nGnRnE なのでフォールトし、例外
+ * ベクタも無いので**止まる**。診断はゼロだった。
+ *
+ * 同じ器を定数として `.rodata` へ置く道（`slotImageLines`）は `slot.size` を見ているので
+ * 正しく通る——**同じ器が、定数なら動いて実行時に組むと止まる**という形で出ていた。
+ * `slotLoadInsn` の説明が自分で「2箇所で同じものを計算すると必ずズレる」と書いている、
+ * その8度目である。
+ */
+function slotStoreInsn(size, src, base, off) {
+	return storeElem(src, base, off, size >= 8 ? 8 : size);
+}
+
+/**
+ * **スロット1つぶんを書き出す。** 値は `words` 本のレジスタとしてスロットに積まれている。
+ *
+ * 幅が合わなければ黙って詰めない（原理4）——合わないときは並びのどちらかが違うものを
+ * 見ており、詰めれば隣を踏む。撒くマージ（`ss.size !== sl.size`）が既に持っている検査を、
+ * 出す側にも置く。
+ */
+function emitSlotWrite(em, n, slot, valueSlots, atSlot, dst, label) {
+	const words = Math.ceil(slot.size / 8);
+	if (valueSlots !== words) {
+		return em.fail(n, `スロット ${slot.name ?? slot.ordinal} の幅が合いません（値は ${valueSlots} 本、スロットは ${slot.size} byte）`);
+	}
+	for (let r = 0; r < words; r++) {
+		em.load(SCRATCH[0], (atSlot + r) * 8);
+		em.emit(slotStoreInsn(slot.size - r * 8, SCRATCH[0], dst, slot.offset + r * 8), r === 0 ? label : undefined);
+	}
+	return true;
 }
 
 /**

@@ -1520,6 +1520,30 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("文字列比較：片方だけ仮引数 違う", "f : a ? ||a = `ab`||\nf `ac`");
 	agree("文字列比較：!= が違うとき", "||`ab` != `ac`||");
 	agree("文字列比較：!= が等しいとき", "||`ab` != `ab`||");
+
+	// **書く側にも `slotLoadInsn` の対が要る。**
+	//
+	// 読む側は `slot.size` で `ldrb`/`ldrh`/`ldr` を選んでいたのに、器を組む3か所（名前付き・
+	// 連番・撒くマージ）はどれも「レジスタ何本か」の粒度で 8 byte の `str` を出していた。
+	// 1 byte のスロットが2つ隣り合うと offset 0 と 1 へ8バイトずつ書くので、2本目が境界を
+	// 跨ぐ——MMU を立てない実機（`qemu/start.s`）では Device-nGnRnE なのでフォールトし、
+	// 例外ベクタも無いので**止まる**。診断はゼロだった。
+	//
+	// 一番きれいな観測：**同じ器が、定数として `.rodata` に置かれれば通り、実行時に組むと
+	// 止まる**（`slotImageLines` は `slot.size` を見ている）。原因が `Char` という型ではなく
+	// **オフセット**であることは、あいだに Int を挟んで両方 8 境界へ載せると通ることで切り分く。
+	const CH2 = "a : `x`\n\tb : `y`";
+	agree("スロット幅：定数の器", "p :\n\t" + CH2 + "\np ' a");
+	agree("スロット幅：実行時に組む", "mk : n ? [\n\t" + CH2 + "\n]\n(mk 0) ' a");
+	agree("スロット幅：無名の器を直に", "[\n\t" + CH2 + "\n] ' a");
+	agree("スロット幅：2枚目も読める", "mk : n ? [\n\t" + CH2 + "\n]\n(mk 0) ' b");
+	agree("スロット幅：あいだに Int（8境界）", "mk : n ? [\n\ta : `x`\n\tm : 1\n\tz : `y`\n]\n(mk 0) ' z");
+	agree("スロット幅：撒くマージ", "p : [\n\tb : `y`\n]\nq : [\n\ta : `x`\n\tp~\n]\nq ' b");
+	agree("スロット幅：撒く先の1バイトも無事", "p : [\n\tb : `y`\n]\nq : [\n\ta : `x`\n\tp~\n]\nq ' a");
+	agree("スロット幅：入れ子の1バイト", "mk : n ? [\n\ta : `x`\n\tb : [\n\t\tc : `y`\n\t]\n]\n((mk 0) ' b) ' c");
+	// 対照：8 byte どうしなら元から合っていた。
+	agree("スロット幅：Int 2枚", "mk : n ? [\n\ta : 1\n\tb : 2\n]\n(mk 0) ' b");
+	agree("スロット幅：String スロットの隣", "mk : n ? [\n\ta : `xy`\n\tb : 7\n]\n(mk 0) ' b");
 }
 
 console.log(`\n${passed}/${total} passed`);
