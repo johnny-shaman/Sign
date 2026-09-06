@@ -1277,7 +1277,21 @@ function genExpr(node, env, em, scope, tail = false) {
 		};
 		// **器どうしの等価は中身の比較である。** `String` は `{ptr, len}` で来るので、
 		// 長さを見てから要素を1つずつ見る。メモリは要らない——読むだけである。
-		if (n.left && n.right && n.left.atomType === "String" && n.right.atomType === "String") {
+		// **門は型名ではなく「何本で運ばれるか」で決める。**
+		//
+		// ここは両辺の `atomType` が `String` かどうかだけを見ていた。ところが型が `String` でも
+		// 1本で運ばれる値が在る——呼び出しサイトが `Char` を渡した仮引数は `paramRegWidths` が
+		// 1本で受けると決める。門を通ってしまうと `genStringCompare` は「2本ある」つもりで
+		// `lo` と `lo+8` を読み、左辺の `len` を右辺の `ptr` として使う——診断ゼロで違う値が
+		// 返る（`f : s ? `ab` != s` に1文字を渡すと 解釈 98／実機 0）。
+		//
+		// **同じ `Char` × `String` が、直に書けば断られ、仮引数を経由すると黙って通っていた。**
+		// 狭い側は確保ゼロで広げられる（リテラルは `.rodata`、器の中の1つはスライス）ので、
+		// 断るのではなく広げてから比べる（仕様 §2「Char の枝は境界で1要素の連続領域へ持ち上げる」）。
+		const cmpBoxish = (t) => t === "String" || t === "Char";
+		const lWid = slotsOfNode(n.left, em.conf, env);
+		const rWid = slotsOfNode(n.right, em.conf, env);
+		if (n.left && n.right && cmpBoxish(n.left.atomType) && cmpBoxish(n.right.atomType) && (lWid === 2 || rWid === 2)) {
 			if (n.name !== "assign_equal" && n.name !== "not_equal") {
 				return em.fail(n, `器どうしは等価だけを出せます（${n.op}）——順序を出すには辞書式の規則が要る`);
 			}
@@ -4602,11 +4616,39 @@ function elementTypeOfNode(n, env) {
  * 長さが違えば中身を見るまでもない。同じなら要素を1つずつ見る——要素の幅は `charset` が
  * 決める（`String ≅ List(Char)` の要素幅そのもの）。
  */
+/**
+ * **両辺をちょうど `{ptr, len}` の2本にしてから比べる。**
+ *
+ * 以前は `genExpr` の返した本数を捨てて `em.slot - 2` を読んでいたので、1本で運ばれて
+ * 来た値（`Char` を渡された仮引数）が混ざると左辺の `len` を右辺の `ptr` として使って
+ * いた。狭い側は確保ゼロで広げられる——リテラルは `.rodata`、器の中の1つはスライス。
+ */
+function genBoxOperand(x, env, em, scope) {
+	const wid = slotsOfNode(x, em.conf, env);
+	if (wid === 2) {
+		const w2 = genExpr(x, env, em, scope);
+		if (w2 === false) return false;
+		if (w2 !== 2) { em.pop(w2 === TAIL ? 0 : w2); return null; }
+		return 2;
+	}
+	let po = emitSliceLift(em, x, env, scope);
+	if (po === false) return false;
+	if (po === null) {
+		po = emitCharLiteralBox(x, env, em);
+		if (po === false) return false;
+	}
+	return po === null ? null : 2;
+}
+
 function genStringCompare(node, env, em, scope) {
 	const w = charSizeOf(em.conf.charset);
-	if (!genExpr(node.left, env, em, scope)) return false;
+	const lb = genBoxOperand(node.left, env, em, scope);
+	if (lb === false) return false;
+	if (lb === null) return em.fail(node, `比べる左辺を長さ1の器へ広げられません（${node.left && node.left.atomType}）`);
 	const lo = (em.slot - 2) * 8;
-	if (!genExpr(node.right, env, em, scope)) return false;
+	const rb = genBoxOperand(node.right, env, em, scope);
+	if (rb === false) return false;
+	if (rb === null) return em.fail(node, `比べる右辺を長さ1の器へ広げられません（${node.right && node.right.atomType}）`);
 	const ro = (em.slot - 2) * 8;
 	const wantEqual = node.name === "assign_equal";
 	const same = em.newLabel("streq");
