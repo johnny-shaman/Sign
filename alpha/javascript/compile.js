@@ -28,7 +28,6 @@ import { buildEnv, bindEnv, envLookup, EXPORT_MARKERS } from "./pass1.js";
 import { reduceAll, desugarIndexRest } from "./pass2.js";
 import { specializeGenericParams } from "./pass1b.js";
 import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./pass3.js";
-import { collectSlotUnions } from "./layout.js";
 import { findStreamFunctions, generatePullers, groupStreamFunctions, CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 function isIdentifierNode(n) {
@@ -296,7 +295,6 @@ function compile(source, options = {}) {
   // **Pass 3 より前でなければならない。** Pass 3 は仮引数へ届ける並び（`binding.shape`）
   // を `layoutOfStruct` のスナップショットとして焼くので、後から和集合を足すとそこだけ
   // 古い並びが残り、`f p` の中の `this ' foo` が隣のスロットを読む。
-  collectSlotUnions(nodes, env);
   // Pass 3 の型注釈と Pass 3b（`__` へ収束する経路の静的記録）は同じ走査で行う。
   const diagnostics = [];
   annotateAll(nodes, env, diagnostics);

@@ -59,8 +59,9 @@ function unparen(n) {
  *
  * この形は2つのことを同時に意味する。**a は書ける場所を持っていなければならない**
  * （結果は a そのものなので、使うたびに組み直される実体では書いた先と読む先が別になる）
- * ——それが pass4 の `markAddressTaken` の見ているもの。そして**a の場所は b の鍵まで
- * 入る大きさでなければならない**——それが `collectSlotUnions` の見ているものである。
+ * ——それが pass4 の `markAddressTaken` の見ているもの。そして**b の鍵は a に無ければ
+ * ならない**——鍵が増えると a の型が変わるので、そこは Pass 3 が弾く
+ * （`mergedStructSlots`、layer_relations.md §3.3.1）。
  *
  * 判定は1つで足りるのに2箇所で書くと、片方だけが広い／狭いという形で必ず食い違う
  * （このリポジトリで繰り返し出ている壊れ方）。だから**ここ1箇所**に置く。
@@ -588,84 +589,18 @@ function elementShapeOfList(node, conf) {
  *
  * 足すだけで、消さない。
  */
-function collectSlotUnions(nodes, env) {
-  if (!env) return;
-  // **名前は定義そのものから引く。** ここは Pass 3 より前なので識別子テーブルの
-  // `valueNode` はまだ空で、`deref` は Pass 1a がトークンから組んだ別のノードへ行き着く
-  // ——そちらへ和集合を付けても、Pass 4 が辿り着く node には載らない（実測で1件も
-  // 効かなかった）。Pass 3 が `binding.valueNode = node.right` と写すのと**同じもの**を、
-  // 表が埋まる前に定義から直接読む。
-  const defs = new Map();
-  for (const n of nodes) {
-    if (isDefineNode(n) && isIdentifierNode(n.left)) defs.set(bareName(n.left.value), n.right);
-  }
-  const resolve = (x) => {
-    let cur = unparen(x);
-    for (let guard = 0; isIdentifierNode(cur) && guard < 32; guard++) {
-      const next = defs.get(bareName(cur.value));
-      if (!next) return null; // 仮引数など、定義を持たない名前
-      cur = unparen(next);
-    }
-    return isIdentifierNode(cur) ? null : cur;
-  };
-  const seen = new Set();
-  const visit = (n, scope) => {
-    if (!n || typeof n !== "object" || seen.has(n)) return;
-    seen.add(n);
-    const here = n.scope || scope;
-    const base = mergeBaseIdentifier(n);
-    if (base) {
-      const target = resolve(base);
-      const src = unparen(unparen(n.right).operand);
-      // **型では見分けられない。** Pass 3 より前なので `atomType` はまだ載っていない。
-      // 見るのは「行を持つ何かへ辿れるか」である。
-      //
-      // 撒く元が同じ器そのものなら鍵は増えない（`p~ p~`）。記録すると
-      // `layoutOfStruct` が自分を待つ形になり、並びが「決まらない」へ落ちる。
-      if (target && Array.isArray(target.lines) && (resolve(src) || src) !== target) {
-        const u = target.slotUnion || (target.slotUnion = []);
-        // 同じ元を二度足さない。足すだけで、消さない。
-        if (!u.some((x) => x.node === src)) u.push({ node: src, env: here });
-      }
-    }
-    for (const k of ["left", "right", "operand"]) visit(n[k], here);
-    for (const l of n.lines || []) visit(l, here);
-    for (const e of n.entries || []) visit(e.default, here);
-  };
-  for (const n of nodes) visit(n, env);
-}
 
 /**
- * **和集合ぶんまで並びを伸ばす。** 伸ばせなければ null（決まらないことは言う、原理4）。
+ * **名前付きスロットの並びを、名前順に詰める。**
  *
- * 名前のソート順は変わらない。鍵の集合が「自分の鍵 ∪ 左に自分を置くマージが持ち込む鍵」
- * になるだけである。まだ入っていない鍵には `absent` の印が付く——場所は在るが、そこへは
- * まだ何も入っていない。`ordinal`（宣言順）は自分の鍵の後ろに続けるので、`p ' 0` の
- * ような連番の読みは和集合が増えても動かない。
+ * 鍵の集合は器の定義がそのまま決める。マージで増えることはない——増えると左の器の型が
+ * 変わり、その型に対する関数が書けなくなるので Pass 3 が弾いている
+ * （layer_relations.md §3.3.1）。入れたい鍵は器に初期値つきで宣言する。
  */
-function withUnionSlots(entries, node, conf) {
-  if (!node.slotUnion || node.slotUnion.length === 0) return entries;
-  const out = entries.slice();
-  const have = new Set(out.map((e) => e.name));
-  let ordinal = out.length;
-  for (const src of node.slotUnion) {
-    const sh = namedShapeOfSource(src.node, conf, src.env);
-    if (!sh || !sh.slots) return null;
-    for (const s of sh.slots) {
-      if (have.has(s.name)) continue;
-      have.add(s.name);
-      out.push({ name: s.name, ordinal: ordinal++, cell: s, absent: true });
-    }
-  }
-  return out;
-}
-
-/** 名前付きスロットの並びを、和集合ぶんまで伸ばしてから名前順に詰める。 */
 function packNamed(entries, node, conf) {
-  const ext = withUnionSlots(entries, node, conf);
-  if (!ext) return null;
-  ext.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  return packSlots(ext, conf, "named");
+  if (!entries) return null;
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return packSlots(entries, conf, "named");
 }
 
 /**
@@ -854,8 +789,7 @@ function packSlots(entries, conf, slotKind) {
       align,
       ...(shape ? { shape } : {}),
       // **場所は在るが、そこへはまだ何も入っていない。** 鍵の和集合で取ったスロットで
-      // ある（`withUnionSlots`）。像を置く側はここを見て `__` の niche で埋める。
-      ...(e.absent ? { absent: true } : {}),
+
     });
     offset += m.size;
     if (align > maxAlign) maxAlign = align;
@@ -982,5 +916,5 @@ export {
   flattenProduct,
   isExpandNode,
   mergeBaseIdentifier,
-  collectSlotUnions,
+
 };

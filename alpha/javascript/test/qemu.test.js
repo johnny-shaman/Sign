@@ -1391,206 +1391,32 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 中を入れる形で、結果は a そのもの——だから `a` を見ている他の誰かにも見える。
 	// 以前はここで名指しして止めていたが、器の場所を持つ仕組み（`.data` の像）が入ったので
 	// 出せるようになった。**止まることではなく、元が変わることを検査する。**
-	agree("上書き：左が名前なら元が変わる", MG + "r :\n\tfoo : 7\nx : r~ p~\nr ' bar");
-	agree("上書き：左が名前でも書かれない鍵は無事", MG + "r :\n\tfoo : 7\nx : r~ p~\nr ' foo");
+	// **鍵は増やせないので、左の器が全部の鍵を宣言している形になる。** 括弧を付けずに書ける
+	// 余積は「同じ次元で伸ばす」＝スロットが増えない上書きだけである（layer_relations.md §3.3.1）。
+	agree("上書き：左が名前なら元が変わる", "r :\n\tfoo : 7\n\tbar : 0\np :\n\tfoo : 10\n\tbar : 20\nx : r~ p~\nr ' bar");
+	agree("上書き：左が名前でも入った値で上書きされる", "r :\n\tfoo : 7\n\tbar : 0\np :\n\tfoo : 10\n\tbar : 20\nx : r~ p~\nr ' foo");
 
-	// ---- 鍵が増えるマージ：場所は**鍵の和集合**で取る ----
+	// ---- 鍵が増えるマージは**弾く**。枠を宣言してそこへ入れる ----
 	//
-	// `p~ [ zzz : 1 ]~` は p の器へ入れる形だが鍵が1本増える。p が自分の鍵ぶんしか場所を
-	// 持っていなければ入らないし、増える鍵が `aa` なら**名前順なので既存のスロットが全部
-	// ずれる**——少しずつ伸ばす方式（`ReDim Preserve`）は取れない。だが全プログラムを
-	// 見るのだから和集合はコンパイル時の事実で、定義の場所で一度だけ取れば位置は動かない。
+	// 鍵が増えると左の器の**型が変わる**。名前はプログラムの語彙であり、プログラムは自分の
+	// 語彙を実行時に増やせない——それが静的型付けの中身で、`option.ms` の `link: static` が
+	// 記号の集合をビルド時に閉じるのと同じことを鍵でやっている。
 	//
-	// **書き込みの道（上で名指しして止めている側）はまだ無い**ので、ここで測れるのは
-	// 場所の側だけである。マージの文を両方から落として流す——落としても和集合は残る
-	// （`compile` が Pass 3 の前に確定させている）ので、見えるのは「場所は和集合で取られ、
-	// まだ何も入っていない鍵は `__` を返す」ことになる。書き込みの道が通れば、この節は
-	// そのまま `agree` へ戻せる。
-	const isMergeDefine = (n) => !!(n && n.type === "operation" && n.name === "define" && mergeBaseIdentifier(n.right));
-	const agreePlace = (note, source) => {
-		total++;
-		let a, b;
-		try {
-			const { nodes } = compile(source, { charset: "ascii" });
-			const renv = newRuntimeEnv(null, "ascii");
-			let r = UNIT;
-			for (const n of nodes.filter((x) => !isMergeDefine(x))) r = evaluate(n, renv);
-			a = isUnit(r) ? "__" : String(observe(r) ?? "__");
-		} catch (e) {
-			a = "解釈で例外：" + e.message;
-		}
-		try {
-			const { nodes, env } = compile(source, { charset: "ascii" });
-			const g = generateAsm(nodes.filter((x) => !isMergeDefine(x)), env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-			b = g.diagnostics.length ? "出せない：" + g.diagnostics[0].message : String(asInt(runAsm(g.text)[0]) ?? "__");
-		} catch (e) {
-			b = "機械で例外：" + e.message;
-		}
-		if (a === b) {
-			passed++;
-			console.log(`ok   ${note.padEnd(34)} ${a}`);
-		} else {
-			console.log(`FAIL ${note.padEnd(34)} 解釈=${a} / 機械=${b}`);
-		}
-	};
-	const UN = (k) => MG + `q : p~ [\n\t${k} : 1\n]~\n`;
-	agreePlace("和集合：後ろに増えても foo は無事", UN("zzz") + "p ' foo");
-	agreePlace("和集合：後ろに増えても bar も無事", UN("zzz") + "p ' bar");
-	// **まだ何も入っていない鍵は `__`。** 場所は在るが中身が無い——ゼロで埋めると
-	// `0` は真なので、無いものが在ることになってしまう（完全性公理）。
-	agreePlace("和集合：まだ入っていない鍵は __", UN("zzz") + "p ' zzz");
-	// **ここがこの仕組みの核心。** `aa` は名前順で先頭に入るので既存の2つが後ろへ動く。
-	// 動いても読む側は和集合の並びを見ているので当たる——**両者が同じ表を引くこと**が、
-	// 途中で伸ばせないことの答えである。
-	agreePlace("和集合：前に増えても foo は無事", UN("aa") + "p ' foo");
-	agreePlace("和集合：前に増えても bar も無事", UN("aa") + "p ' bar");
-	agreePlace("和集合：前に増えた鍵も __", UN("aa") + "p ' aa");
-	// 連番は宣言順のままである（和集合で増えた鍵は自分の鍵の後ろに続く）。
-	agreePlace("和集合：連番は宣言順 0", UN("aa") + "p ' 0");
-	agreePlace("和集合：連番は宣言順 1", UN("aa") + "p ' 1");
-	// **仮引数へ届ける並びも和集合である。** Pass 3 は呼び出しサイトの実引数から並びを
-	// 起こして束縛へ焼く（`binding.shape`）。和集合を Pass 3 より後で足すとそこだけ古い
-	// 並びが残り、`aa` のように前に入る鍵では `this ' foo` が**隣のスロット**を読む。
-	agreePlace("和集合：渡して引く", UN("aa") + "f : s ? s ' foo\nf p");
-	agreePlace("和集合：ブラケットで分けて引く", UN("aa") + "f : [foo ~o] ? foo\nf p");
-
-	// **幅が混ざっても同じ。** `__` の表し方は幅で違う（1本なら niche、2本なら len = 0）。
-	const MS = "p :\n\ts : `abc`\n\tk : 5\n";
-	agreePlace("和集合：文字列スロットの隣に増える", MS + "q : p~ [\n\tz : 1\n]~\np ' k");
-	agreePlace("和集合：増えた鍵が文字列（len = 0）", MS + "q : p~ [\n\tt : `xy`\n]~\n||p ' t||");
-	agreePlace("和集合：増えたのが文字列でも隣は無事", MS + "q : p~ [\n\tt : `xy`\n]~\np ' k");
-	// **8 byte 未満のスロットには 64 ビットの niche が入らない。** 像が置けないので、
-	// 黙ってゼロで埋めず（`0` は真である）名指しして止まる（原理4）。
-	{
-		total++;
-		const note = "和集合：像に置けない幅は名指しで止まる";
-		const { nodes, env } = compile("p :\n\ta : `x`\n\tb : `y`\nq : p~ [\n\tc : `z`\n]~\np ' a", { charset: "ascii" });
-		const g = generateAsm(nodes.filter((x) => !isMergeDefine(x)), env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-		const hit = g.diagnostics.map((d) => d.message).find((m) => /和集合で取った器を、フレームへ組む道はまだありません/.test(m));
-		if (hit) {
-			passed++;
-			console.log(`ok   ${note.padEnd(34)} 名指し`);
-		} else {
-			console.log(`FAIL ${note.padEnd(34)} ${g.diagnostics.map((d) => d.message).join(" / ") || "（診断なし）"}`);
-		}
-	}
-
-	// **和集合ぶんの場所を取るので layer 1 以上。** 鍵が増えないマージは器の大きさを
-	// 変えないので、門が見るのは「マージが書いてあるか」ではなく「場所が伸びたか」である。
-	{
-		total++;
-		const note = "和集合：layer 0 は確保の門で止まる";
-		const { nodes, env } = compile(UN("zzz") + "p ' foo", { charset: "ascii" });
-		const g = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 0 });
-		const hit = g.diagnostics.map((d) => d.message).find((m) => /layer: 0 では場所を取れません（鍵が増えるマージ/.test(m));
-		if (hit) {
-			passed++;
-			console.log(`ok   ${note.padEnd(34)} 層の門番`);
-		} else {
-			console.log(`FAIL ${note.padEnd(34)} ${g.diagnostics.map((d) => d.message).join(" / ") || "（診断なし）"}`);
-		}
-	}
-}
-
-// ---- 構造体は名前ごとに**一つの場所**を持つ ----
-//
-// スカラーと器は `$` を取ると `.data` に1箇所置かれるのに、構造体だけその道が無かった。
-// `internBinding` が「1つの値＋1つの幅」しか持てなかったためで、幅の違うスロットが並ぶ
-// 構造体は表せない——`$p` は「アドレスを取れるのはフレームに在るものだけです」で断られ、
-// 値として使うたびにフレームへ組み直されていた。
-{
-	const ST = "p :\n\tfoo : 10\n\tbar : 20\n\tbaz : 30\n";
-	agree("一つの場所：名前で引く", ST + "p ' foo");
-	agree("一つの場所：連番は宣言順", ST + "p ' 2");
-	agree("一つの場所：渡して引く", ST + "f : s ? s ' bar\nf p");
-	// **`$` を取っても読める。** ここで畳みを止めている（番地を取られた束縛は書き換え
-	// られうるので、読みは場所を辿らなければならない）ので、この行は `.data` に置いた
-	// 像を実際に読む——`layoutOfStruct` が言う offset と1バイトでもずれれば別の値が出る。
-	agree("一つの場所：$ を取ってから読む", ST + "q : $p\np ' foo");
-	agree("一つの場所：$ を取っても連番", ST + "q : $p\np ' 2");
-	agree("一つの場所：$ を取っても渡せる", ST + "q : $p\nf : s ? s ' bar\nf p");
-
-	// **幅の違うスロットが並ぶ。** ここが `internBinding` に置けなかった形そのものである。
-	// 文字列のスロットは運ぶ姿（`{ptr, len}` の 16 byte）で置く——中身が読めることと、
-	// そこに何バイト置かれるかは別の問いである。
-	const MIX = "p :\n\ta : 1\n\ts : `abc`\n\tb : 2\n";
-	agree("幅違い：前のスロット", MIX + "p ' a");
-	agree("幅違い：後ろのスロット", MIX + "p ' b");
-	agree("幅違い：文字列スロットの中身", MIX + "(p ' s) ' 1");
-	agree("幅違い：文字列スロットの長さ", MIX + "||p ' s||");
-	agree("幅違い：渡して読む", MIX + "f : x ? (x ' a) + (x ' b)\nf p");
-	// 詰め物のある並び（1 byte のスロットの後ろに 8 byte のスロットが来る形）。
-	// 隙間を埋め損なうと後ろのスロットが手前へずれて、静かに別の値になる。
-	const PAD = "p :\n\ta : `x`\n\tb : `y`\n\tn : 5\n";
-	agree("詰め物：先頭", PAD + "p ' a");
-	agree("詰め物：2番目", PAD + "p ' b");
-	agree("詰め物：境界の向こう", PAD + "p ' n");
-	agree("詰め物：渡して読む", PAD + "f : s ? (s ' b) + (s ' n)\nf p");
-
-	// **同じ名前は同じ実体である。**
-	//
-	// これは値では捕まらない——組み直しても読み出す値は同じなので、`(f p) + (f p) + (f p)`
-	// は前から 30 を返していた。違うのは**実体がいくつできるか**で、実測では `sub sp` が
-	// 3回出て `p` が3つできていた。`$p` の指す先も、マージ（`a~ b~`）が書き込む先も
-	// 「どの実体か」で変わるので、ここは命令の側を見るしかない。
-	buildsOnce("一つの場所：3回渡しても組み直さない", ST + "f : s ? s ' foo\n(f p) + (f p) + (f p)");
-	agree("一つの場所：3回渡した値", ST + "f : s ? s ' foo\n(f p) + (f p) + (f p)");
-	buildsOnce("幅違い：定義でも組まない", MIX + "p ' b");
-	// **左が名前のマージは在る器への上書き。** `a~ b~` は「a の器に b の器の中を入れる」
-	// であって、両方から新しい器を作る操作ではない——結果は a そのものである。だから
-	// **上書きになるか複写になるかは左が何かで決まる**（左が名前なら在る器、左がその場の
-	// リテラルならその器はいま作られたものなので入れることがそのまま複写になる）。
-	//
-	// **確保しないので layer 0 で通る**（layer_relations.md §3.3.1）。`#` 出力（`$名前`）が
-	// layer 0 で通るのと同じ理由で、MMIO のレジスタ束を書き換えるのがこの形になる。
-	const IP = "p :\n\tfoo : 10\n\tbar : 20\nr :\n\tbar : 99\n";
-	agree("上書き：結果を引く", IP + "q : p~ r~\nq ' bar");
-	agree("上書き：元も変わる", IP + "q : p~ r~\np ' bar");
-	agree("上書き：書かれない鍵は無傷", IP + "q : p~ r~\np ' foo");
-	agree("上書き：右にリテラル", "p :\n\tfoo : 10\n\tbar : 20\nq : p~ [\n\tbar : 99\n]~\np ' bar");
-	// 書いた行が2つ以上だと節点が `construct` ではなく `concat` になる。左の端を辿る場所を
-	// 2箇所で書いていたため片方が取り逃し、`p ' foo` が古い定数へ畳まれて**診断ゼロで 30**
-	// （元の値 10+20）を返していた。同じ事実を2箇所で決めない。
-	agree("上書き：2つ同時に書き換える", "p :\n\tfoo : 10\n\tbar : 20\nq : p~ [\n\tfoo : 1\n\tbar : 2\n]~\n(p ' foo) + (p ' bar)");
-	// 対照：左がリテラルなら複写なので、元は無傷のまま。
-	agree("複写：左がリテラルなら元は無傷", "p :\n\tfoo : 10\n\tbar : 20\nq : [\n\tbar : 99\n]~ p~\np ' bar");
-	// **同じ構文 `[x ~r]` が、型によって違う答えを返す。これは食い違いではなく規則である。**
-	//
-	// 器の残りは**再帰項**である——`List(A) = __ | A × List(A)` の構成子の中に現れる
-	// `List(A)` そのもので、型が元へ戻る。だから減るのは最適化ではなく定義で、減らなければ
-	// 帰納型ではなくなり fold が書けない（`dup : [c ~rest] ? c c (dup rest)` が止まらない）。
-	//
-	// 構造体の残りは再帰項ではない。名前付きスロットは有限の積（名前の集合はコンパイル時に
-	// 決まっている）で、**「次」が無い**——だから反復が要らず、減る必要も無い。しかも減らせば
-	// `{foo,bar,baz}` が `{bar,baz}` という**別の型**になり、元の型に戻らないので再帰項に
-	// なれない。名前を挙げても器から何も減らないのはこのためである。
-	//
-	// 表現の話はその後から付いてくる（原理8）。型が同じものは表現でも只——器の尾は ptr を
-	// 進めるだけ。型が違うものは只にならない——構造体の残りは名前ソート順で連続しない。
-	//
-	// **この2つを「揃える」と壊れる。** 揃っていないのではなく、同じ規則（「残りは、あれば
-	// 再帰項である」）が2つの型で違う顔をしているだけである。
-	const RS = "p :\n\tfoo : 10\n\tbar : 20\n\tbaz : 30\n";
-	agree("残り：器は減る", "f : [x ~r] ? ||r||\nf [7 8 9]");
-	agree("残り：器の元は3つ", "||[7 8 9]||");
-	agree("残り：器の先頭は次の要素", "f : [x ~r] ? r ' 0\nf [7 8 9]");
-	agree("残り：器は2つ取れば2つ減る", "f : [x y ~r] ? ||r||\nf [7 8 9]");
-	agree("残り：構造体は減らない", RS + "f : [foo ~r] ? ||r||\nf p");
-	agree("残り：構造体は2つ取っても減らない", RS + "f : [foo bar ~r] ? ||r||\nf p");
-	agree("残り：構造体は挙げた名前も持つ", RS + "f : [foo ~r] ? r ' foo\nf p");
-	// **鍵が増えるマージへ、実際に書く。** 場所は和集合で取ってあるので、伸びた先へ入る。
-	// **前に増える鍵が本番である**——名前ソート順なので `aa` を足すと `bar@0 foo@8` が
-	// `aa@0 bar@8 foo@16` になって既存が全部ずれる。最初から和集合で並べてあれば動かない
-	// （少しずつ伸ばす方式が取れないのは、Visual Basic の `ReDim Preserve` が最後の次元
-	// しか伸ばせなかったのと同じ理由である）。
-	const UW = "p :\n\tfoo : 10\n\tbar : 20\n";
-	agree("和集合へ書く：後ろに増える鍵", UW + "q : p~ [\n\tzzz : 1\n]~\np ' zzz");
-	agree("和集合へ書く：後ろに増えても既存は無事", UW + "q : p~ [\n\tzzz : 1\n]~\np ' foo");
-	agree("和集合へ書く：前に増える鍵", UW + "q : p~ [\n\taa : 7\n]~\np ' aa");
-	agree("和集合へ書く：前に増えても foo は無事", UW + "q : p~ [\n\taa : 7\n]~\np ' foo");
-	agree("和集合へ書く：前に増えても bar も無事", UW + "q : p~ [\n\taa : 7\n]~\np ' bar");
-	agree("和集合へ書く：結果からも引ける", UW + "q : p~ [\n\tzzz : 1\n]~\nq ' zzz");
-	agree("和集合へ書く：増やしつつ既存も書き換える", UW + "q : p~ [\n\tzzz : 1\n\tfoo : 99\n]~\n(p ' foo) + (p ' zzz)");
+	// 理由は性能でも安全性でもない（測ったら鍵が増えるマージも型が変わらない上書きも
+	// 10命令・確保ゼロで**同数**、閉じる CWE はゼロだった）。**鍵が増えると型に対する関数が
+	// 書けなくなる**——同じ形の2つの値に同じ取り出し関数を当てたとき、片方だけ別の並びを
+	// 持てば、それは型の関数ではなく束縛の関数である。詳しくは layer_relations.md §3.3.1。
+	const DC = "p :\n\tfoo : 10\n\tbar : 20\n\tzzz : 0\n";
+	// 枠を宣言しておけば、入れるのはただの上書き。確保も要らない。
+	agree("枠を宣言：入れた値を読む", DC + "q : p~ [\n\tzzz : 1\n]~\np ' zzz");
+	agree("枠を宣言：既存の鍵は無事", DC + "q : p~ [\n\tzzz : 1\n]~\np ' foo");
+	agree("枠を宣言：まだ入れていなければ 0", DC + "p ' zzz");
+	agree("枠を宣言：結果からも引ける", DC + "q : p~ [\n\tzzz : 1\n]~\nq ' zzz");
+	// **これが弾く理由そのもの。** 同じ形の2つの値に、同じ取り出し関数が当たること。
+	const PQ = "p :\n\tfoo : 10\n\tbar : 20\nq :\n\tfoo : 30\n\tbar : 40\nf : s ? s ' foo\n";
+	agree("型に対する関数：マージ無し", PQ + "(f p) + (f q)");
+	agree("型に対する関数：型が変わらない上書きが在っても", PQ + "z : p~ [\n\tbar : 99\n]~\n(f p) + (f q)");
+	agree("型に対する関数：新しい器を作る形が在っても", PQ + "z : [\n\tbar : 99\n\tp~\n]\n(f p) + (f q)");
 	// **在る器へのマージは畳んではいけない。書き込みだからである。**
 	//
 	// `q : p~ [ … ]~` の `q` は「p の器へ入れた結果」＝ p そのものである（解釈器も同じ

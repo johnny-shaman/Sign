@@ -656,6 +656,56 @@ function mergedStructSlots(node, env) {
   const l = namedSlotTypes(node.left, env);
   const r = namedSlotTypes(node.right, env);
   if (!l || !r) return null;
+  // **名前はプログラムの語彙であり、プログラムは自分の語彙を実行時に増やせない。**
+  // それが静的型付けの中身である——`option.ms` の `link: static` が記号の集合をビルド時に
+  // 閉じるのと同じことを、構造体の鍵でやっている。
+  //
+  // 鍵が増えると左の器の**型が変わる**。型が変わると**その型に対する関数が書けなくなる**：
+  // 同じ形の2つの値 `p` `q` に同じ取り出し関数 `f : s ? s ' foo` を当てたとき、`p` だけが
+  // 別の並びを持つので、`f` は型の関数ではなく「`p` という束縛」の関数になる。実測では、
+  // 名前順で後ろに付くだけの鍵（`zzz`——`foo` のオフセットは1バイトも動かない）でさえ
+  // `f` が出せなくなった。壊れているのはレイアウトではなく「型が値の形を決める」関係そのもの。
+  //
+  // **枠を先に宣言すれば済む。** `zzz : 0` と書けば型は初期値が決めるし、そこへ入れるのは
+  // ただの上書きなので確保も要らない（layer 0 でも通る）。エクセルのグリッドが最初から
+  // 定まっているのと同じで、**動的なのは中身であって空間ではない**。
+  //
+  // 新しい器が欲しいならブロック形（`[ zzz : 1 / p~ ]`）や左にリテラルを置く形——そちらは
+  // **別の型の別の値**なので、鍵がいくら増えても静的型付けと衝突しない。
+  //
+  // **だから弾くのは「左が名前」のときだけである。** 受け手が既にある器のときだけ型が
+  // 変わる。ここを見ずに弾いていたので、`[ q~ / r~ ]` のように新しい器を作る形まで
+  // 巻き込んでいた——受け手が違えば規則が違う、というこのファイルの他の箇所と同じ話。
+  // **左が何かで、上書きになるか複写になるかが決まる。** 左が名前なら既に在る器なので
+  // マージは上書き（結果は左そのもの）、左がその場のリテラルならその器はいま作られた
+  // ものなので、入れることがそのまま複写になる。
+  const lx = isSpreadNode(node.left) ? node.left.operand : node.left;
+  const mergeBase = localStructLiteral(lx) ? "literal" : node.left.mergeBase || (isIdentifierNode(lx) ? "name" : "unknown");
+  // **括弧を付けずに書けるのは上書きだけである。**
+  //
+  // スペースは余積で「同じ次元で伸ばす」操作であり、`Struct` に対してそれが成立するのは
+  // **スロットが増えないとき**——つまり右の鍵が左に全部在るときだけである。鍵が増えれば
+  // 次元が上がる（積になる）ので、それは括弧で新しい器を書くべき形になる。
+  //
+  // 鍵が増える形を左が名前のまま許すと、左の器の**型が変わる**。名前はプログラムの語彙で
+  // あり、プログラムは自分の語彙を実行時に増やせない——`option.ms` の `link: static` が
+  // 記号の集合をビルド時に閉じるのと同じことを、鍵でやっている。
+  //
+  // 実測でも、型が変わると**その型に対する関数が書けなくなる**：同じ形の2つの値 `p` `q` に
+  // 同じ取り出し関数 `f : s ? s ' foo` を当てたとき、`p` だけ別の並びを持つので `f` は型の
+  // 関数ではなく「`p` という束縛」の関数になる。名前順で後ろに付くだけの鍵（`zzz`）でさえ
+  // 壊れた。壊れているのはレイアウトではなく「型が値の形を決める」関係そのものである。
+  //
+  // 入れたい鍵は左の器に初期値つきで宣言する（型は初期値が決まる）。エクセルのグリッドが
+  // 最初から定まっているのと同じで、**動的なのは中身であって空間ではない**。
+  const grew = mergeBase === "name" ? [...r.keys()].filter((k) => !l.has(k)) : [];
+  if (grew.length > 0) {
+    throw new TypeError(
+      `マージで鍵は増やせません（${grew.map((k) => bareIdent({ value: k })).join(", ")}）。` +
+        `括弧を付けずに書ける余積は「同じ次元で伸ばす」＝スロットが増えない上書きだけです。` +
+        `入れたい鍵は左の器に初期値つきで宣言してください（型は初期値が決めます）`
+    );
+  }
   for (const [k, rNode] of r) {
     if (!l.has(k)) continue;
     const lt = inferAtomType(l.get(k), env);
@@ -673,11 +723,6 @@ function mergedStructSlots(node, env) {
   const lo = slotOriginsOfSource(node.left, env);
   const ro = slotOriginsOfSource(node.right, env);
   const origins = lo && ro ? new Map([...lo, ...ro]) : null;
-  // **左が何かで、上書きになるか複写になるかが決まる。** 左が名前なら既に在る器なので
-  // マージは上書き（結果は左そのもの）、左がその場のリテラルならその器はいま作られた
-  // ものなので、入れることがそのまま複写になる。Pass 4 が出せるのは後者だけである。
-  const lx = isSpreadNode(node.left) ? node.left.operand : node.left;
-  const mergeBase = localStructLiteral(lx) ? "literal" : node.left.mergeBase || (isIdentifierNode(lx) ? "name" : "unknown");
   return { slots: new Map([...l, ...r]), origins, mergeBase };
 }
 
