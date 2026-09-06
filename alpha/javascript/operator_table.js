@@ -17,7 +17,7 @@ export const OPERATOR_BY_PRECEDENCE = [
     '?': { position: 'infix', name: 'lambda' },
   },
   { // 4
-    '#': { position: 'infix', name: 'output' },
+    '#': { position: 'infix', name: 'output', assoc: 'right' },
   },
   { // 5
     ';': { position: 'infix', name: 'xor' },
@@ -39,7 +39,7 @@ export const OPERATOR_BY_PRECEDENCE = [
     '!==': { position: 'infix', name: 'xnot_equal' },
   },
   { // 9
-    ',': { position: 'infix', name: 'product' },
+    ',': { position: 'infix', name: 'product', assoc: 'right' },
   },
   { // 10: 前置 `~`（持ち上げ）。積（`,`）の隣であり、余積（空白）より緩い。
     // system_semantics.md の待機の表が「前置 `~`（持ち上げ）は**余積を一回**待機状態に
@@ -85,14 +85,14 @@ export const OPERATOR_BY_PRECEDENCE = [
     '%': { position: 'infix', name: 'mod' },
   },
   { // 16
-    '^': { position: 'infix', name: 'pow' },
+    '^': { position: 'infix', name: 'pow', assoc: 'right' },
   },
   { // 17
     // 囲みはここには居ない。自己完結しているので優先順位を持たず、ブロックと同じ段にある。
   },
   { // 18
     "'": { position: 'infix', name: 'get_prop' },
-    '@': { position: 'infix', name: 'get_at' },
+    '@': { position: 'infix', name: 'get_at', assoc: 'right' },
   },
   { // 19
     '<<': { position: 'infix', name: 'bit_shift_left' },
