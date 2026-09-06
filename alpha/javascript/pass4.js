@@ -6334,8 +6334,17 @@ function slotsToRegisters(lines) {
 	// いない世界で、`sp` が有効な場所を指している保証が無い（`stp … [sp, #-32]!` は形が
 	// 違うだけの確保である）。フレームを取らない関数は、そこでも動く。
 	const calls = lines.some((l) => /^(bl|blr)\b/.test(insOf(l)));
+	// **`w14` は `x14` である。** 32 ビット名は同じレジスタの別名なので、`x` の綴りだけを
+	// 数えると `ldrb w14, …` を出している関数で x14 が「空き」に見える。実際そうなっていて、
+	// 文字列比較（`w14`/`w15` で要素を読む）の右辺の ptr が x14 へ割り当てられ、**1文字目を
+	// 読んだ瞬間に踏み潰されていた**。
+	//
+	// 壊れ方が嫌らしい。両辺が同じ綴りのときだけ——つまり `=` が真になるはずのときだけ
+	// ——生きるスロットが4つ要って x14 まで届くので、`` `ab` = `ab` `` が偽になる。偽の側は
+	// 正しいままなので、**比較が常に「違う」と答える**という形で静かに出ていた。
+	const asX = (r) => "x" + r.slice(1);
 	const taken = new Set();
-	for (const l of lines) for (const m of insOf(l).matchAll(/\b(x\d+)\b/g)) taken.add(m[1]);
+	for (const l of lines) for (const m of insOf(l).matchAll(/\b([wx]\d+)\b/g)) taken.add(asX(m[1]));
 	const free = calls ? [] : SCRATCH_REGS.filter((r) => !taken.has(r));
 
 	// 深さは順位で詰める（飛び飛びでも入れ子は保たれるので、順位は色として正しい）。
@@ -6352,7 +6361,9 @@ function slotsToRegisters(lines) {
 	for (const l of lines) {
 		const t = insOf(l);
 		if (ST.test(t) || LD.test(t)) continue;
-		if (regs.some((r) => new RegExp("\\b" + r + "\\b").test(t))) return null;
+		// **ここも 32 ビット名を数える。** x14 を配ったのに本体が w14 を書いていたら、
+		// 同じレジスタを2人が使うことになる。
+		if (regs.some((r) => new RegExp("\\\\b[wx]" + r.slice(1) + "\\\\b").test(t))) return null;
 	}
 	const out = lines.map((l) => {
 		const t = insOf(l);
