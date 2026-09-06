@@ -1260,6 +1260,27 @@ function genExpr(node, env, em, scope, tail = false) {
 	//
 	// `csel` を2段重ねる。1段目で「左辺が単位元か」を見て返す候補を選び、2段目で
 	// 「比較が真か」を見て候補と `__` を選ぶ。分岐は出さない。
+	// **器の比較は `==` / `!==` である。**（operator_table.md 段8「構造内比較演算」、
+	// reference.md「`==` は構造比較専用の演算子であり、List・Struct などの構造を対象とする」）
+	//
+	// 段12 の `=` / `!=` はスカラーの比較演算で、`{0,1}` の左辺優先ルールを持つ。段8 の
+	// `==` / `!==` はそのルールの適用外で（comparison.md §2.1 の最後）、常に「真なら左辺、
+	// 偽なら `__`」である。**Pass 4 にはその枝が1つも無かった**——器を実際に比べていたのは
+	// スカラー用の `=` の方で、役割が入れ替わったまま両方が動いていた。
+	if (n.type === "operation" && (n.name === "equal" || n.name === "xnot_equal") && n.position === "infix") {
+		const lS = slotsOfNode(n.left, em.conf, env);
+		const rS = slotsOfNode(n.right, em.conf, env);
+		// 両方が1本で運ばれるなら、構造は無いので中身をそのまま比べる（`5 == 5`）。
+		if (lS === 1 && rS === 1) {
+			const mL = reduceToMachineType(n.left && n.left.atomType, em.conf.target);
+			const mR = reduceToMachineType(n.right && n.right.atomType, em.conf.target);
+			if (!(mL && mL.class === "gpr" && mR && mR.class === "gpr")) {
+				return em.fail(n, `GPR 幅の値の構造比較だけを出せます（${n.left && n.left.atomType} と ${n.right && n.right.atomType}）`);
+			}
+			return genScalarStructCompare(n, env, em, scope);
+		}
+		return genStringCompare(n, env, em, scope);
+	}
 	if (n.type === "operation" && CMP_COND[n.name] && n.position === "infix") {
 		const machine = reduceToMachineType(n.atomType, em.conf.target);
 		// 比較の結果型は `L | R | __` なので、それ自体は還元できない。両辺が GPR 幅の
@@ -4663,8 +4684,46 @@ function genBoxOperand(x, env, em, scope) {
 	return po === null ? null : 2;
 }
 
+/**
+ * **スカラー同士の構造比較（`==` / `!==`）。**
+ *
+ * 段12 の `=` は「左辺が算術単位元（0 か 1）なら右辺を返す」という選択規則を持つが、
+ * 段8 の構造比較はその適用外である（comparison.md §2.1——単位元そのものが `__` に
+ * なりうるため）。常に「真なら左辺、偽なら `__`」の単純規則で出す。
+ */
+function genScalarStructCompare(node, env, em, scope) {
+	const why = "GPR 幅の値の構造比較だけを出せます";
+	if (!genScalar(node.left, env, em, scope, why)) return false;
+	const lo = (em.slot - 1) * 8;
+	if (!genScalar(node.right, env, em, scope, why)) return false;
+	const ro = (em.slot - 1) * 8;
+	em.load(SCRATCH[0], lo);
+	em.load(SCRATCH[1], ro);
+	em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, "構造比較（左辺優先ルールは無い）");
+	em.emit("movz x12, #0x8000, lsl #48", "偽は __");
+	em.emit(`csel ${SCRATCH[0]}, ${SCRATCH[0]}, x12, ${node.name === "equal" ? "eq" : "ne"}`, "真なら左辺");
+	em.pop(2);
+	const o = em.push();
+	if (o === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+	em.store(SCRATCH[0], o);
+	return 1;
+}
+
 function genStringCompare(node, env, em, scope) {
-	const w = charSizeOf(em.conf.charset);
+	// **比べる刻みは、器の要素が決める。**
+	//
+	// ここは `charSizeOf`（文字1つぶん）で決め打ちしていた。文字列しか通っていなかった
+	// 間は合っていたが、`==` を通して `List(Int)` が来た瞬間に嘘になる——8 byte 離れて
+	// 並ぶ要素を 1 byte 刻みで読むので、`[1 2] == [1 3]` が先頭要素の下位2バイトを見て
+	// 「等しい」と答える（診断ゼロ）。今日ずっと直してきた「要素の幅を別の場所が決めて
+	// いる」の、比較における形である。
+	const cmpElem = elementTypeOfNode(node.left, env) || elementTypeOfNode(node.right, env) || "Char";
+	const cmpCell = elementCellSize(cmpElem, em.conf);
+	if (!cmpCell || !cmpCell.size) return em.fail(node, `比べる器の要素の幅が決まりません（${cmpElem}）`);
+	// 要素そのものが参照で運ばれる器（`List(String)`）は、中身をもう一段辿らないと比べ
+	// られない。黙って ptr どうしを比べるより断る（原理4）。
+	if (cmpCell.size === 16) return em.fail(node, "要素が参照で運ばれる器どうしの比較はまだ出せません（もう一段辿る必要があります）");
+	const w = cmpCell.size;
 	const lb = genBoxOperand(node.left, env, em, scope);
 	if (lb === false) return false;
 	if (lb === null) return em.fail(node, `比べる左辺を長さ1の器へ広げられません（${node.left && node.left.atomType}）`);
@@ -4673,7 +4732,9 @@ function genStringCompare(node, env, em, scope) {
 	if (rb === false) return false;
 	if (rb === null) return em.fail(node, `比べる右辺を長さ1の器へ広げられません（${node.right && node.right.atomType}）`);
 	const ro = (em.slot - 2) * 8;
-	const wantEqual = node.name === "assign_equal";
+	// `=`（段12）と `==`（段8）はどちらも「等しい」を問う。違うのは左辺優先ルールの有無で、
+	// 器の中身を見る手続きそのものは同じである。
+	const wantEqual = node.name === "assign_equal" || node.name === "equal";
 	const same = em.newLabel("streq");
 	const diff = em.newLabel("strne");
 	const end = em.newLabel("strend");
