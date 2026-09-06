@@ -614,6 +614,62 @@ function emitLiftToContainer(em, node, valueOff, why) {
 }
 
 /**
+ * **代金を払わない持ち上げ。**
+ *
+ * 要素が参照で運ばれる器（`List(String)`、1要素 16 byte）へ、元の器の中に居る値を
+ * 積む。`A ' i` の指す1つは既にどこかに在るので、`{A.ptr + i×幅, 1}` がそのまま
+ * 長さ1の器である——確保は1バイトも起きない。
+ *
+ * **`emitLiftToContainer` はここでは使えない。** あれは `sub sp` で場所を取るので、
+ * 再帰の中で使うと**返った後の枠を指した器**を返すことになる。字句解析器の
+ * `(s ' 0) , (tokens (s ' 1~))~` がまさにその形で、1文字のトークンだけが壊れる。
+ * 元の器は呼ぶ側が持っているので、そこを指すぶんには寿命の問題が無い。
+ *
+ * 原理8 は「同型は型では無償、表現では有償」と言うが、**元の器の中に居る値に限って
+ * は表現でも無償である**——`String ≅ List(Char)` の Char はもともと器の中の1要素だから。
+ *
+ * 積んだ結果は 2 スロット（ptr, len）。持ち上げられない形なら null を返す。
+ */
+function emitSliceLift(em, node, env, scope) {
+	const u = unwrap(node);
+	if (!u || u.type !== "operation" || u.name !== "get_prop") return null;
+	const base = unwrap(u.left);
+	if (!base) return null;
+	// 参照で運ばれる器の中の値であること。規則（`{start, step, end}`）は要素がどこにも
+	// 置かれていない（`start + n × step` の算術で出る）ので、指せる場所が無い。
+	if (slotsOfNode(base, em.conf, env) !== 2) return null;
+	if (isRuleNode(base, em.conf, env)) return null;
+	const ec = elementCellSize(elementTypeOfNode(base, env), em.conf);
+	if (!ec || !ec.size) return null;
+	// 要素そのものが参照で運ばれるなら、それは既に器である（持ち上げは要らない）。
+	if (ec.size === 16) return null;
+	const shift = ec.size === 8 ? 3 : ec.size === 4 ? 2 : ec.size === 2 ? 1 : 0;
+	const bw = genExpr(base, env, em, scope);
+	if (bw === false) return false;
+	if (bw !== 2) { em.pop(bw === TAIL ? 0 : bw); return null; }
+	const bo = (em.slot - 2) * 8;
+	const iw = genScalar(u.right, env, em, scope, "添字はレジスタ1本の値です");
+	if (iw === false) return false;
+	const io = (em.slot - 1) * 8;
+	em.load(SCRATCH[0], bo, "元の器の ptr");
+	em.load(SCRATCH[1], io, "添字");
+	em.load("x11", bo + 8, "元の器の len");
+	if (shift) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}, lsl #${shift}`, "ptr + i×幅（確保は起きない）");
+	else em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "ptr + i×幅（確保は起きない）");
+	em.emit(`cmp ${SCRATCH[1]}, x11`, "範囲内か");
+	em.emit("mov x12, #1");
+	em.emit("mov x13, #0");
+	em.emit(`csel ${SCRATCH[1]}, x12, x13, lo`, "長さは 1（範囲外なら 0 ＝ __）");
+	em.pop(3);
+	const po2 = em.push();
+	const lo2 = po2 === null ? null : em.push();
+	if (lo2 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+	em.store(SCRATCH[0], po2, "長さ1の器の ptr（元の器の中を指す）");
+	em.store(SCRATCH[1], lo2, "len");
+	return po2;
+}
+
+/**
  * `[x1 … xn ~r]` を出す。**先頭を n 個読んで、残りは同じ領域を指したまま頭をずらす。**
  *
  * 分解は受け取った器を指し直すだけであり、確保は起きない
@@ -2774,20 +2830,57 @@ function genExpr(node, env, em, scope, tail = false) {
 		const tailPart = contIdx >= 0 ? stripExpand(parts[contIdx]) : parts.length > 1 ? stripExpand(parts[parts.length - 1]) : null;
 		const appendTo = tailPart && sretHere ? appendableCallee(tailPart, em) : null;
 		const oneScalar = (p) => slotsOfNode(p, em.conf, env) === 1;
+		// **持ち上げの代金は、ここでも払えない。** 要素が参照で運ばれる器（`List(String)`、
+		// 1要素 16 byte）へスカラーを1つ置くと、`{ptr, len}` の ptr 半分だけが書かれて
+		// len は前の値のまま残る——**診断ゼロで生番地や 0 が返る**。下の走査の枝は同じ形を
+		// ちゃんと断っているのに、追記の枝だけが素通りしていた（同じ判定が2箇所にあって
+		// 片方だけ狭い、いつもの壊れ方である）。断れば下の枝へ落ち、そこが理由を言う。
+		//
+		// `emitLiftToContainer` は在るが、あれは `sub sp` で場所を取る——**再帰の中で
+		// 使うと、返った後の枠を指した器を返すことになる**。だから追記の道では使えない。
+		// 代金を払わずに済むのはスライス（`{ptr + i×幅, 1}`）の道だけである（原理8）。
+		// 要素が参照で運ばれる器（1要素 16 byte）へスカラーを置くと、`{ptr, len}` の ptr 半分
+		// だけが書かれて len は前の値のまま残る——**診断ゼロで生番地や 0 が返る**。走査の枝は
+		// 同じ形をちゃんと断っているのに、追記の枝だけが素通りしていた。
+		//
+		// 断るのではなく**払わずに済む道**を通す：積むものが `A ' i` なら、その1つは元の器の
+		// 中に在るので `{A.ptr + i×幅, 1}` がそのまま長さ1の器である（`emitSliceLift`）。
+		const per = em1 && em1.size === 16 ? 2 : 1;
+		const pushElem = (p) => {
+			if (per === 1) return genScalar(p, env, em, scope, "追記に並べる要素はレジスタ1本の値です");
+			const r = emitSliceLift(em, p, env, scope);
+			if (r === false) return false;
+			if (r === null) {
+				// 元の器の中に居ない値（計算で作った1文字など）は、置く場所そのものが無い。
+				// `sub sp` で取ると再帰から返った後の枠を指すので、そこは断るのが正しい。
+				return em.fail(
+					n,
+					`器の構築はまだ出せません（${n.atomType}——要素が参照で運ばれる器へ積めるスカラーは ` +
+						"元の器の中に居るもの（`A ' i`）だけです。それ以外は `{ptr, len}` を置く場所が要ります）"
+				);
+			}
+			return 2;
+		};
 		if (em1 && em1.size && appendTo && lead.every(oneScalar) && trail.every(oneScalar) && !trail.some((p) => appendableCallee(stripExpand(p), em))) {
 			const base = em.slot;
 			for (const p of lead) {
-				const pw = genScalar(p, env, em, scope, "追記の前に並べる要素はレジスタ1本の値です");
-				if (pw === false) return false;
+				if (pushElem(p) === false) return false;
 			}
-			const k = em.slot - base;
+			const k = (em.slot - base) / per;
 			const w = em1.size;
 			em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
 			for (let i = 0; i < k; i++) {
+				if (per === 2) {
+					em.load(SCRATCH[0], (base + i * 2) * 8);
+					em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "先頭を並べる（要素の ptr）" : undefined);
+					em.load(SCRATCH[0], (base + i * 2 + 1) * 8);
+					em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+					continue;
+				}
 				em.load(SCRATCH[0], (base + i) * 8);
 				em.emit(storeElem(SCRATCH[0], SCRATCH[1], i * w, w), i === 0 ? "先頭を並べる" : undefined);
 			}
-			em.pop(k);
+			em.pop(k * per);
 			// 続きの宛先はスロットへ置く。引数を作る途中で `bl` が挟まればレジスタは壊れる。
 			const destSlot = em.push();
 			if (destSlot === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
@@ -2815,20 +2908,26 @@ function genExpr(node, env, em, scope, tail = false) {
 				em.store(SCRATCH[0], cnt, "ここまでに書いた個数");
 				const tbase = em.slot;
 				for (const p of trail) {
-					const pw = genScalar(p, env, em, scope, "追記の後ろに並べる要素はレジスタ1本の値です");
-					if (pw === false) return false;
+					if (pushElem(p) === false) return false;
 				}
-				const t = em.slot - tbase;
+				const t = (em.slot - tbase) / per;
 				em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
 				em.load(SCRATCH[0], cnt);
-				const shift = w === 8 ? 3 : w === 4 ? 2 : w === 2 ? 1 : 0;
+				const shift = w === 16 ? 4 : w === 8 ? 3 : w === 4 ? 2 : w === 2 ? 1 : 0;
 				if (shift) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}, lsl #${shift}`, "書かれた個数ぶん進める");
 				else em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}`, "書かれた個数ぶん進める");
 				for (let i = 0; i < t; i++) {
+					if (per === 2) {
+						em.load("x14", (tbase + i * 2) * 8);
+						em.emit(`str x14, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "後ろを並べる（要素の ptr）" : undefined);
+						em.load("x14", (tbase + i * 2 + 1) * 8);
+						em.emit(`str x14, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+						continue;
+					}
 					em.load("x14", (tbase + i) * 8);
 					em.emit(storeElem("x14", SCRATCH[1], i * w, w), i === 0 ? "後ろを並べる" : undefined);
 				}
-				em.pop(t);
+				em.pop(t * per);
 				em.load(SCRATCH[0], cnt);
 				em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${t}`, `後ろの ${t} を足す`);
 				em.pop(1);
