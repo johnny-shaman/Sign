@@ -328,6 +328,50 @@ function joinElementTypes(a, b) {
   return NO_JOIN;
 }
 
+/**
+ * **器を受ける仮引数の要素型を、観測から決める。**
+ *
+ * 同じ問いが3箇所で別々に答えられていた——片方は上書き、片方は先勝ち、片方は全サイトが
+ * 一致したときだけ。決めるのは1箇所である。
+ *
+ * **食い違いは「決まらない」ではない。** 仕様は表現の違う直和を「広い方に揃える」と言って
+ * いる（type_system.md §2）ので、`Char` と `String` には答えが在る——`joinElementTypes`
+ * （→ `liftScalarToBox`）がそれである。lexer.sn の `tokens` は記号1文字の枝で `Char`、
+ * 語の枝で `String` を積むので、その器を受ける仮引数はまさにこの形になる。
+ *
+ * 先勝ちだったため parser.sn では**表（`ops : [`+` , …]` ＝ `List(Char)`）が連鎖全体を
+ * `Char` に釘付けにし**、呼び出しサイトが渡す `List(String)` は後の周回で来るので負けて
+ * いた。`expr` の `ts` は `String` なのに、そのまま渡した先の `add_end` は `Char`——
+ * 同じ器が隣り合う関数で違う要素型を持ち、`ts ' i` が `{ptr, len}` の 1 バイト目を
+ * `ldrb` で読んでいた。以降は全部 `Char` で辻褄が合うので**診断はゼロ**である。
+ *
+ * join は単調（`Char` から `String` へは昇るが降りない）なので不動点は回る。本当に
+ * join が無い組み合わせ（`NO_JOIN`）は決めない——分からないことは書かない（原理4）。
+ */
+function noteElementType(b, observed, overwrite = false) {
+  if (!b || !observed) return false;
+  const seen = [...new Set([...observed].filter(Boolean))];
+  if (seen.length === 0) return false;
+  // **畳めるのは「スカラーとその器」だけである。** 仕様が「広い方に揃える」と言って
+  // いるのは表現の違う直和のこと（`Char` と `String`）であって、**形が違うサイトの話
+  // ではない**——`f (1 , 2)` と `f (1.5 , 2.5)` は Pass 4 がサイトごとに別の実体を出す
+  // ので、片方の形を選べばもう片方に嘘をつく（st.test.js「形が違うサイトが混ざれば
+  // 解けない」）。だから `joinElementTypes` ではなく `liftScalarToBox` を使う。
+  let want = seen[0];
+  for (const t of seen.slice(1)) {
+    const j = liftScalarToBox(want, t);
+    if (!j) return false; // 畳めない食い違いは決めない（原理4）
+    want = j;
+  }
+  if (!b.elementType) { b.elementType = want; return true; }
+  if (b.elementType === want) return false;
+  const lifted = liftScalarToBox(b.elementType, want);
+  if (lifted && lifted !== b.elementType) { b.elementType = lifted; return true; }
+  // 畳めないなら、その口が元から持っていた規則に従う（観測で上書きするか、先勝ちか）。
+  if (overwrite && seen.length === 1) { b.elementType = want; return true; }
+  return false;
+}
+
 // ノードが表す「値の要素型」を返す。List なら要素型、それ以外はその値自身の型
 // （スカラーは1要素リストと同型なので、自分自身が要素になる）。
 function elementTypeOf(node, env) {
@@ -2982,10 +3026,7 @@ function collectCallsiteParamTypes(nodes, env) {
           b0.atomType = [...obsCt][0];
           changed = true;
         }
-        if (obsEl.size === 1 && b0.elementType !== [...obsEl][0]) {
-          b0.elementType = [...obsEl][0];
-          changed = true;
-        }
+        if (noteElementType(b0, obsEl, true)) changed = true;
       }
     }
     const patScope = rhs.scope;
@@ -3005,17 +3046,16 @@ function collectCallsiteParamTypes(nodes, env) {
           }
         }
         const seen = [...elementObs[i]];
-        if (seen.length !== 1) return;
         // 器そのものを受ける位置（rest・ブラケット全体）には要素型を載せる。
-        // 次の段の呼び出しサイトはここを読むので、これが連鎖を繋ぐ。
+        // 次の段の呼び出しサイトはここを読むので、これが連鎖を繋ぐ。**サイトが食い違って
+        // いても join が答えを持っている**ので、ここは一致を待たない（`noteElementType`）。
         for (const name of [e.name, ...(e.pattern || []).filter((q) => q.rest).map((q) => q.name)]) {
           if (!name) continue;
-          const cb = envLookup(patScope, name);
-          if (cb && cb.elementType !== seen[0]) {
-            cb.elementType = seen[0];
-            changed = true;
-          }
+          if (noteElementType(envLookup(patScope, name), elementObs[i], true)) changed = true;
         }
+        // 名前で分ける側（`[foo bar ~o]` の foo/bar）は器ではなくスロット1つなので、
+        // 観測が割れたら決めない——そこは join の話ではない。
+        if (seen.length !== 1) return;
         if (!e.pattern) return;
         for (const pe of e.pattern) {
           if (!pe.name || pe.rest) continue;
@@ -3136,12 +3176,8 @@ function collectCallsiteParamTypes(nodes, env) {
             changed = true;
           }
         }
-        // 要素型は全サイトが一致したときだけ採る（食い違うなら決めない——原理4）。
-        const els = [...elemObs[i]];
-        if (els.length === 1 && !b2.elementType) {
-          b2.elementType = els[0];
-          changed = true;
-        }
+        // 要素型はサイトの join で採る（`Char` と `String` は「広い方に揃える」）。
+        if (noteElementType(b2, elemObs[i])) changed = true;
       });
     }
     // **持ち上げた直和のスカラー側が、要素の型である。**
