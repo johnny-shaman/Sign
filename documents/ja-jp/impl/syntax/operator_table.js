@@ -31,7 +31,15 @@ export const OPERATOR_BY_PRECEDENCE = [
     '&': { position: 'infix', name: 'and' },
   },
   { // 8
-    '===': { position: 'infix', name: 'same' },
+    // **`===` は廃止された。** 唯一の役目だった「ねじれ（宣言順の置換）の同定」は、
+    // 2つの引き方の差で導出できる——`p ' 0` と `p ' 名前` が一致すれば恒等置換である
+    // （type_system.md §6.2 が元からそう書いていた）。しかも宣言順はコンパイル時の性質
+    // なので、実行時の演算子では答えられない（呼び出しサイトごとに置換が違うと決まらない）。
+    //
+    // **表から消しては（字句として）いけない。** 消すと `1 === 1` が `==` + `=` に割れて
+    // `construct(1, assign_equal(atom "==", 1))` という別の意味へ黙って化ける。1つの字句
+    // として読ませたうえで、使ったら pass3 が名指しする。
+    '===': { position: 'infix', name: 'same', removed: "ねじれは `p ' 0` と `p ' 名前` の差で導出できます" },
     '==': { position: 'infix', name: 'equal' },
     // 8/6修正: 以前は'!='(tier12)と同じ'not_equal'だったため、この演算子テーブル自身の
     // 中で.nameが衝突していた（`documents/ja-jp/impl/syntax/operator_table.md`が元々

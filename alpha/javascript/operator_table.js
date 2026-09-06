@@ -37,7 +37,7 @@ export const OPERATOR_BY_PRECEDENCE = [
     // **表から消しては（字句として）いけない。** 消すと `1 === 1` が `==` + `=` に割れて
     // `construct(1, assign_equal(atom "==", 1))` という別の意味へ黙って化ける。1つの字句
     // として読ませたうえで、使ったら pass3 が名指しする。
-    '===': { position: 'infix', name: 'same', removed: 'ねじれは `p ' + String.fromCharCode(39) + ' 0` と `p ' + String.fromCharCode(39) + ' 名前` の差で導出できます' },
+    '===': { position: 'infix', name: 'same', removed: "ねじれは `p ' 0` と `p ' 名前` の差で導出できます" },
     '==': { position: 'infix', name: 'equal' },
     // 8/6修正: 以前は'!='(tier12)と同じ'not_equal'だったため、operator_table.js自身の
     // 中で.nameが衝突しており、コード側は.op（記号そのもの）で区別する回避策に頼っていた
