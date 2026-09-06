@@ -21,14 +21,14 @@ is_space : c ? (c = space) | (c = tab) | (c = newline)
 `文字どうしをスペースで並べると String の吸収則で連結される（type_system.md 3.2節）`
 
 take_while : p [~s] ?
-	s = `` : ``
+	!s : ``
 	(@p (s ' 0)) : (s ' 0) (take_while p (s ' 1~))
 	``
 
 `述語が真の間だけ先頭から捨て、残りを返す`
 
 drop_while : p [~s] ?
-	s = `` : ``
+	!s : ``
 	(@p (s ' 0)) : drop_while p (s ' 1~)
 	s
 
@@ -39,7 +39,7 @@ drop_while : p [~s] ?
 `段の深い Struct になって大きさが静的に決まらない（余積の ~ との双対）`
 
 tokens : [~s] ?
-	s = `` : __
+	!s : __
 	is_space (s ' 0) : tokens (drop_while $is_space s)
 	is_digit (s ' 0) : (take_while $is_digit s) , (tokens (drop_while $is_digit s))~
 	is_alpha (s ' 0) : (take_while $is_alpha s) , (tokens (drop_while $is_alpha s))~

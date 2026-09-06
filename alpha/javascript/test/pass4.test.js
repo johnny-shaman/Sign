@@ -640,12 +640,12 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 		["ldr x0, [x29, #N]", "ldr x1, [x29, #N]"],
 	);
 }
-// ---- 器どうしの等価（中身の比較） ----
+// ---- 器どうしの等価（段8 の `==` / `!==`）（中身の比較） ----
 //
 // **メモリは要らない。読むだけである。** 真のときに返すのは左辺そのもの、偽のときは
 // `len = 0`（＝`__`）なので、新しい `{ptr, len}` を作る必要がない。
 {
-	const src = "f : s ?\n\ts = `ab` : 1\n\t0\nf `cd`";
+	const src = "f : s ?\n\ts == `ab` : 1\n\t0\nf `cd`";
 	const r = asm(src);
 	check("器どうしの等価は出る", r.diagnostics.length, 0);
 	const ls = body(src, "f");
@@ -667,7 +667,7 @@ checkTrue(
 );
 // utf32 なら要素は 4 byte。同じ命令列が幅だけ変わる。
 {
-	const { nodes, env } = compile("f : s ?\n\ts = `ab` : 1\n\t0\nf `cd`", { charset: "utf32" });
+	const { nodes, env } = compile("f : s ?\n\ts == `ab` : 1\n\t0\nf `cd`", { charset: "utf32" });
 	const t = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "utf32", regAlloc: false }).text;
 	checkTrue("4 byte 要素なら lsl #2 で引く", t.includes("ldr w14, [x10, x13, lsl #2]"), t);
 }

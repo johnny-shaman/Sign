@@ -3495,6 +3495,7 @@ function annotateTypes(node, env, diagnostics) {
   inferAtomType(node, env);
   if (diagnostics) collectUnitReason(node, env, diagnostics);
   if (diagnostics) collectExportMisuse(node, diagnostics);
+  if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
   // ブロック・ラムダは pass2 が残した子スコープで中身を歩く（無ければ現在のenv）。
   // これが無いと仮引数やブロック内の定義が「未定義識別子」になってしまう。
   const inner = node.scope || env;
@@ -3564,6 +3565,59 @@ function annotateTypes(node, env, diagnostics) {
  * 「一つのことを表現する方法は一つ」（pass2.js の方針）に従う。
  */
 const EXPORT_PREFIX_OPS = new Set(["export_internal", "export_external", "export_pin"]);
+
+// 段12 の比較演算（スカラー）。器の比較は段8 の `==` / `!==` である。
+const SCALAR_COMPARE_OPS = new Set(["less", "less_equal", "assign_equal", "more_equal", "more", "not_equal"]);
+const CONTAINER_PLACES = new Set(["String", "List", "Struct", "Iterator"]);
+
+/**
+ * **器の比較に段12 を使っていないか。**
+ *
+ * `=` / `!=` は段12 の比較演算（スカラー）で、器の比較は段8 の `==` / `!==` である
+ * （operator_table.md「構造内比較演算」、reference.md「`==` は構造比較専用の演算子で
+ * あり、List・Struct などの構造を対象とする」）。
+ *
+ * 長く `=` で器を比べられていたが、**解釈器がそう見えていたのは JS の偶然**だった
+ * ——`assign_equal` は `l === r` で JS へ委ねており、JS は文字列を値で・配列を参照で
+ * 比べる。だから `` `ab` = `ab` `` は真、`[1 2] = [1 2]` は偽、という不整合が出ていた。
+ * 器の比較は「決めていなかった」のであって、`=` の意味だったわけではない。
+ *
+ * `Char` は1文字＝スカラーなので段12 で正しい（preprocess.sn の `ch = :` はそのまま）。
+ */
+/** 静的に空だと分かる器のリテラル（空文字列・空リスト）。値は `__` である。 */
+function isEmptyContainerLiteral(n) {
+  const u = n && n.type === "block" && n.kind === "paren" && n.lines && n.lines.length === 1 ? n.lines[0] : n;
+  if (!u) return false;
+  if (u.type === "atom" && u.kind === "string") return String(u.value).length <= 2;
+  if (u.type === "block" && Array.isArray(u.lines) && u.lines.length === 0) return true;
+  return false;
+}
+
+function collectScalarCompareOnContainer(node, env, diagnostics) {
+  if (!node || node.type !== "operation" || node.position !== "infix") return;
+  if (!SCALAR_COMPARE_OPS.has(node.name)) return;
+  const lt = inferAtomType(node.left, env);
+  const rt = inferAtomType(node.right, env);
+  // **空の器との比較は、器の比較ではない。**
+  //
+  // 空文字列 `````` は**型が String・値が `__`** である。だから吸収則
+  // （`__` との比較は `__`）で畳めばよく、中身を突き合わせる話にはならない。型だけを見て
+  // 「String 対 String」と読むと、空かどうかの判定まで巻き込んで断ってしまう。
+  if (lt === "Unit" || rt === "Unit") return;
+  if (isEmptyContainerLiteral(node.left) || isEmptyContainerLiteral(node.right)) return;
+  if (!CONTAINER_PLACES.has(lt) || !CONTAINER_PLACES.has(rt)) return;
+  diagnostics.push({
+    level: "information",
+    reason: "scalar-compare-on-container",
+    spec: "operator_table.md 段8 / reference.md",
+    message:
+      node.name === "assign_equal" || node.name === "not_equal"
+        ? `器の比較に '${node.op}' を使っています（左辺=${lt}, 右辺=${rt}）。段12 の '${node.op}' は` +
+          `スカラーの比較演算なので、中身を比べるなら段8 の '==' / '!==' を使ってください`
+        : `器に順序比較 '${node.op}' を使っています（左辺=${lt}, 右辺=${rt}）。辞書式の規則は` +
+          `まだ決まっていません——長さで比べるなら '||x|| ${node.op} ||y||' と書けます`,
+  });
+}
 
 function collectExportMisuse(node, diagnostics) {
   if (!node || node.type !== "operation" || node.position !== "prefix") return;

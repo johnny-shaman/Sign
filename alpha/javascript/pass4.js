@@ -1312,11 +1312,35 @@ function genExpr(node, env, em, scope, tail = false) {
 		const cmpBoxish = (t) => t === "String" || t === "Char";
 		const lWid = slotsOfNode(n.left, em.conf, env);
 		const rWid = slotsOfNode(n.right, em.conf, env);
+		// **器の比較に段12 を使ってはいけない。**
+		//
+		// `=` / `!=` は段12 の比較演算（スカラー）で、器の比較は段8 の `==` / `!==` である
+		// （operator_table.md「構造内比較演算」、reference.md「`==` は構造比較専用」）。
+		// ここは長く `=` で器を比べていたが、**解釈器がそう見えていたのは JS の偶然**だった
+		// ——`assign_equal` は `l === r` で JS へ委ねており、JS は文字列を値で・配列を参照で
+		// 比べる。だから `` `ab` = `ab` `` は真、`[1 2] = [1 2]` は偽、という不整合が出ていた。
+		// 器の比較は「決めていなかった」のであって、`=` の意味だったわけではない。
+		// **空の器との比較は吸収則である。** 空文字列は型が String・値が `__` なので、
+		// 中身を突き合わせる話にはならない（`!s` と同じことを言っている）。
+		const emptyLit = (x) => {
+			const u = unwrap(x);
+			if (!u) return false;
+			if (u.type === "atom" && u.kind === "string") return String(u.value).length <= 2;
+			return !!(u.type === "block" && Array.isArray(u.lines) && u.lines.length === 0);
+		};
 		if (n.left && n.right && cmpBoxish(n.left.atomType) && cmpBoxish(n.right.atomType) && (lWid === 2 || rWid === 2)) {
+			// 空との比較は吸収則なので、長さを見るだけで答えが出る（`len 0` 対 `len n`）。
+			// 中身を突き合わせる話にならないので、ここは通す。
+			if (emptyLit(n.left) || emptyLit(n.right)) return genStringCompare(n, env, em, scope);
+			// 順序（`<` `<=` `>` `>=`）は `==` では代われない——辞書式の規則そのものが無い。
 			if (n.name !== "assign_equal" && n.name !== "not_equal") {
 				return em.fail(n, `器どうしは等価だけを出せます（${n.op}）——順序を出すには辞書式の規則が要る`);
 			}
-			return genStringCompare(n, env, em, scope);
+			return em.fail(
+				n,
+				`器の比較に '${n.op}' は使えません（段12 はスカラーの比較演算です）——中身を比べるなら ` +
+					"'==' / '!==' を使ってください（operator_table.md 段8「構造内比較演算」）"
+			);
 		}
 		if (!cmpOk(n.left) || !cmpOk(n.right)) {
 			return em.fail(n, `GPR 幅の値の比較だけを出せます（${n.left && n.left.atomType} と ${n.right && n.right.atomType}）`);
