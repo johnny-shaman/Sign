@@ -4736,6 +4736,43 @@ function genMatch(node, env, em, scope, tail = false) {
 	// そこは名指しする。
 	if (width > ARG_REGS.length) return em.fail(node, `${width} 本で運ぶ値を返す分岐はまだ出せません（${node.atomType}）`);
 
+	// **「2本」が同じでも、中身が同じとは限らない。**
+	//
+	// ここは長らくスロットの本数だけを揃えていた。だが 2本には少なくとも3種類ある：
+	// 参照の器（`{ptr, len}`）、規則（`{start, step}`——要素はどこにも置かれていない）、
+	// そして同じ参照でも**枡が何 byte か**が違うもの（`List(String)` は 16、`String` は
+	// 文字1つぶん）。どれも `slotsOfNode` は 2 と答えるので合流は「揃った」と言って通し、
+	// 引く側は合流の型どおりの刻みで読む——診断ゼロで違う値が返る：
+	//
+	//     r : [~s] ?
+	//     	`x` = `y` : s , s        List(String)、枡 16 byte
+	//     	s                         String、枡 1 byte
+	//     ||(r `ab`) ' 0||          解釈 1 ／実機 0
+	//
+	//     y :
+	//     	1 = 1 : a
+	//     	[0 ~+ 1]                  規則
+	//     y ' 0                      解釈 97 ／実機 生番地
+	//
+	// **本数は「何本運ぶか」しか言わない。** 何を運ぶかは別の問いなので、別に訊く。
+	// 揃わないなら片方を組み直さないと合流できない——それは持ち上げ（同じものを別の姿で
+	// 置く）ではなく作り直しなので、黙って通さず名指しする（原理4）。
+	if (width === 2) {
+		const carryOf = (v) => {
+			if (!v || slotsOfNode(v, em.conf, em.env) !== 2) return null; // 狭い枝は持ち上げの話
+			if (v.repr === "rule" || isRuleNode(v, em.conf, em.env)) return "規則";
+			if (v.repr === "cursor" || v.cursorGroup) return "カーソル";
+			const et = v.elementType || (v.atomType === "String" ? "Char" : null);
+			const c = elementCellSize(et, em.conf);
+			return c && c.size ? `枡 ${c.size} byte` : null;
+		};
+		const carries = armNodes.map(carryOf).filter((x) => x !== null);
+		const uniq = [...new Set(carries)];
+		if (uniq.length > 1) {
+			return em.fail(node, `枝の運び方が揃いません（${uniq.join(" と ")}）——本数は同じでも中身が違うので、合流するには組み直しが要ります`);
+		}
+	}
+
 	// **狭い枝の持ち上げ先は、枝の外で一度取る。**
 	//
 	// 同型は型では無償、表現では有償である（原理8）——1本で出た枝を `{ptr, len}` の2本へ
