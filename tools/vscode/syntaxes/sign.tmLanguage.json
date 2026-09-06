@@ -18,10 +18,11 @@
   ],
   "repository": {
     "comments": {
+      "comment": "string_and_comment.md §2: 行頭のバッククォートは、閉じの直後が後置演算子（@ ~ !）か空白のときだけ式になる。それ以外はコメント。同じ規則が alpha/javascript/sign.pegjs, documents/{ja-jp,en-us}/impl/syntax/grammar.pegjs, documents/{ja-jp,en-us}/guide/string_and_comment.md, tools/emacs/lisp/sign-mode.el にもある——直すときは全部直す",
       "patterns": [
         {
           "name": "comment.line.sign",
-          "match": "^`.*$"
+          "match": "^`(?![^`\n]*`[@~! ]).*$"
         }
       ]
     },

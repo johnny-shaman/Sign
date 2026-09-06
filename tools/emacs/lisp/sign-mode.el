@@ -19,8 +19,17 @@
     ("`[^`\n]*`?" 0 font-lock-string-face t)
 
     ;; 【コメント (VS Codeの緑色)】
-    ;; ただし、行頭（インデント含む）から始まる ` 〜 ` はコメント色で「上書き」する
-    ("^[ \t]*\\(`[^`\n]*`?\\)" 1 font-lock-comment-face t)
+    ;; string_and_comment.md §2: 行頭のバッククォートは、閉じの直後が後置演算子
+    ;; （@ ~ !）か空白のときだけ式になる。それ以外はすべてコメントである。
+    ;; 同じ規則が alpha/javascript/sign.pegjs, documents/{ja-jp,en-us}/impl/syntax/
+    ;; grammar.pegjs, documents/{ja-jp,en-us}/guide/string_and_comment.md,
+    ;; tools/vscode/syntaxes/sign.tmLanguage.json にもある——直すときは全部直す。
+    ;;
+    ;; Emacs の正規表現には先読みが無いので、否定を展開して書く：
+    ;;   閉じない | 閉じて行末 | 閉じて直後が @ ~ ! 空白 のいずれでもない
+    ;; インデント後のバッククォート（ドキュメント文字列）は §3 の通り文字列だが、
+    ;; 事実上コメントとして働くので、ここでは今までどおりコメント色で上書きする。
+    ("^[ \t]*\\(`[^`\n]*\\(?:`\\(?:[^@~! \n][^\n]*\\)?\\)?\\)$" 1 font-lock-comment-face t)
 
     ;; 【エスケープ文字リテラル】
     ;; \ (バックスラッシュ) とその直後の1文字
