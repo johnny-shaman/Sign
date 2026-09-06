@@ -4702,26 +4702,33 @@ function genMatch(node, env, em, scope, tail = false) {
 	//
 	// 通るのは1本だけなので、場所は共有してよい。ここでも「場所は最も外側で一度だけ取る」
 	// である——外側が、この分岐そのものになっただけである。
-	let liftSlot = null;
-	// **リテラルの狭い枝に場所は要らない。** 1文字は `.rodata` に置き場所があるので、
-	// `{ptr, 1}` を積むだけで広い方へ揃う——`String ≅ List(Char)` の言い換えでしかない。
-	// 場所が要るのは**実行時に決まる**狭い枝（`ts ' i`）だけである。
-	const needsLift = armWidths.some((w, i) => w === 1 && unwrap(armNodes[i]) && unwrap(armNodes[i]).type !== "atom");
-	if (width === 2 && armMax === 2 && needsLift) {
-		if (!allocaAllowed(em, node, "枝を長さ1の器へ持ち上げる")) return false;
-		em.emit("sub sp, sp, #16", "狭い枝の持ち上げ先（枝の外で一度取る）");
-		em.movedSp = true;
-		liftSlot = em.push();
-		if (liftSlot === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
-		em.emit(`mov ${SCRATCH[0]}, sp`, "持ち上げ先の ptr");
-		em.store(SCRATCH[0], liftSlot);
-	}
+	// **持ち上げ先を自分の枠に取ってはいけない。**
+	//
+	// ここは以前 `sub sp, sp, #16` で場所を取り、狭い枝の1つをそこへ書いて `{その sp, 1}`
+	// を返していた。**返った瞬間にその枠は畳まれる**（`mov sp, x29`）ので、呼ぶ側は死んだ
+	// 場所を指した器を読む——次の呼び出しが上書きすると値が変わる：
+	//
+	//     f : s ?
+	//     	||s|| > 0 : s ' 1
+	//     	`xy`
+	//     pick : r q ? r ' 0
+	//     pick (f `ab`) (f `zw`)      解釈 98（`b`）／実機 119（`w`）
+	//
+	// 代金を払わずに済む道が2つ在る（原理8——元の器の中に居る値は表現でも無償）。
+	// リテラルの1文字は `.rodata`（`genWidened`）、器の中の1つ（`A ' i`）はスライス
+	// （`emitSliceLift`）である。どちらでもない狭い枝——計算で作った1文字——には置き場所が
+	// 無いので、黙って死んだ番地を返すより断る（原理4）。
 	const outs = [];
 	for (let k = 0; k < width; k++) {
 		const o = em.push();
 		if (o === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 		outs.push(o);
 	}
+	// **合流先の枡は何 byte か。** 狭い枝を広げるとき、置くのは「器1つ」ではなく
+	// 「枡1つ」である——`List(String)` なら 16 byte、`String` なら文字1つぶんである。
+	const mergeElem = node.elementType || (node.atomType === "String" ? "Char" : null);
+	const mergeCellSize = elementCellSize(mergeElem, em.conf);
+	const mergeCell = mergeCellSize && mergeCellSize.size ? mergeCellSize.size : null;
 	// 合流した値がカーソルなら、`__` の書き方が違う（`arm` が niche）。
 	const matchKind = node.repr === "cursor" || node.cursorGroup ? "cursor" : null;
 	// 枝の値を出力スロットへ写す。幅が合わない枝は上と同じ持ち上げの話なので落とす。
@@ -4745,7 +4752,7 @@ function genMatch(node, env, em, scope, tail = false) {
 		}
 		// **広い方へ揃えるのは、確保が要らないなら先に試す。** リテラルの1文字は
 		// `.rodata` に置き場所があるので、器として置ける（`genWidened`）。
-		const wide = width === 2 ? genWidened(line, width, env, em, scope) : null;
+		const wide = width === 2 ? genWidened(line, width, env, em, scope, mergeCell) : null;
 		if (wide === false) return false;
 		// **枝そのものが追記できる呼び出しなら、自分の返値スロットをそのまま渡す。**
 		//
@@ -4768,6 +4775,14 @@ function genMatch(node, env, em, scope, tail = false) {
 		// `genWidened` は既に値を置いてしまっているので、そちらは従来どおり写す。
 		const direct = wide === null;
 		if (direct) em.pop(width);
+		// **器の中の1つは、指し直すだけで長さ1の器になる。** `A ' i` なら
+		// `{A.ptr + i×幅, 1}`——確保ゼロ、範囲外なら len 0（＝`__`）まで正しい。
+		// ちょうど `outs` の位置へ積まれるので、写しも要らない。
+		if (direct && width === 2 && slotsOfNode(line, em.conf, env) === 1) {
+			const sliced = emitSliceLift(em, line, env, scope);
+			if (sliced === false) return false;
+			if (sliced !== null) return true;
+		}
 		const w = wide === null ? genExpr(line, env, em, armScope(line), tail) : wide;
 		if (armAppend) armAppend._sretInto = undefined;
 		if (w === false) return false;
@@ -4777,19 +4792,6 @@ function genMatch(node, env, em, scope, tail = false) {
 			return TAIL;
 		}
 		if (direct && w === width) return true; // 既に `outs` に在る
-		// **狭い枝を広い方へ揃える**（原理8）。場所は上で取ってあるので、ここは置くだけ。
-		if (w === 1 && width === 2 && liftSlot !== null) {
-			em.load(SCRATCH[1], (em.slot - 1) * 8, "枝の値");
-			em.load(SCRATCH[0], liftSlot, "持ち上げ先");
-			em.emit(`str ${SCRATCH[1]}, [${SCRATCH[0]}]`, "長さ1の器として置く");
-			em.store(SCRATCH[0], outs[0], "枝の値（持ち上げた ptr）");
-			em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
-			em.store(SCRATCH[0], outs[1], "その len");
-			// 直に置いた枝は `outs` ぶんを空けてあるので、埋め戻す。
-			if (direct) for (let k = w; k < width; k++) em.push();
-			else em.pop(w);
-			return true;
-		}
 		if (direct) for (let k = w; k < width; k++) em.push(); // 幅が違う——下で名指しする
 		if (w !== width) {
 			em.pop(w);
@@ -5052,8 +5054,52 @@ function emitIsUnit(em, off, width, comment, isRule = false, isCursor = false) {
  *
  * 広げられなければ `null` を返す（呼ぶ側が名指しする）。
  */
-function genWidened(node, want, env, em, scope) {
+/**
+ * @param cell 合流先の器の**枡1つが何 byte か**（分からなければ null）。
+ *
+ * **枝自身の型から測ってはいけない。** 以前はここが `node.atomType`（枝の型）だけを見て
+ * いたので、合流先が `List(String)`（枡 16 byte）でも `Char` の枝を 1 byte で書き、
+ * `{ptr, 1}` を返していた。引く側は器の型どおり 16 byte 刻みで `{ptr, len}` を読むので、
+ * 文字の並びをポインタとして読む——診断ゼロで `__` が返る：
+ *
+ *     f : n ?
+ *     	n = 1 : `xy` , `zw`      枡 16 byte の器
+ *     	\b                       1文字
+ *     (f 0) ' 0 ' 0              解釈 98／実機 __
+ *
+ * 追記の道（`emitSliceLift` を呼ぶ側）は同じ形をちゃんと断っている。ここだけが
+ * 素通りしていた——同じ問いを2箇所が別々に答えている、いつもの形である。
+ */
+function genWidened(node, want, env, em, scope, cell = null) {
 	if (want !== 2) return null;
+	// **枡が参照で運ぶ器（16 byte）なら、置くのは「値1つ」ではなく `{ptr, len}` の組である。**
+	//
+	// `List(String)` の枝と1文字の枝が合流する形がこれ。1文字を長さ1の器にするのは確保ゼロ
+	// で済む（リテラルは `.rodata`、器の中の1つはスライス）ので、その組をそのまま返値スロット
+	// へ 16 byte 書けば「枡1つぶんの器」になる。**代金は生成後のコードでは払わない**（原理8）。
+	if (cell === 16 && em.sretDest !== null && em.sretDest !== undefined) {
+		let pair = emitSliceLift(em, node, env, scope);
+		if (pair === false) return false;
+		if (pair === null) {
+			pair = emitCharLiteralBox(node, env, em);
+			if (pair === false) return false;
+		}
+		if (pair !== null) {
+			em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
+			em.load(SCRATCH[0], (em.slot - 2) * 8);
+			em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #0]`, "枡の ptr（要素1つ）");
+			em.load(SCRATCH[0], (em.slot - 1) * 8);
+			em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #8]`, "その len");
+			em.pop(2);
+			const po16 = em.push();
+			const lo16 = po16 === null ? null : em.push();
+			if (lo16 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+			em.store(SCRATCH[1], po16, "ptr は返値スロット");
+			em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1（枡1つぶんの器）");
+			em.store(SCRATCH[0], lo16, "len");
+			return 2;
+		}
+	}
 	// **返値スロットが在るなら、確保は要らない。**
 	//
 	// 器を返す関数の枝が全部器を組むとは限らない——`gap : st d ? d > (top st) : indent /
@@ -5067,7 +5113,8 @@ function genWidened(node, want, env, em, scope) {
 	if (em.sretDest !== null && em.sretDest !== undefined) {
 		const el = node.atomType;
 		const m1 = el && !isBoxType(el) ? measure({ atomType: el }, { target: em.conf.target, charset: em.conf.charset }) : null;
-		if (m1 && m1.size) {
+		// 枡の幅と、書こうとしている値の幅が同じでなければ広げない（原理4）。
+		if (m1 && m1.size && (cell === null || cell === m1.size)) {
 			const vw = genExpr(node, env, em, scope);
 			if (vw === false) return false;
 			if (vw === 1) {
@@ -5086,6 +5133,21 @@ function genWidened(node, want, env, em, scope) {
 			em.pop(vw === TAIL ? 0 : vw);
 		}
 	}
+	const boxed = emitCharLiteralBox(node, env, em, cell);
+	if (boxed === false) return false;
+	return boxed === null ? null : 2;
+}
+
+/**
+ * **1文字のリテラルを、確保ゼロで長さ1の器にする。**
+ *
+ * `.rodata` に1文字置けば `{ptr, 1}` である——`String ≅ List(Char)` の言い換えでしかない
+ * ので、新しい概念も確保も要らない（原理8 の「表現の代金」がここでは 0 になる）。
+ *
+ * @param cell 置き先の枡が何 byte か（null なら問わない）。1文字ぶんと違えば置けない。
+ * @returns 積んだ ptr スロット（2スロット消費）／置けなければ null
+ */
+function emitCharLiteralBox(node, env, em, cell = null) {
 	let t = unwrap(node);
 	// 名前で書かれていても中身はリテラルである（`indent : \t`）。束縛先まで辿る——
 	// **置き場所があるかどうかは名前ではなく中身が決める**。
@@ -5099,6 +5161,8 @@ function genWidened(node, want, env, em, scope) {
 	const cps = codePointsOf(t);
 	if (cps === null || cps.length !== 1) return null;
 	const w = charSizeOf(em.conf.charset);
+	// 置くのは1文字ぶん（`w` byte）なので、枡がそれより広い器へは入れられない。
+	if (cell !== null && cell !== w) return null;
 	const label = em.intern(cps);
 	const po = em.push();
 	const lo = po === null ? null : em.push();
@@ -5108,7 +5172,7 @@ function genWidened(node, want, env, em, scope) {
 	em.store(SCRATCH[0], po, "ptr");
 	em.emit(`mov ${SCRATCH[1]}, #1`, `len は文字数（${w} byte 幅 × 1 文字）`);
 	em.store(SCRATCH[1], lo, "len");
-	return 2;
+	return po;
 }
 
 // `__`（零射）そのものを書いたノードか。値ではなく**書かれ方**を見る。
