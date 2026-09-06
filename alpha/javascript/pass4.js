@@ -2506,30 +2506,14 @@ function genExpr(node, env, em, scope, tail = false) {
 		return 1;
 	}
 
-	// **名前は静的に綴れなければならない。** `obj ' k~` は `k` の**中身**を名前として引く
-	// が、名前付きスロットの物理配置は名前順で決まる（stack_abi.md §7.1）ので、綴りが
-	// コンパイル時に分からなければ引く場所が決まらない。`k` が定数へ束縛されていれば
-	// `constStructField` が畳む——畳めないのは実行時に鍵が決まる形であり、それは
-	// 実行時ディスパッチであって Sign は持たない（compiler_pipeline.md §3）。
+	// **名前が静的に綴れなくても、探せば引ける。**
 	//
-	// ここで止めないと `genIndex` が黙って `__` を出す。解釈器は値を返すので、
-	// **同じソースが解釈器と機械語で違う答えになる**——実測でそうなっていた。
-	if (n.type === "operation" && n.name === "get_prop") {
-		const k = unwrap(n.right);
-		if (k && k.desugaredFrom === "index-rest" && slotKeySpelling(k, env) === null) {
-			// **鍵が名前か添字かは、鍵の型で決まる**（容器の型ではない）。`(dup s) ' 1~` の
-			// ような数の鍵は添字であって名前ではなく、genIndex が正しく出せる——容器側の
-			// atomType で分けようとして、この形を全部巻き込んだことがある（qemu 14件）。
-			const inner = unwrap(k.left);
-			if (inner && inner.atomType === "Char") {
-				return em.fail(
-					n,
-					"名前が静的に決まりません（`obj ' k~`）。名前付きスロットの物理配置は名前順で決まるので、" +
-						"鍵の綴りがコンパイル時に分からないと引く場所が決まりません。鍵を定数へ束縛するか、名前を直接書いてください"
-				);
-			}
-		}
-	}
+	// 名前付きスロットの物理配置は名前順で決まるので、鍵が静的に綴れれば引く場所は 0 命令で
+	// 決まる。決まらないときは `genNameSearch` が `.rodata` の名前表を舐める——「決まって
+	// いることは実行時に訊かない」という形はそのままに、決まらない場合の答えを持たせた。
+	//
+	// ここは以前この形を丸ごと断っていた。解釈器は値を返すので、断りのままだと**言語には
+	// 在るのに実機だけが答えられない**状態が残る。
 	if (n.type === "operation" && n.name === "get_prop" && !n.runtimeIndexProblem) {
 		const out = genIndex(n, env, em, scope);
 		if (out !== null) return out;
@@ -4225,6 +4209,100 @@ function mergeBaseNode(x) {
 	return null;
 }
 
+/**
+ * **鍵が実行時にしか決まらないときは、名前を探す。**
+ *
+ * 名前付きスロットの物理配置は名前順で決まるので、鍵が静的に綴れれば引く場所は 0 命令で
+ * 決まる（`p ' x` はオフセット1つ）。決まらないときだけ探す——「決まっていることは実行時に
+ * 訊かない」という Sign の一貫した形である。
+ *
+ * 名前はコンパイル時にオフセットへ解決されて Pass 4 に残らない（type_system.md §2）ので、
+ * 探すには名前を**値として**置く必要がある。`.rodata` へ `{名前の場所, 文字数, オフセット}` の
+ * 表を1つ出し、共通のループで舐める——スロットごとに展開すると 34 個の表で 400 命令になる。
+ *
+ * **全スロットが同じ幅でなければ断る。** 引いた結果の型が通る枝で変わることになり、それは
+ * 実行時ディスパッチ＝動的型付けである（compiler_pipeline.md §3、Sign は持たない）。
+ *
+ * @returns 積んだ本数 / 出せないなら null / 診断を出したなら false
+ */
+function genNameSearch(node, env, em, scope, shape) {
+	const slots = shape.slots || [];
+	if (slots.length === 0) return null;
+	const w = slots[0].size;
+	const ty = slots[0].type;
+	if (!slots.every((x) => x.size === w && x.type === ty)) {
+		return em.fail(node, `鍵が実行時に決まる引き方は、全スロットが同じ幅でなければ出せません（引いた結果の型が枝で変わります）`);
+	}
+	if (w > 8) return em.fail(node, "鍵が実行時に決まる引き方は、参照で運ぶスロットではまだ出せません");
+	// 鍵は `obj ' k~` の `k`。`~` は添字の糖衣として畳まれているので、その左辺が鍵である。
+	let key = unwrap(node.right);
+	if (key && key.desugaredFrom === "index-rest") key = unwrap(key.left);
+	if (!key) return null;
+	// 器の ptr（1本）を積む。
+	const bw = genScalar(node.left, env, em, scope, "積は {ptr} の1本で運びます");
+	if (bw === false) return false;
+	const objOff = (em.slot - 1) * 8;
+	// 鍵を `{ptr, len}` にする。1文字なら確保ゼロで広げられる。
+	const kb = genBoxOperand(key, env, em, scope);
+	if (kb === false) return false;
+	if (kb === null) return em.fail(node, `鍵を長さ1の器へ広げられません（${key.atomType}）`);
+	const kPtr = (em.slot - 2) * 8;
+	const kLen = (em.slot - 1) * 8;
+	// 名前の表。`{名前の場所, 文字数, スロットのオフセット}` を1組 24 byte で並べる。
+	const cw = charSizeOf(em.conf.charset);
+	const body = [];
+	for (const sl of slots) {
+		const cps = [...String(sl.name)].map((c) => c.codePointAt(0));
+		body.push(`	.quad ${em.intern(cps)}`, `	.quad ${cps.length}`, `	.quad ${sl.offset}`);
+	}
+	const tab = em.internBindingImage(`nametab_${slots.map((x) => x.name).join("_")}_${w}`, body, 8);
+	const loop = em.newLabel("nsloop");
+	const next = em.newLabel("nsnext");
+	const byte = em.newLabel("nsbyte");
+	const hit = em.newLabel("nshit");
+	const miss = em.newLabel("nsmiss");
+	const end = em.newLabel("nsend");
+	em.emit(`adrp x9, ${tab}`, "名前の表（鍵が実行時に決まるので探す）");
+	em.emit(`add x9, x9, :lo12:${tab}`);
+	em.emit(`mov x11, #${slots.length * 24}`);
+	em.emit("add x11, x9, x11", "表の終わり");
+	em.label(loop);
+	em.emit("cmp x9, x11");
+	em.emit(`b.ge ${miss}`, "最後まで見つからなければ __");
+	em.emit("ldr x14, [x9, #8]", "この名前の文字数");
+	em.load("x10", kLen, "鍵の文字数");
+	em.emit("cmp x14, x10");
+	em.emit(`b.ne ${next}`, "長さが違えば中身を見るまでもない");
+	em.emit("ldr x13, [x9, #0]", "この名前の場所");
+	em.load("x12", kPtr, "鍵の場所");
+	em.label(byte);
+	em.emit(`cbz x14, ${hit}`, "末尾まで一致した");
+	em.emit("sub x14, x14, #1");
+	em.emit(loadElem("w10", "x13", "x14", cw), `${cw} byte の要素`);
+	em.emit(loadElem("w15", "x12", "x14", cw));
+	em.emit("cmp w10, w15");
+	em.emit(`b.ne ${next}`);
+	em.emit(`b ${byte}`);
+	em.label(next);
+	em.emit("add x9, x9, #24", "次の名前へ");
+	em.emit(`b ${loop}`);
+	em.label(hit);
+	em.emit("ldr x14, [x9, #16]", "そのスロットのオフセット");
+	em.load("x10", objOff, "器の ptr");
+	const sg = SIGNEDNESS[ty] === "signed";
+	const mn = w === 1 ? (sg ? "ldrsb x10" : "ldrb w10") : w === 2 ? (sg ? "ldrsh x10" : "ldrh w10") : w === 4 ? (sg ? "ldrsw x10" : "ldr w10") : "ldr x10";
+	em.emit(`${mn}, [x10, x14]`, `スロットの中身（${w} byte）`);
+	em.emit(`b ${end}`);
+	em.label(miss);
+	em.emit("movz x10, #0x8000, lsl #48", "見つからなければ __");
+	em.label(end);
+	em.pop(3); // 器の ptr と鍵の 2 本
+	const out = em.push();
+	if (out === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+	em.store("x10", out, "引いた値");
+	return 1;
+}
+
 function genIndex(node, env, em, scope) {
 	const conf = em.conf;
 	// **射は鍵ではない。** 恒等射（`!__`）は機械の上では `0` なので、そのまま通すと
@@ -4278,6 +4356,11 @@ function genIndex(node, env, em, scope) {
 				if (!slot) return em.fail(node, `構造体に ${spell} というスロットがありません`);
 				what = spell;
 			}
+		}
+		// 静的に綴れる鍵が無いなら、名前を探す（`obj ' k~`）。
+		if (!slot && slay && slay.slotKind === "named" && !(si !== null && si >= 0n)) {
+			const found = genNameSearch(node, env, em, scope, slay);
+			if (found !== null) return found;
 		}
 		if (slot) {
 			const regs = Math.max(1, Math.ceil(slot.size / 8));

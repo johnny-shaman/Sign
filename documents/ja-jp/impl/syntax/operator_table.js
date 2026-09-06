@@ -195,7 +195,9 @@ export function getStrictInfixOperators() {
   const strictInfix = [];
   for (const [symbol, defs] of Object.entries(OPERATOR_DICT)) {
     // 空白は除外。また、| は絶対値ブロックと記号が被るため、自動空白挿入の対象外とする
-    if (symbol === ' ' || symbol === '|') continue;
+    // `|` / `||` は囲みにもなる（絶対値・ノルム）ので、中置と決めつけて空白を入れない
+    // ——`||xs||` が `|| xs ||` になると囲みが壊れる。**囲みか中置かは空白の位置が決める**。
+    if (symbol === ' ' || symbol === '|' || symbol === '||') continue;
 
     const positions = new Set(defs.map(d => d.position));
     if (positions.size === 1 && positions.has('infix')) {
