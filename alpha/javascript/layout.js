@@ -779,7 +779,17 @@ function packSlots(entries, conf, slotKind) {
     //
     // `seen` で自己参照を止める。`measure` の入れ子ガード（MAX_NEST）は
     // `layoutOfStruct` を経由すると depth が渡らずリセットされるので、ここは別に持つ。
-    const shape = e.cell ? e.cell.shape || null : e.node && e.node.atomType === "Struct" ? layoutOfStruct(e.node, conf) : null;
+    //
+    // **仮引数で受けた器も内側になれる。** `wrap : s ? [ x : 1 / inner : s ]` の `inner`
+    // は値ノードを持たない——並びは呼び出しサイトから起こして束縛に在るので、撒く元と
+    // 同じ入口（`namedShapeOfSource`）で訊く。ここだけ `layoutOfStruct` を直に当てて
+    // いたため、AST の節点を関数で組む形（`bin k l r ? [ left : l / right : r ]`）で
+    // 内側の並びが落ちていた。
+    const shape = e.cell
+      ? e.cell.shape || null
+      : e.node && (e.node.atomType === "Struct" || isIdentifierNode(e.node))
+        ? namedShapeOfSource(e.node, conf, e.env)
+        : null;
     slots.push({
       ...(e.name !== undefined ? { name: e.name } : {}),
       ordinal: e.ordinal,

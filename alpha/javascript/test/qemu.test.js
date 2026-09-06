@@ -1429,6 +1429,44 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("マージは使う回数で増えない", MRG + "(q ' n) + (q ' n)");
 	agree("マージの後に元を読んでも一度ぶん", MRG + "x : q ' n\np ' n");
 	agree("マージした名前は元と同じ器", MRG + "(q ' m) + (p ' m)");
+
+	// **構文木を畳む。** セルフホストが要求する形そのものである——節点を構造体で作り、
+	// 仮引数で受け、スロットから取り出した内側をまた自分へ渡す。
+	//
+	// 通らなかった原因は3つあり、どれも**同じ問いを2箇所が別々に答えていた**形だった。
+	//
+	// 1. 呼び出しの返す並び。`f (mk 7)` は `q : mk 7` と名前へ一度置けば通るのに直に渡すと
+	//    通らなかった。束縛には `valueNode` が無い（ラムダは畳む値ではない）ので、呼び出し
+	//    サイトから本体へ辿り着く道が無い。Pass 3 が `returnShape` として置くようにした。
+	// 2. 起こす側のスコープ。`layoutOfStruct` は渡された `conf.env` で名前を引くので、
+	//    Pass 4 が呼び先の本体をここで起こすと**外側のスコープで**起こしてしまう。
+	//    `wrap : s ? [ x : 1 / inner : s ]` の `s` は外側に無いため、鍵は揃うのに内側の
+	//    並びだけが黙って落ちる。`w ' inner` までは通り、その次で初めて折れていた。
+	// 3. 不動点のデッドロック。再帰する関数は自分自身の呼び出しサイトを持つので、
+	//    `ev (n ' left)` の並びは `n` の並びを要る。「まだ分からない」を「食い違う」と
+	//    同じに扱うと `n` の並びは永久に立たない。器でないものを渡すサイトだけが食い違い。
+	// 使わない関数まで一緒に置くと、その仮引数はどこからも決まらない——`bin` を呼ばない
+	// 試験に `bin` を置くと「渡し方が決まりません」で落ちる。**要る分だけ積む。**
+	const AST =
+		"num : n ? [\n\tkind : 0\n\tvalue : n\n\tleft : 0\n\tright : 0\n]\n";
+	const AST_B = AST +
+		"bin : k l r ? [\n\tkind : k\n\tvalue : 0\n\tleft : l\n\tright : r\n]\n";
+	const AST_E = AST_B +
+		"ev : n ?\n" +
+		"\t(n ' kind) = 0 : n ' value\n" +
+		"\t(n ' kind) = 1 : (ev (n ' left)) + (ev (n ' right))\n" +
+		"\t(ev (n ' left)) * (ev (n ' right))\n";
+	agree("構文木：葉を作って読む", AST + "(num 7) ' value");
+	agree("構文木：節点の左を読む", AST_B + "((bin 1 (num 3) (num 4)) ' left) ' value");
+	agree("構文木：畳む 3+4", AST_E + "ev (bin 1 (num 3) (num 4))");
+	agree("構文木：畳む 3*4", AST_E + "ev (bin 2 (num 3) (num 4))");
+	agree("構文木：2段 (3+4)*5", AST_E + "ev (bin 2 (bin 1 (num 3) (num 4)) (num 5))");
+	agree("構文木：3段 ((1+2)*3)+4", AST_E + "ev (bin 1 (bin 2 (bin 1 (num 1) (num 2)) (num 3)) (num 4))");
+	// 仮引数で受けた器をそのままスロットへ入れる（`bin` の `left : l` がこれである）。
+	const WRP = "p :\n\ta : 5\n\tb : 6\nwrap : s ? [\n\tx : 1\n\tinner : s\n]\n";
+	agree("入れ子：仮引数を入れて直に辿る", WRP + "((wrap p) ' inner) ' a");
+	agree("入れ子：仮引数を入れて名前から辿る", WRP + "w : wrap p\n(w ' inner) ' a");
+	agree("入れ子：平らなスロットも無事", WRP + "(wrap p) ' x");
 }
 
 console.log(`\n${passed}/${total} passed`);

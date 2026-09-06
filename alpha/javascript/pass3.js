@@ -1033,6 +1033,23 @@ function structShapeOfNode(node, env, depth = 0) {
     const b = envLookup(env, u.value);
     if (b && b.shape && b.shape.slotKind === "named") return b.shape;
   }
+  // **呼び出しの結果も構造体でありうる。** `f (mk 7)` のように関数の返す器をそのまま
+  // 渡す形は、AST を組む書き方そのものである（`ev (bin 1 (num 3) (num 4))`）。
+  //
+  // 返す形は呼び先の本体が決めているので、そこから引く。ここが無かったので、**名前へ
+  // 一度置けば通るのに直に渡すと通らない**、という非対称になっていた——
+  // `q : mk 7` して `f q` は出るのに `f (mk 7)` は「まだ出せない識別子です（a）」。
+  //
+  // 本体が枝分かれ（match の並び）なら、どの枝も同じ器を返すはずなので最後の枝を見る
+  // ——違う形を返す関数はそもそも1つの型を持たない。
+  if (u.type === "operation" && (u.name === "apply" || u.name === "partial_apply") && env) {
+    let base = u;
+    while (base && base.type === "operation" && (base.name === "apply" || base.name === "partial_apply")) base = base.left;
+    if (isIdentifierNode(base)) {
+      const fb = envLookup(env, base.value);
+      if (fb && fb.returnShape && fb.returnShape.slotKind === "named") return fb.returnShape;
+    }
+  }
   if (u.type === "operation" && u.name === "get_prop") {
     // 器の要素を引いた形。要素はどれも同じ形なので、並びは要素そのものが持っている。
     const bl = u.left;
@@ -2710,6 +2727,31 @@ function collectCallsiteParamTypes(nodes, env) {
     // 決めるのは受け取り方の構文ではなく、**渡ってくるものが構造体かどうか**である。
     // 仮引数が1つだけの裸の形（`f : s ? …`）は `params` ノードにならず、識別子がそのまま
     // 置かれる。**同じ「器を受ける仮引数」なので、ここで形の違いに引っかかってはいけない。**
+    // **返す器の並びを束縛へ置く。** `f (mk 7)` のように関数の返す器をそのまま渡す形は、
+    // AST を組む書き方そのものである（`ev (bin 1 (num 3) (num 4))`）。呼び先の本体が決めた
+    // 並びを引けないと出せない。
+    //
+    // **束縛には `valueNode` が無い**——ラムダは畳む値ではないので Pass 3 が書き戻さない。
+    // だから呼び出しサイトからは本体へ辿り着けず、`q : mk 7` と名前へ一度置けば通るのに
+    // 直に渡すと通らない、という非対称になっていた。ここで一度だけ計算して置いておく。
+    if (rhs.scope) {
+      let rbody = rhs.right;
+      // 枝分かれ（match の並び）なら、どの枝も同じ器を返すはずなので最後の枝を見る。
+      if (rbody && Array.isArray(rbody.lines) && rbody.lines.length > 0 && rbody.atomType !== "Struct") {
+        rbody = rbody.lines[rbody.lines.length - 1];
+      }
+      const ret = structShapeOfNode(rbody, rhs.scope);
+      const fbnd = envLookup(env, node.left.value);
+      // **一度で凍らせてはいけない。** 本体の並びは、仮引数の並びが呼び出しサイトから
+      // 届いた後でなければ**内側が欠けたまま**出る（`wrap : s ? [ x : 1 / inner : s ]`
+      // の `inner` に並びが載らない）。それでも `x` と `inner` の2スロットは在るので
+      // 「名前付きの並び」としては成立してしまい、もっともらしい形が固定される。
+      // 回るたびに測り直し、変わったら不動点をもう一周させる。
+      if (fbnd && ret && ret.slotKind === "named") {
+        const now = JSON.stringify(ret);
+        if (now !== fbnd.returnShapeKey) { fbnd.returnShape = ret; fbnd.returnShapeKey = now; changed = true; }
+      }
+    }
     if (rhs.scope && (paramNode && (paramNode.type === "params" || isIdentifierNode(paramNode)))) {
       const oneBare = isIdentifierNode(paramNode);
       const pents = oneBare ? [{ name: paramNode.value }] : entries;
@@ -2736,18 +2778,37 @@ function collectCallsiteParamTypes(nodes, env) {
           // 渡ってくるのが構造体そのものか、**構造体を要素にする器**かで置く先が変わる。
           // どちらも「中を名前で引くには並びが要る」という同じ話であり、器の場合は
           // 要素の並び——要素はどれも同じ形なので1つで足りる。
+          // **「まだ分からない」と「食い違う」は別である。**
+          //
+          // 再帰する関数は自分自身の呼び出しサイトを持つ——`ev : n ? … ev (n ' left) …` の
+          // `n ' left` の並びは **`n` の並び**が決まらないと出ない。両方を「決まらない」で
+          // 潰すと不動点が動かず、`n` の並びは永久に立たない（AST を畳む書き方はこれである）。
+          //
+          // 決まらないだけの呼び出しサイトは飛ばし、次の周回に任せる。**器でないものを
+          // 渡している**サイトだけが本当の食い違いで、そこは静的に決まらないと言う。
           let lay = null, elay = null, sameL = true, sameE = true;
+          let anyL = false, anyE = false;
           for (const args of sites) {
-            if (args.length <= ai) { sameL = false; sameE = false; break; }
+            if (args.length <= ai) continue;
             const cf = { target: "aarch64_qemu", charset: "ascii", env: args.scope || env };
-            // 呼び出しサイトが1つでも違う並びを渡すなら、静的には決まらない。
-            const l = layoutOfStruct(args[ai], cf);
-            if (!l || l.slotKind !== "named" || (lay && JSON.stringify(lay.slots) !== JSON.stringify(l.slots))) sameL = false;
-            else lay = l;
+            const at = args[ai] && args[ai].atomType;
+            // **並びの引き方は `structShapeOfNode` 1箇所である。** ここで `layoutOfStruct` を
+            // 直に呼んでいたため、リテラルしか引けなかった——`f (mk 7)` のように**関数の返す器を
+            // そのまま渡す**形（AST を組む書き方そのもの）が通らず、`q : mk 7` と名前へ一度
+            // 置けば通る、という非対称になっていた。
+            const l = structShapeOfNode(args[ai], args.scope || env);
+            if (l && l.slotKind === "named") {
+              if (lay && JSON.stringify(lay.slots) !== JSON.stringify(l.slots)) sameL = false;
+              else { lay = l; anyL = true; }
+            } else if (at && !String(at).includes("Struct")) sameL = false;
             const e = elementShapeOfList(args[ai], cf);
-            if (!e || e.slotKind !== "named" || (elay && JSON.stringify(elay.slots) !== JSON.stringify(e.slots))) sameE = false;
-            else elay = e;
+            if (e && e.slotKind === "named") {
+              if (elay && JSON.stringify(elay.slots) !== JSON.stringify(e.slots)) sameE = false;
+              else { elay = e; anyE = true; }
+            } else if (at && !String(at).includes("List") && !String(at).includes("Iterator")) sameE = false;
           }
+          if (!anyL) sameL = false;
+          if (!anyE) sameE = false;
           const bnd = envLookup(rhs.scope, recv.name);
           if (!bnd) return;
           if (sameL && lay) {

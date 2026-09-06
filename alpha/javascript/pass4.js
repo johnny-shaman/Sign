@@ -3914,8 +3914,40 @@ function bindingShapeOf(node, env) {
 function structShapeOf(node, env, conf, depth = 0) {
 	const u = unwrap(node);
 	if (!u || depth > 8) return null;
-	const direct = layoutOfStruct(u, conf) || bindingShapeOf(u, env);
-	if (direct) return direct;
+	// **Pass 3 が決めた並びを先に読む。** `layoutOfStruct` は与えられた `conf.env` で
+	// 名前を引くので、**呼び先の本体をここで起こすと外側のスコープで起こすことになる**
+	// ——`wrap : s ? [ x : 1 / inner : s ]` の `s` は外側に無いので `inner` の内側の並び
+	// だけが黙って落ちる。名前も鍵も揃った「もっともらしい並び」が返るので、`w ' inner`
+	// までは通って `(w ' inner) ' a` で初めて折れていた。
+	//
+	// 同じ問いを2箇所が別々のスコープで答えていた形である。**答えを持っているのは
+	// Pass 3**（呼び出しサイトとラムダのスコープの両方を見ている）なので、ここは引くだけ
+	// にして、起こすのは最後の手段に回す。
+	const bound = bindingShapeOf(u, env);
+	if (bound) return bound;
+	// 名前が式に束縛されているなら、その式へ降りる（`w : wrap p` の `w`）。
+	if (isIdentifierNode(u) && env) {
+		const b = envLookup(env, u.value);
+		const vn = b && b.valueNode ? unwrap(b.valueNode) : null;
+		if (vn && vn !== u) {
+			const via = structShapeOf(vn, env, conf, depth + 1);
+			if (via) return via;
+		}
+	}
+	// **呼び出しの結果も構造体でありうる。** `f (mk 7)` のように関数の返す器をそのまま
+	// 渡す形は、AST を組む書き方そのものである（`ev (bin 1 (num 3) (num 4))`）。返す形は
+	// 呼び先の本体が決めているので、そこから引く——本体が仮引数のことがある（`id : s ? s`）
+	// ので、`layoutOfStruct` を直に当てず**同じ入口を再帰で呼ぶ**。
+	if (u.type === "operation" && (u.name === "apply" || u.name === "partial_apply") && env) {
+		let base = u;
+		while (base && base.type === "operation" && (base.name === "apply" || base.name === "partial_apply")) base = unwrap(base.left);
+		// 返す並びは Pass 3 が束縛へ置いてある（`returnShape`）。**束縛には `valueNode` が
+		// 無い**——ラムダは畳む値ではないので、ここから本体へ辿り着く道は無い。
+		if (isIdentifierNode(base)) {
+			const fb = envLookup(env, base.value);
+			if (fb && fb.returnShape && fb.returnShape.slotKind === "named") return fb.returnShape;
+		}
+	}
 	if (u.type === "operation" && u.name === "get_prop") {
 		// 器の要素を引いた形（`l ' 0`）。要素はどれも同じ形なので、添字が何であれ
 		// 並びは同じ——添字が実行時に決まっても構わない、というのがここの違いである。
@@ -3943,7 +3975,8 @@ function structShapeOf(node, env, conf, depth = 0) {
 		}
 		return (slot && slot.shape) || null;
 	}
-	return null;
+	// 最後にリテラルを起こす。ここまで来たものは束縛にも呼び先にも答えが無い形である。
+	return layoutOfStruct(u, conf) || null;
 }
 
 /**
