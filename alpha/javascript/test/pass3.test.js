@@ -13,6 +13,9 @@ import { preprocess } from "../lexer.js";
 import { reduceAll } from "../pass2.js";
 import { buildEnv } from "../pass1.js";
 import { inferAtomType } from "../pass3.js";
+// 二重定義の検査は Pass 3 の駆動側が内側のブロックまで降りて初めて効くので、
+// そこだけは単一パスではなく実パイプライン（compile）へ通して見る。
+import { compile } from "../compile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const grammarPath = path.join(__dirname, "..", "sign.pegjs");
@@ -188,6 +191,73 @@ checkNoThrow("1 ~+ 2 → Iterator（終端の無い2項形式はPull型ストリ
 checkNoThrow("[1 2] ~ [3 4] → Unit（List は点ではない。停止せず零射へ）", "[1 2] ~ [3 4]", "Unit");
 checkNoThrow("[x : 1] ~ [y : 2] → Unit（Struct も同様）", "[x : 1] ~ [y : 2]", "Unit");
 checkNoThrow("1 ~+ 2 ~ [3 4] → Unit（3項形式の終端も端点）", "1 ~+ 2 ~ [3 4]", "Unit");
+
+// ---- 名前付きスロットの二重定義（原理4） ----
+// 物理配置は名前順で決まるので（stack_abi.md §7.1）、同じ名前が2つあると位置が決まらない。
+// **決めていたのは実装の都合だった**——`[tier : 14 / tier : 24]` を引くと解釈器は 24
+// （後勝ち）、機械語は 14（先勝ち）を返し、診断は1件も出ていなかった。静的に判定できる
+// 違反なので `__` へ落とさず止める。
+//
+// 名前は綴りではなく中身で比べる（`bareKey`）。`foo` と `` `foo` `` は同じスロットである。
+//
+// **見るのは `compile()` である。** `inferAtomType` を1ノードに当てるだけでは外側の
+// ブロックが「全行が `鍵 : 値`」で `Struct` を返して確定し、内側のブロックへ降りない
+// ——降りるのは Pass 3 の駆動側（`compile.js`）だからである。内側の二重定義を見たい
+// のに外側しか見ない試験になっていては意味が無いので、実パイプラインへ通す。
+function checkDuplicateSlot(note, source) {
+	extra++;
+	try {
+		const { nodes } = compile(source, { charset: "ascii" });
+		console.log(`FAIL ${note}`);
+		console.log(`     例外が投げられず ${nodes.length} ノードが返った`);
+	} catch (e) {
+		if (e.reason === "duplicate-slot-name") {
+			console.log(`OK   ${note}`);
+			extraPassed++;
+		} else {
+			console.log(`FAIL ${note}`);
+			console.log(`     別の理由で止まった: ${e.name} / reason=${JSON.stringify(e.reason)} / ${e.message.slice(0, 70)}`);
+		}
+	}
+}
+// 通るべき側も同じ入り口で見る。止まらないことと、構造体として型が付くことの両方。
+function checkStructOk(note, source) {
+	extra++;
+	try {
+		const { nodes } = compile(source, { charset: "ascii" });
+		const last = nodes[nodes.length - 1];
+		if (last) {
+			console.log(`OK   ${note}`);
+			extraPassed++;
+		} else {
+			console.log(`FAIL ${note}`);
+			console.log(`     ノードが返らなかった`);
+		}
+	} catch (e) {
+		console.log(`FAIL ${note}`);
+		console.log(`     止まってはいけないのに止まった: ${e.name} / ${e.message.slice(0, 70)}`);
+	}
+}
+checkDuplicateSlot("同じ名前を2回", "[\ntier : 14\ntier : 24\n]");
+checkDuplicateSlot("識別子と綴りは同じ名前", "[\nfoo : 1\n`foo` : 2\n]");
+checkDuplicateSlot("綴りの鍵を2回", "[\n`*` : 14\n`*` : 24\n]");
+checkDuplicateSlot("3回", "[\nk : 1\nk : 2\nk : 3\n]");
+checkDuplicateSlot("入れ子の内側で2回（括弧）", "[\nb : [\nk : 1\nk : 2\n]\n]");
+checkDuplicateSlot("入れ子の内側で2回（インデント）", "a :\n\tb :\n\t\tk : 1\n\t\tk : 2\na\n");
+checkDuplicateSlot("関数が返す構造体の内側で2回", "f : v ? [\nb : [\nk : 1\nk : 2\n]\nz : v\n]\n(f 1) ' b\n");
+checkDuplicateSlot("省略記法（裸の識別子）で2回", "x : 1\n[\nx\nx\n]");
+// 通るべきもの。
+checkStructOk("名前が違えば通る", "[\ntier : 14\nright : 0\n]");
+checkStructOk("入れ子で外と内が同じ名前は別のスロット", "[\nk : 1\nb : [\nk : 2\n]\n]");
+checkStructOk("別の構造体なら同じ名前でよい", "a : [\nk : 1\n]\nb : [\nk : 2\n]\n(a ' k) + (b ' k)\n");
+// 撒いた行との衝突は**上書き**であって二重定義ではない（`newContainerSlots`
+// 「書いた行には勝てない」）。上書きは撒くことの目的そのものである。
+checkStructOk("撒いた行との衝突は上書き（止めない）", "p : [\nfoo : 1\nbar : 2\n]\n[\nfoo : 9\np~\n]");
+// 連番スロットには名前が無いので、同じ値が並んでもこの規則は関与しない。
+checkStructOk("連番スロットは対象外（名前が無い）", "[1 , 1 , 1]");
+// `match_case` は `条件 : 結果` の形をしているが構造体ではない。同じ条件を2度書いても
+// この規則の対象外である（左辺が識別子でも文字列でもないので `isSlotKeyNode` に外れる）。
+checkStructOk("match_case は対象外", "f : n ?\n\tn = 1 : 10\n\tn = 1 : 20\n\t0\nf 1\n");
 
 console.log(`\n${passed + extraPassed}/${cases.length + extra} passed`);
 process.exit(passed === cases.length && extraPassed === extra ? 0 : 1);

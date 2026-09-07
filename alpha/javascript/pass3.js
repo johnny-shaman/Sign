@@ -546,6 +546,46 @@ function bareKey(v) {
 }
 
 /**
+ * **同じ名前のスロットを2回書くのは二重定義である。**
+ *
+ * 名前付きスロットの物理配置は名前のソート順で決まる（stack_abi.md §7.1）。同じ名前が
+ * 2つあると**その名前の位置が決まらない**——並びは1つしか作れないのに、書いた側は2つの
+ * 値を渡している。どちらを採るかは書かれたものから決まらない。
+ *
+ * 実際、決めていたのは実装の都合だった。`[ tier : 14 / tier : 24 ]` を引くと
+ * **解釈器は 24（後勝ち）、機械語は 14（先勝ち）を返し、診断は1件も出なかった**。
+ * どちらの答えも擁護できるが、2つあること自体が誤りである。
+ *
+ * 静的に判定できる違反なので `__` へは落とさず止める（原理4）。型が合わないこと
+ * ——零射があること——とは別の話であって、ここには射を書く場所が2つある。
+ *
+ * **撒いた行との衝突は対象外である。** `[ foo : 1 / p~ ]` で `p` が `foo` を持って
+ * いても、書いた行が勝つと決まっている（`newContainerSlots`「書いた行には勝てない」）。
+ * 上書きは撒くことの目的そのものであり、二重定義ではない。ここが見るのは、同じブロックに
+ * **書かれた**行どうしだけである。
+ */
+function checkNoDuplicateSlotNames(lines) {
+  const seen = new Set();
+  for (const line of lines || []) {
+    let key = null;
+    if (isDefineNode(line) && isSlotKeyNode(line.left)) key = bareKey(line.left.value);
+    else if (isIdentifierNode(line)) key = bareKey(line.value);
+    if (key === null) continue;
+    if (seen.has(key)) {
+      throw new OperationError(
+        `スロット '${key}' が同じ構造体の中で2回定義されています。` +
+          `名前付きスロットの物理配置は名前順で決まるため（stack_abi.md §7.1）、同じ名前が2つあると` +
+          `その名前の位置が決まりません。どちらの値を採るかは書かれたものからは決まらず、` +
+          `実際に解釈器は後に書いた方・機械語は先に書いた方を返していました。` +
+          `どちらか一方を消すか、名前を分けてください`,
+        { spec: "0_design_principles.md 原理4", reason: "duplicate-slot-name" }
+      );
+    }
+    seen.add(key);
+  }
+}
+
+/**
  * **スロットの名前になれるノード。** 識別子と文字列リテラルである（綴れない名前は
  * 文字列で書く：`` `+` : `add` ``）。interpreter.js の `isSlotKeyNode`、layout.js の
  * 同名、pass4.js の `isSlotKeyAtom` と**同じ基準でなければならない**。
@@ -1368,10 +1408,12 @@ function computeAtomType(node, env) {
       // 同じソースが解釈器では構造体・機械語では match_case になる**（実際そうなった）。
       const explicit = (l) => isDefineNode(l) && isSlotKeyNode(l.left);
       if (node.lines.every(explicit)) {
+        checkNoDuplicateSlotNames(node.lines);
         node.slotKind = "named";
         return "Struct";
       }
       if (node.lines.length >= 2 && node.lines.every((l) => explicit(l) || isIdentifierNode(l))) {
+        checkNoDuplicateSlotNames(node.lines);
         node.slotKind = "named";
         return "Struct";
       }
@@ -1388,6 +1430,8 @@ function computeAtomType(node, env) {
         // 位置で意味は変わらないが、同じものに綴りを2つ用意しないための固定である。
         const si = node.lines.findIndex(isSpreadNode);
         if (si === node.lines.length - 1) {
+          // 撒く行との衝突は上書きであって二重定義ではない。見るのは書いた行どうしだけ。
+          checkNoDuplicateSlotNames(node.lines.slice(0, -1));
           const table = newContainerSlots(node.lines.slice(0, -1), node.lines[si].operand, env);
           if (table) {
             node.slotKind = "named";
