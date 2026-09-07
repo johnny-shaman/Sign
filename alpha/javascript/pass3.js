@@ -3542,6 +3542,7 @@ function annotateTypes(node, env, diagnostics) {
   if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
   if (diagnostics) collectRemovedOperator(node, diagnostics);
   if (diagnostics) collectMorphismAsKey(node, diagnostics);
+  if (diagnostics) collectDynamicSlotKey(node, diagnostics);
   // ブロック・ラムダは pass2 が残した子スコープで中身を歩く（無ければ現在のenv）。
   // これが無いと仮引数やブロック内の定義が「未定義識別子」になってしまう。
   const inner = node.scope || env;
@@ -3567,6 +3568,16 @@ function annotateTypes(node, env, diagnostics) {
   }
   if (node.left) annotateTypes(node.left, node.name === "lambda" ? env : inner, diagnostics);
   if (node.middle) annotateTypes(node.middle, inner, diagnostics); // chain_compare（§4の三項連鎖比較）
+  // **`'` の鍵に立つ `名前~` は範囲ではない。** 鍵が実行時に決まる引き方（`obj ' k~`）は
+  // 後置 `~` の空きを借りて綴られており、節点としては `range_arithmetic(k, 1)` になる。
+  // 範囲として読むと端点が String なので「端点になれないため `__` に収束します」と
+  // 名指しされるが、**この形は実機で正しく動く**（`.rodata` の名前表を線形に探す）。
+  // 正しいコードについて診断が嘘をついていた。
+  //
+  // 抑止しても切り出し（`s ' 1~`）は失わない。あちらは端点が数値なので、そもそもこの
+  // 診断の条件（端点が点でない）に当たらない。`'` の鍵に立つ非数値の `~` は
+  // **実行時の鍵しかない**——だからここで落として構わない。
+  if (node.name === "get_prop" && node.right && node.right.type === "operation") node.right.isSlotKeyIndex = true;
   if (node.right) annotateTypes(node.right, inner, diagnostics);
   if (node.operand) annotateTypes(node.operand, inner, diagnostics);
   if (node.type === "block" && Array.isArray(node.lines)) {
@@ -3679,6 +3690,58 @@ function collectMorphismAsKey(node, diagnostics) {
   });
 }
 
+/**
+ * **鍵を実行時に決めて構造体を作る形は、まだ出せない（保留であって禁止ではない）。**
+ *
+ * `collectMorphismAsKey` の対である。あちらは読む側（`x ' 鍵`）の鍵が壊れている話で、
+ * こちらは**書く側**（`[ 鍵 : 値 ]`）の鍵が実行時に決まる話である。
+ *
+ * ```sign
+ * f : [~k] v ? [k~ : v]     ` k の中身を名前にした構造体を返したい
+ * ```
+ *
+ * 綴りは揃っている。`[~k]` は仮引数を場所として受け取る形（§2 の `Implicit`——カッコ
+ * そのものが参照を取る）で、`k~` は読む側の `obj ' k~` と同じ「名前ではなく中身」の印で
+ * ある。節点も正しく作られる（`define(expand[postfix](k), v)`）。**足りないのは
+ * `isSlotKeyNode` がこの形を鍵として認めないこと**だけで、そのため器は
+ * `slotKind: "named"` にならず、構造体ですらなくなる。
+ *
+ * **なぜ今は出さないのか。** 名前付きスロットの物理配置は名前のソート順で決まる
+ * （`stack_abi.md` §7.1）。名前が実行時に決まると並べ替えの鍵がコンパイル時に無いので、
+ * `{name_ptr, len, offset}` の表を実行時に組む必要がある——読む側の `genNameSearch` が
+ * `.rodata` に置いているのと同じ表を、書ける場所に持つということである。
+ *
+ * **層の問題ではない。** 表の大きさはスロット数で決まり、スロット数は静的である（リテラルに
+ * 書いた数）。名前は既にある文字列を指すだけなので、確保も計算器も増えない
+ * （`layer_relations.md` §1 の要求は確保と計算器の2つだけ）。
+ *
+ * **`layer_relations.md` §3.3.1 の「鍵が増える形は層に関わらず禁じる」とは別である。**
+ * あちらは**既にある器の型を変える**話——`p~ [ baz : 9 ]~` は `p` の語彙を増やすので、
+ * プログラムが自分の語彙を実行時に増やせないという規則に当たる（実際
+ * 「マージで鍵は増やせません」で止まる）。こちらは**新しい器を作る**だけで、既存の何かの
+ * 型は変わらない。新しい器の名前が実行時の値である、という点だけが残る。
+ *
+ * だから禁止ではなく保留である。`level` を error にしないのはそのためで、書けば `__` に
+ * なることを名指しする。
+ */
+function collectDynamicSlotKey(node, diagnostics) {
+  if (!node || node.type !== "operation" || node.name !== "define") return;
+  const k = node.left;
+  if (!k || k.type !== "operation" || k.name !== "expand" || k.position !== "postfix") return;
+  diagnostics.push({
+    level: "warning",
+    reason: "dynamic-slot-key",
+    spec: "layer_relations.md §3.3.1 / stack_abi.md §7.1",
+    message:
+      `鍵を実行時に決めて構造体を作る形（'${node.op}' の左辺が「名前~」）はまだ出せません。` +
+      `名前付きスロットの並びは名前のソート順で決まるため、名前が実行時に決まると ` +
+      `{name_ptr, len, offset} の表を実行時に組む必要があります——読む側（obj ' k~）は同じ表を ` +
+      `.rodata に持っていて既に動きます。書く側は保留であって禁止ではありません` +
+      `（新しい器を作るだけで既存の型は変わらないので、§3.3.1 の「鍵が増えるマージ」とは別件です）。` +
+      `いまは鍵を静的に書いてください`,
+  });
+}
+
 function collectRemovedOperator(node, diagnostics) {
   if (!node || node.type !== "operation" || node.name !== "same") return;
   diagnostics.push({
@@ -3737,7 +3800,8 @@ function collectUnitReason(node, env, diagnostics) {
   if (node.atomType !== "Unit") return;
 
   // 範囲族（§4）: 端点が「点」でない（List / Struct）ため零射へ落ちた場合。
-  if (node.name === "range" || RANGE_STEP_OPS.has(node.name)) {
+  // `'` の鍵に立つものは範囲ではない（`annotateTypes` の `isSlotKeyIndex` の注記）。
+  if ((node.name === "range" || RANGE_STEP_OPS.has(node.name)) && !node.isSlotKeyIndex) {
     const bad = badRangeEndpoint(node, env);
     if (bad) {
       diagnostics.push({
