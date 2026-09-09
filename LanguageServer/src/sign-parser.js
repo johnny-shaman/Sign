@@ -134,6 +134,8 @@ peg$SyntaxError.buildMessage = function(expected, found) {
 };
 
 function peg$parse(input, options) {
+  var peg$exprDepth = 0;
+  var peg$EXPR_DEPTH_LIMIT = 500;
   options = options !== void 0 ? options : {};
 
   var peg$FAILED = {},
@@ -2284,7 +2286,13 @@ function peg$parse(input, options) {
     if (s1 !== peg$FAILED) {
       s2 = peg$parse_();
       if (s2 !== peg$FAILED) {
+        if (++peg$exprDepth > peg$EXPR_DEPTH_LIMIT) {
+          peg$exprDepth--;
+          peg$currPos = s0;
+          return peg$FAILED;
+        }
         s3 = peg$parseExpression();
+        peg$exprDepth--;
         if (s3 !== peg$FAILED) {
           s4 = peg$parse_();
           if (s4 !== peg$FAILED) {
