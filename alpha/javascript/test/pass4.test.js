@@ -1141,5 +1141,30 @@ const anonRefs = (t) => (t.match(/\.quad \.Lanon\d+/g) || []).map((x) => x.slice
 	checkTrue("入れ子：2^63 は置ける（境界）", anonLabels(edge.text).length === 1, anonLabels(edge.text).join(","));
 }
 
+// ---- 幅のニーモニックを、表を経由せずに釘で留める ----
+//
+// **表から期待値を引いてはいけない場所である。** ロード・ストアの綴りは
+// `operator_table.js` の `asm` 欄（前置 `@` と中置 `#`）へ移したので、pass4 はそこから
+// 取る——検査も同じ表から取ると、表が嘘をついたときに期待値まで一緒に動いて緑になる
+// （2 byte のロードが 4 byte を読む誤コンパイルが素通りした。実測）。
+//
+// 値に出る嘘（条件コードの取り違え）は qemu の突き合わせが捕まえるが、**幅の嘘は値に
+// 出ない**——同じ番地から多く読むだけなので、小さな入力では答えが変わらない。だから
+// ここだけは綴りを直に書く。表を直すときは、この釘も一緒に動かすことになる。
+{
+	const wr = (n, v) => body(`f : a ? ${n}x9000000 # ${v}
+f 1`, "f") || [];
+	const rd = (n) => body(`f : a ? @${n}x9000000
+f 1`, "f") || [];
+	for (const [n, v, ins] of [[1, "0x4b", "strb w10, [x9]"], [2, "0x4b4c", "strh w10, [x9]"], [4, "0x4b4c4d4e", "str w10, [x9]"], [8, "0x4b", "str x10, [x9]"]]) {
+		const ls = wr(n, v);
+		checkTrue(n + " byte 書きは " + ins, ls.some((l) => l === ins), ls.join(" / "));
+	}
+	for (const [n, ins] of [[1, "ldrb w9, [x9]"], [2, "ldrh w9, [x9]"], [4, "ldr w9, [x9]"], [8, "ldr x9, [x9]"]]) {
+		const ls = rd(n);
+		checkTrue(n + " byte 読みは " + ins, ls.some((l) => l === ins), ls.join(" / "));
+	}
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

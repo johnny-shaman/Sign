@@ -14,10 +14,26 @@
 `持つ綴りと持たない綴りが分かれるものは所属の問いなので、下の集合で持つ`
 `無い側はそもそも記述しない。引けば __ が返り、それが唯一の偽である`
 
-`命令の表（asm_infix）は AArch64 のニーモニックの綴りを持つ。アセンブリは文字列の連結で`
+`命令の表（asm_…）は AArch64 のニーモニックの綴りを持つ。アセンブリは文字列の連結で`
 `吐くので、要るのは綴りだけで符号化の表は要らない——そこはアセンブラの仕事である`
-`form が alu なら3オペランドの命令、cond なら cmp に付く条件コードである`
+`form が alu なら3オペランドの命令、cond なら cmp に付く条件コード、mem なら番地を持つ`
+`命令、adr なら番地を作る命令である`
 `——綴りを見ても置き場所は分からないので表が言う。算術は A × A から A へ、比較は Ω へ戻る`
+
+`表は 位置 と 軸 で分かれている（asm_prefix_width など）。軸はその綴りが何で分かれるか`
+`——符号（signed）・幅（width）・場所（place）——であり、同時に欄の名前を決める`
+`どの行も同じ欄を持てるのは、同じ軸のものだけを同じ表に置いたからである`
+
+`shape の表は form に 列の名前 を持つ。1つの綴りでは名前が付かないものである`
+`値を直に置くと裸の String になり、実行時の鍵では引けない——参照で運ぶスロットだからである`
+`もの（否定・持ち上げ・短絡・写しループ・構築・規則の3つ組・要素読み・数える）がここに居る`
+`行が在ることはその綴りに機械の意味が在るという言明であり、実際に出る命令の並びは`
+`.js 側の行のコメントが持つ`
+`列の中身を表へ入れてはいけない。それはバックエンドそのものであって、表ではない`
+
+`命令にならない綴りの名簿（まだ出せない／そもそも命令でない）は .js 側にしかない`
+`引く側に要るのは 引けたか だけで、理由は実装する人への帳簿だからである`
+`両方に置くと同じ事実が2箇所で決まる`
 
 `鍵は機械のクラス（gpr）と符号であって、層ではない。層は fp・simd という名前が既に言っている`
 `Int は符号あり、Address と Char は符号なし。番地を符号ありで比べると、上位ビットの立った`
@@ -241,9 +257,45 @@
 		tier : 26
 		name : `norm`
 
-`--- infix の命令 ---`
+`--- infix の命令（width） ---`
 
-#asm_infix :
+#asm_infix_width :
+	`#` :
+		form : `mem`
+		gpr_w1 : `strb`
+		gpr_w2 : `strh`
+		gpr_w4 : `str`
+		gpr_w8 : `str`
+
+`--- infix の命令（shape） ---`
+
+#asm_infix_shape :
+	`|` :
+		form : `short_circuit`
+	`&` :
+		form : `short_circuit`
+	`,` :
+		form : `build`
+	` ` :
+		form : `apply_or_build`
+	`~` :
+		form : `range_triple`
+	`~+` :
+		form : `range_triple`
+	`'` :
+		form : `index_guard`
+
+`--- infix の命令（signed） ---`
+
+#asm_infix_signed :
+	`==` :
+		form : `cond`
+		gpr_signed : `eq`
+		gpr_unsigned : `eq`
+	`!==` :
+		form : `cond`
+		gpr_signed : `ne`
+		gpr_unsigned : `ne`
 	`<` :
 		form : `cond`
 		gpr_signed : `lt`
@@ -284,6 +336,45 @@
 		form : `alu`
 		gpr_signed : `sdiv`
 		gpr_unsigned : `udiv`
+
+`--- prefix の命令（shape） ---`
+
+#asm_prefix_shape :
+	`~` :
+		form : `lift_to_container`
+	`!` :
+		form : `is_unit_select`
+
+`--- prefix の命令（place） ---`
+
+#asm_prefix_place :
+	`$` :
+		form : `adr`
+		gpr_frame : `add`
+		gpr_static_page : `adrp`
+		gpr_static_off : `add`
+
+`--- prefix の命令（width） ---`
+
+#asm_prefix_width :
+	`@` :
+		form : `mem`
+		gpr_w1 : `ldrb`
+		gpr_w2 : `ldrh`
+		gpr_w4 : `ldr`
+		gpr_w8 : `ldr`
+
+`--- postfix の命令（shape） ---`
+
+#asm_postfix_shape :
+	`~` :
+		form : `copy_loop`
+
+`--- enclosure の命令（shape） ---`
+
+#asm_enclosure_shape :
+	`||...||` :
+		form : `count`
 
 `--- 曖昧でない中置：前後に空白を入れてよいもの ---`
 `前置・後置・囲みにもなる綴りは入っていない`

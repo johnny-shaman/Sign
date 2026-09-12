@@ -5520,7 +5520,10 @@ function genScalarStructCompare(node, env, em, scope) {
 	em.load(SCRATCH[1], ro);
 	em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, "構造比較（左辺優先ルールは無い）");
 	em.emit("movz x12, #0x8000, lsl #48", "偽は __");
-	em.emit(`csel ${SCRATCH[0]}, ${SCRATCH[0]}, x12, ${node.name === "equal" ? "eq" : "ne"}`, "真なら左辺");
+	// 条件コードは表が言う（段8 の `==`/`!==` は `eq`/`ne`）。等価は2の補数で符号に依らない
+	// ので両側に同じ綴りが置いてあり、ここに分岐は要らない——引き方は段13 の比較と同じである。
+	const cond = asmOf(node.name).gpr[unsignedCompare(node, em.conf, env) ? "unsigned" : "signed"];
+	em.emit(`csel ${SCRATCH[0]}, ${SCRATCH[0]}, x12, ${cond}`, "真なら左辺");
 	em.pop(2);
 	const o = em.push();
 	if (o === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
@@ -5837,9 +5840,31 @@ function genMatch(node, env, em, scope, tail = false) {
  * **判定の仕方は幅で違う。** `emitUnit` の裏返しである——1本ならレジスタ上の niche と
  * 比べ、2本なら `len` が 0 かを見る（空文字列・空リストが `__` そのもの、unit.md）。
  */
-// 要素1つを位置つきで読むニーモニック。幅は `charset` が決める（`String ≅ List(Char)`）。
-// 符号なしなので `ldrb`/`ldrh` はゼロ拡張で足りる（Char は unsigned、target_info.js）。
-// 要素1つを位置つきで書く。幅は要素型が決める。
+// **幅からニーモニックへの梯子は、機械の事実が1つあるだけである。**
+//
+// AArch64 の素のロード／ストアは幅で綴りが変わる（`ldrb`/`ldrh`/`ldr`）。この事実は表の
+// 前置 `@`（input）と中置 `#`（output）の行が `axis: 'width'` として持っている——`gpr_w1`
+// から `gpr_w8` の4欄がそれである。同じ梯子がこのファイルに4本（`loadAt`/`storeAt`/
+// `loadElem`/`storeElem`）書かれていたので、表を引く1本へ寄せる。
+//
+// **番地の付け方は引く側のものである。** 素の `[base]` か、添字つきの `[base, idx, lsl #n]`
+// か、ずれつきの `[base, #off]` かは呼ぶ場所が決める——機械の側では同じ命令の同じ綴りで、
+// 分かれるのは幅だけである。要素1つを位置つきで読み書きする道（`'`・構築・比較が使う）も
+// 同じ行を引く。幅を言うのは、番地なら `NxHHHH` の `N`、要素なら `charset`（`String ≅
+// List(Char)`）か要素型である。
+//
+// **符号拡張つきのロード（`ldrsb`/`ldrsh`）はここに無い。** 今日出しているのは零拡張だけで
+// 足りている（`Char` は符号なし、target_info.js）。要る日に足すのは幅の欄の値ではなく
+// **符号の軸**である——幅と符号は別の軸で、掛け合わせになる。
+//
+// 1/2/4 以外は語幅で出る（`w8` の欄）。参照で運ぶ要素（16 byte）もここへ来るが、呼ぶ側が
+// 2回に分けて渡してくるので、1回ぶんは語幅である。
+const memNarrow = (size) => size === 1 || size === 2 || size === 4;
+function memMnemonic(name, size) {
+	const gpr = asmOf(name).gpr;
+	return gpr[`w${size}`] || gpr.w8;
+}
+
 /**
  * 器の k 番目へ書く。
  *
@@ -5848,23 +5873,21 @@ function genMatch(node, env, em, scope, tail = false) {
  * `offset` の道は、落ちる要素が1つも無いと分かっているときだけ通る。
  */
 function storeElem(src, base, offset, size, byteReg = null) {
-	const reg = size >= 8 ? src.replace(/^x/, "x") : src.replace(/^x/, "w");
+	const reg = memNarrow(size) ? src.replace(/^x/, "w") : src;
 	const at = byteReg ? `[${base}, ${byteReg}]` : `[${base}, #${offset}]`;
-	if (size === 1) return `strb ${reg}, ${at}`;
-	if (size === 2) return `strh ${reg}, ${at}`;
-	if (size === 4) return `str ${reg}, ${at}`;
-	return `str ${src}, ${at}`;
+	return `${memMnemonic("output", size)} ${reg}, ${at}`;
 }
 
 function loadElem(dst, base, idx, size) {
-	if (size === 1) return `ldrb ${dst}, [${base}, ${idx}]`;
-	if (size === 2) return `ldrh ${dst}, [${base}, ${idx}, lsl #1]`;
-	if (size === 4) return `ldr ${dst}, [${base}, ${idx}, lsl #2]`;
+	// 刻みは幅の対数である（1 byte なら `lsl` そのものが出ない）。
+	const shift = size === 1 ? 0 : size === 2 ? 1 : size === 4 ? 2 : 3;
+	const at = `[${base}, ${idx}${shift ? `, lsl #${shift}` : ""}]`;
 	// **8 byte は 64 ビットのレジスタで読む。** `w` のままだと上半分が落ち、しかも
 	// ストライドが 4 になるので隣の要素を跨いで読む。ここが 4 byte で頭打ちだったのは、
 	// これまで通っていたのが `String` の1 byte 要素と規則（算術で引くのでロードしない）
 	// だけだったからで、`List(Int)` を実際に引くまで表に出なかった。
-	return `ldr ${dst.replace(/^w/, "x")}, [${base}, ${idx}, lsl #3]`;
+	const reg = memNarrow(size) ? dst : dst.replace(/^w/, "x");
+	return `${memMnemonic("input", size)} ${reg}, ${at}`;
 }
 
 // 幅ぶんのロード／ストア。`layer: 0` は volatile だが、Pass 4 は並べ替えも削除もしないので
@@ -5953,17 +5976,14 @@ function emitImm(em, reg, value, comment) {
 	em.emit(`movz ${reg}, #0x${c0.toString(16)}${lsl(s0)}`, comment);
 	for (const [s, c] of zeros.slice(1)) em.emit(`movk ${reg}, #0x${c.toString(16)}${lsl(s)}`);
 }
+// 前置 `@` と中置 `#` そのもの（番地1つ、添字なし）。幅の欄を引くのは上の梯子と同じである。
 function loadAt(dst, base, size) {
-	if (size === 1) return `ldrb ${dst.replace("x", "w")}, [${base}]`;
-	if (size === 2) return `ldrh ${dst.replace("x", "w")}, [${base}]`;
-	if (size === 4) return `ldr ${dst.replace("x", "w")}, [${base}]`;
-	return `ldr ${dst}, [${base}]`;
+	const reg = memNarrow(size) ? dst.replace("x", "w") : dst;
+	return `${memMnemonic("input", size)} ${reg}, [${base}]`;
 }
 function storeAt(src, base, size) {
-	if (size === 1) return `strb ${src.replace("x", "w")}, [${base}]`;
-	if (size === 2) return `strh ${src.replace("x", "w")}, [${base}]`;
-	if (size === 4) return `str ${src.replace("x", "w")}, [${base}]`;
-	return `str ${src}, [${base}]`;
+	const reg = memNarrow(size) ? src.replace("x", "w") : src;
+	return `${memMnemonic("output", size)} ${reg}, [${base}]`;
 }
 
 // 型が言う幅（決まらなければ GPR 幅）。
@@ -5971,9 +5991,13 @@ function storeAt(src, base, size) {
  * **その番地が宣言している幅**（value_representation.md §5）。
  *
  * `NxHHHH` の `N` がその番地に居るものの幅である（`x` は byte、`u` は bit。正規化は
- * `literalParts` が済ませている）。宣言していなければ `null` を返し、呼ぶ側は今まで通り
- * 型から決める——`0x… # \\a` が 1 byte 書くのは値が `Char` だからであって、そこを
- * 「言っていないから語幅」にすると後退する。**言ってあるときだけ効かせる。**
+ * `literalParts` が済ませている）。宣言していなければ `null` を返し、呼ぶ側は型から決める。
+ *
+ * **実測すると、そこは必ず語幅（8）になる。** `widthOfType` が引くのは
+ * `reduceToMachineType().size` で、`Char` も `Int` も gpr クラスの 8 だからである
+ * （target_info.js の `WIDTH_CLASS`）——`0x… # \\a` は 1 byte ではなく 8 byte を書き、
+ * `1x… # \\a` と書いたときだけ `strb` が出る。**幅を言うのは番地であって値の型ではない。**
+ * 表の幅の欄（`@`/`#` の `gpr_w*`）も同じ読み方をする——宣言された `N`、無ければ `w8`。
  *
  * 機械にその幅の命令が無いもの（`3x`、割り切れない `12u`）は `NaN` で返る。呼ぶ側が
  * 名指しで断る——分からないものを既定へ倒さない（原理4）。
