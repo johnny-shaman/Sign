@@ -3,6 +3,46 @@
  * documents/ja-jp/impl/syntax/operator_table.js から移植（正式仕様、変更なし）
  */
 
+/**
+ * ## `asm` 欄——1つの表が両方のバックエンドを養う
+ *
+ * pass4（JS）と、これから書く Sign 側のバックエンドは同じ問いを持つ：この演算子はどの
+ * 命令で出るのか。答えを2箇所に書けば必ず片方だけ直る。だから**表が持つ**。
+ *
+ * Sign 側はアセンブリを文字列の連結で吐くので、ここに要るのは**ニーモニックの綴り**だけ
+ * である。符号化の表は要らない——それはアセンブラの仕事である。
+ *
+ * ### 鍵は機械のクラスと符号であって、層ではない
+ *
+ * `gpr` / `fp` / `simd` は機械のクラスであり、**層はその名前が既に言っている**
+ * （`fp` は層2、`simd` は層3）。層の欄を足すと同じ事実が2箇所で決まるので置かない。
+ *
+ * 符号はそのクラスの**中で**分かれる。`Int` は符号あり、`Address` と `Char` は符号なしで、
+ * どちらで出すかはオペランドの型が決める（`SIGNEDNESS`、target_info.js）。符号を型の側
+ * だけに持たせて命令を1本にすると、番地の比較が黙って間違う——上位ビットの立った番地
+ * （カーネル空間の `0xFFFF…`）を符号ありで比べると負の数として扱われ、低位の番地より
+ * 小さいと判定される。OS を書く言語でそこは踏む。
+ *
+ * ### `+` `-` `*` が同じ綴りを2度持つ理由
+ *
+ * 2の補数では符号あり・符号なしで同じ命令になる（等価比較の `eq`/`ne` も同じ）。
+ * **それでも2度書く**——「分かれるもの」と「分かれないもの」を別の形にすると、引く側が
+ * 毎回どちらの形かを判定しなければならず、分岐が1つ増える。同じ形で2度書けば、引く側は
+ * 符号を決めて引くだけで済む。
+ *
+ * ### `form`——綴りだけでは置き場所が分からない
+ *
+ * `sdiv` は3オペランドの命令として書かれ、`lt` は `cmp`/`ccmp`/`csel` に付く条件コード
+ * である。綴りを見ても区別は付かないので表が言う。これは演算子の型の影である——算術は
+ * `A × A → A` で返る先が同じ対象、比較は `A × A → Ω` で別の対象である（pass4 の完全性
+ * 公理の注記がこの違いを述べている）。
+ *
+ * ### 載っているのは今出せるものだけ
+ *
+ * `%`（mod）も `^`（pow）も表には在るが `asm` を持たない。**無いことがそのまま「まだ
+ * 出せない」である**——引けば `__` が返り、`__` は唯一の偽である。出せないものに綴りを
+ * 書くと表が嘘をつく。
+ */
 export const OPERATOR_BY_PRECEDENCE = [
   { // 1
     '\\n': { position: 'infix', name: 'newline' },
@@ -76,20 +116,27 @@ export const OPERATOR_BY_PRECEDENCE = [
     '~^': { position: 'infix', name: 'range_power' },
   },
   { // 13
-    '<': { position: 'infix', name: 'less' },
-    '<=': { position: 'infix', name: 'less_equal' },
-    '=': { position: 'infix', name: 'assign_equal' },
-    '>=': { position: 'infix', name: 'more_equal' },
-    '>': { position: 'infix', name: 'more' },
-    '!=': { position: 'infix', name: 'not_equal' },
+    // `asm` は条件コード（`form: 'cond'`）——`cmp` の後に `csel`/`ccmp` へ付く。
+    // 大小は符号で変わり（符号あり `lt`/`le`/`ge`/`gt`、符号なし `lo`/`ls`/`hs`/`hi`）、
+    // 等価は符号に依らないので `eq`/`ne` が両側に同じ綴りで立つ。
+    '<': { position: 'infix', name: 'less', asm: { form: 'cond', gpr: { signed: 'lt', unsigned: 'lo' } } },
+    '<=': { position: 'infix', name: 'less_equal', asm: { form: 'cond', gpr: { signed: 'le', unsigned: 'ls' } } },
+    '=': { position: 'infix', name: 'assign_equal', asm: { form: 'cond', gpr: { signed: 'eq', unsigned: 'eq' } } },
+    '>=': { position: 'infix', name: 'more_equal', asm: { form: 'cond', gpr: { signed: 'ge', unsigned: 'hs' } } },
+    '>': { position: 'infix', name: 'more', asm: { form: 'cond', gpr: { signed: 'gt', unsigned: 'hi' } } },
+    '!=': { position: 'infix', name: 'not_equal', asm: { form: 'cond', gpr: { signed: 'ne', unsigned: 'ne' } } },
   },
   { // 14
-    '+': { position: 'infix', name: 'add' },
-    '-': { position: 'infix', name: 'sub' },
+    // 加減算は2の補数で符号あり・符号なしが同じ命令になる。それでも両側に書く（冒頭の注記）。
+    '+': { position: 'infix', name: 'add', asm: { form: 'alu', gpr: { signed: 'add', unsigned: 'add' } } },
+    '-': { position: 'infix', name: 'sub', asm: { form: 'alu', gpr: { signed: 'sub', unsigned: 'sub' } } },
   },
   { // 15
-    '*': { position: 'infix', name: 'mul' },
-    '/': { position: 'infix', name: 'div' },
+    '*': { position: 'infix', name: 'mul', asm: { form: 'alu', gpr: { signed: 'mul', unsigned: 'mul' } } },
+    // **除算だけは命令そのものが分かれる。** 商の丈が違うので `sdiv`/`udiv` は別の命令である。
+    '/': { position: 'infix', name: 'div', asm: { form: 'alu', gpr: { signed: 'sdiv', unsigned: 'udiv' } } },
+    // `%`（mod）に `asm` が無いのは、まだ出せないからである（AArch64 に剰余の命令は無く、
+    // `sdiv` + `msub` の2命令に開く必要がある）。無いことが「出せない」を意味する。
     '%': { position: 'infix', name: 'mod' },
   },
   { // 16
@@ -176,6 +223,38 @@ for (let prec = 0; prec < OPERATOR_BY_PRECEDENCE.length; prec++) {
       ...opsAtPrec[symbol]
     });
   }
+}
+
+// **演算子の名前から AArch64 の命令を引く索引。**
+//
+// 表の鍵は綴りだが、pass4 が節から持っているのは `name` である（連鎖比較に至っては
+// `compareName` しか無く、綴りは持っていない）。Sign 側の表は綴りを鍵にする——**手に在る
+// ものが違うだけで、引く表は1つである**。
+//
+// 名前を鍵にできるのは、この表が名前の衝突を1度解いてあるからである（段8 の `!==` が
+// 段13 の `!=` と同じ `not_equal` を名乗っていた——上の注記）。衝突が戻ってくると索引は
+// 黙って片方で上書きされるので、ここで止める。
+const ASM_BY_NAME = {};
+for (const tier of OPERATOR_BY_PRECEDENCE) {
+  for (const symbol in tier) {
+    const def = tier[symbol];
+    if (!def.asm) continue;
+    if (ASM_BY_NAME[def.name]) {
+      throw new Error(`演算子の名前が衝突しています（${def.name}）——命令を名前で引けません`);
+    }
+    ASM_BY_NAME[def.name] = def.asm;
+  }
+}
+
+/**
+ * その演算子が出る命令。**表を引く唯一の口である**（冒頭の `asm` 欄の注記）。
+ *
+ * 返るのは `{ form, gpr: { signed, unsigned } }`。引けなければ `undefined` で、それは
+ * **まだ出せない**という意味である——演算子でない、という意味ではない（それは表そのものを
+ * 引けないことが言う）。呼ぶ側はそのまま門に使える。
+ */
+export function asmOf(name) {
+  return ASM_BY_NAME[name];
 }
 
 export function getStrictInfixOperators() {

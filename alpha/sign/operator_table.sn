@@ -14,6 +14,17 @@
 `持つ綴りと持たない綴りが分かれるものは所属の問いなので、下の集合で持つ`
 `無い側はそもそも記述しない。引けば __ が返り、それが唯一の偽である`
 
+`命令の表（asm_infix）は AArch64 のニーモニックの綴りを持つ。アセンブリは文字列の連結で`
+`吐くので、要るのは綴りだけで符号化の表は要らない——そこはアセンブラの仕事である`
+`form が alu なら3オペランドの命令、cond なら cmp に付く条件コードである`
+`——綴りを見ても置き場所は分からないので表が言う。算術は A × A から A へ、比較は Ω へ戻る`
+
+`鍵は機械のクラス（gpr）と符号であって、層ではない。層は fp・simd という名前が既に言っている`
+`Int は符号あり、Address と Char は符号なし。番地を符号ありで比べると、上位ビットの立った`
+`番地——カーネル空間の 0xFFFF… ——が負の数になり、低位の番地より小さいと判定される`
+`加減乗と等価比較は2の補数で符号に依らないが、それでも同じ綴りを両側に書く`
+`——分かれるものと分かれないもので形を変えると、引く側に分岐が1つ増える`
+
 `廃止された綴りは載せていない。この表に在ることが「演算子である」という言明そのものなので、`
 `引けば __ が返り、それが「演算子でない」になる。廃止の印を別に持つと同じ事実が2箇所で決まる`
 `どこで切るかという字句の問いは別で、それは下の 曖昧でない中置 が持っている。ただし割れても`
@@ -229,6 +240,50 @@
 	`||...||` :
 		tier : 26
 		name : `norm`
+
+`--- infix の命令 ---`
+
+#asm_infix :
+	`<` :
+		form : `cond`
+		gpr_signed : `lt`
+		gpr_unsigned : `lo`
+	`<=` :
+		form : `cond`
+		gpr_signed : `le`
+		gpr_unsigned : `ls`
+	`=` :
+		form : `cond`
+		gpr_signed : `eq`
+		gpr_unsigned : `eq`
+	`>=` :
+		form : `cond`
+		gpr_signed : `ge`
+		gpr_unsigned : `hs`
+	`>` :
+		form : `cond`
+		gpr_signed : `gt`
+		gpr_unsigned : `hi`
+	`!=` :
+		form : `cond`
+		gpr_signed : `ne`
+		gpr_unsigned : `ne`
+	`+` :
+		form : `alu`
+		gpr_signed : `add`
+		gpr_unsigned : `add`
+	`-` :
+		form : `alu`
+		gpr_signed : `sub`
+		gpr_unsigned : `sub`
+	`*` :
+		form : `alu`
+		gpr_signed : `mul`
+		gpr_unsigned : `mul`
+	`/` :
+		form : `alu`
+		gpr_signed : `sdiv`
+		gpr_unsigned : `udiv`
 
 `--- 曖昧でない中置：前後に空白を入れてよいもの ---`
 `前置・後置・囲みにもなる綴りは入っていない`

@@ -40,6 +40,7 @@ import { envLookup } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
 import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
+import { asmOf } from "./operator_table.js";
 
 // AAPCS64（stack_abi.md §4.2）。引数は x0〜x7、返値は x0、一時は x9〜x15。
 const ARG_REGS = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"];
@@ -94,25 +95,36 @@ function assignArgSlots(widths) {
 	return { slots, stackBytes: Math.ceil(stack / 16) * 16 };
 }
 
-// 演算子名 → ニーモニック。**除算と比較だけは符号で分かれる**ので、型の
-// `SIGNEDNESS`（target_info.js）を見て選ぶ——`Int` は符号あり、`Address` と `Char` は
-// 符号なしである。`add`/`sub`/`mul` は2の補数で同じ命令になるので分かれない。
-const INT_OPS = { add: "add", sub: "sub", mul: "mul", div: "sdiv" };
-const DIV_FOR = { signed: "sdiv", unsigned: "udiv" };
-
-// 比較の条件コード。`assign_equal` は `=`（等価比較）である——`:` が定義なので `=` は
-// 比較に使える。
+// 演算子名 → ニーモニック。**表が持つ**（operator_table.js の `asm` 欄、`asmOf`）。
 //
-// **大小は符号で条件が変わる。** `Int` は符号あり（`lt`/`le`/`ge`/`gt`）、`Address` と
-// `Char` は符号なし（`lo`/`ls`/`hs`/`hi`）である。番地を符号ありで比べると、**上位ビット
-// の立った番地**——カーネル空間の `0xFFFF…`——が負の数として扱われ、低位の番地より小さいと
-// 判定される。OS を書く言語でそれは踏む。等価（`eq`/`ne`）は符号に依らない。
-const CMP_COND = { less: "lt", less_equal: "le", assign_equal: "eq", more_equal: "ge", more: "gt", not_equal: "ne" };
-const CMP_COND_UNSIGNED = { less: "lo", less_equal: "ls", assign_equal: "eq", more_equal: "hs", more: "hi", not_equal: "ne" };
+// ここには `INT_OPS` / `DIV_FOR` / `CMP_COND` / `CMP_COND_UNSIGNED` の4本の手写しが在った。
+// pass4 と、これから書く Sign 側のバックエンドは**同じ問い**を持つ——この演算子はどの命令で
+// 出るのか——ので、答えを2箇所に書けば必ず片方だけ直る。表が答える。
+//
+// **符号で引き分けるのはここである。** `Int` は符号あり、`Address` と `Char` は符号なしで
+// （`SIGNEDNESS`、target_info.js）、除算は命令そのものが分かれ（`sdiv`/`udiv`）、大小の
+// 比較は条件コードが分かれる（`lt`/`lo` など）。番地を符号ありで比べると、**上位ビットの
+// 立った番地**——カーネル空間の `0xFFFF…`——が負の数として扱われ、低位の番地より小さいと
+// 判定される。OS を書く言語でそれは踏む。加減乗と等価（`eq`/`ne`）は2の補数で符号に依らない
+// が、表は**同じ綴りを両側に置いている**ので、ここに「分かれるものだけ特別扱い」の分岐は無い。
+//
+// `form` は綴りの置き場所である——`alu` なら3オペランドの命令、`cond` なら `cmp` の後の
+// `csel`/`ccmp` に付く条件コード。綴りを見ても区別は付かないので表が言う。
+// `assign_equal` が `cond` に居るのは、`:` が定義なので `=` を比較に使えるからである。
+function isAsmForm(n, form) {
+	if (!n || n.type !== "operation" || n.position !== "infix") return false;
+	const a = asmOf(n.name);
+	return !!a && a.form === form;
+}
 
 // `ccmp` が「前の条件が偽だったとき」に置くフラグ。**その条件自身が偽になる並び**を選ぶ
 // ——そうすれば連鎖の最後で条件を1つ見るだけで全体の判定になる。
 // nzcv のビットは N=8 / Z=4 / C=2 / V=1。
+//
+// **これは表の写しではないので、ここに残る。** 鍵が演算子の綴りでも名前でもなく**条件コード**
+// であり（`lt` は `<` からも連鎖比較からも来る）、答えは AArch64 のフラグの定義そのもので
+// あって、どの演算子がその条件を使うかとは関係が無い。表へ移すと、同じ条件コードを持つ演算子
+// の数だけ同じ値を書くことになる——そちらが「同じ事実が2箇所で決まる」形である。
 const FALSE_NZCV = {
 	eq: 0, // Z=0 なら eq は偽
 	ne: 4, // Z=1 なら ne は偽
@@ -1308,7 +1320,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		return em.fail(n, `まだ出せない識別子です（${bareName(n.value)}）`);
 	}
 
-	if (n.type === "operation" && INT_OPS[n.name] && n.position === "infix") {
+	if (isAsmForm(n, "alu")) {
 		// **`$` が作った番地は表に出てはいけない。**
 		//
 		// インタプリタは `$` の結果への算術を一律 `__` にしている——参照セルであって数では
@@ -1379,8 +1391,9 @@ function genExpr(node, env, em, scope, tail = false) {
 		const ro = (em.slot - 1) * 8;
 		em.load(SCRATCH[0], lo);
 		em.load(SCRATCH[1], ro);
-		// 除算だけは符号で分かれる（`Address` は符号なし）。
-		const mn = n.name === "div" ? DIV_FOR[machine.signed ? "signed" : "unsigned"] : INT_OPS[n.name];
+		// 命令は表が言い、符号だけをここで決める。`add`/`sub`/`mul` は両側に同じ綴りが
+		// 置いてあるので、除算を特別扱いする分岐が要らない。
+		const mn = asmOf(n.name).gpr[machine.signed ? "signed" : "unsigned"];
 
 		// **完全性公理**（`operator_table.md` の算術行）。
 		//
@@ -1472,7 +1485,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		}
 		return genStringCompare(n, env, em, scope);
 	}
-	if (n.type === "operation" && CMP_COND[n.name] && n.position === "infix") {
+	if (isAsmForm(n, "cond")) {
 		const machine = reduceToMachineType(n.atomType, em.conf.target);
 		// 比較の結果型は `L | R | __` なので、それ自体は還元できない。両辺が GPR 幅の
 		// 整数であることを見る。
@@ -1563,8 +1576,8 @@ function genExpr(node, env, em, scope, tail = false) {
 		// `movz` 1命令で作れる（0x8000 << 48）。
 		em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 		em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
-		const table = unsignedCompare(n, em.conf, env) ? CMP_COND_UNSIGNED : CMP_COND;
-		em.emit(`csel ${SCRATCH[0]}, ${eqOnly ? SCRATCH[0] : "x11"}, x12, ${table[n.name]}`, "真なら値、偽なら __");
+		const cond = asmOf(n.name).gpr[unsignedCompare(n, em.conf, env) ? "unsigned" : "signed"];
+		em.emit(`csel ${SCRATCH[0]}, ${eqOnly ? SCRATCH[0] : "x11"}, x12, ${cond}`, "真なら値、偽なら __");
 		em.pop(1);
 		em.store(SCRATCH[0], lo);
 		return 1;
@@ -1586,8 +1599,13 @@ function genExpr(node, env, em, scope, tail = false) {
 	// が短いだけでなく、出す側のコードも短い**。
 	if (n.type === "operation" && n.name === "chain_compare") {
 		// 連鎖も同じ規則で符号を選ぶ（中央と両端が同じ型なので、左辺で決まる）。
-		const chainTable = unsignedCompare({ left: n.left, right: n.middle }, em.conf, env) ? CMP_COND_UNSIGNED : CMP_COND;
-		const cond = chainTable[n.compareName];
+		// **連鎖できるのは条件コードを持つ演算子だけ**なので、表を引けたかどうかが門になる
+		// ——ここには節が無く名前しか無いので、`isAsmForm` ではなく `asmOf` を直に引く。
+		const chainAsm = asmOf(n.compareName);
+		const cond =
+			chainAsm && chainAsm.form === "cond"
+				? chainAsm.gpr[unsignedCompare({ left: n.left, right: n.middle }, em.conf, env) ? "unsigned" : "signed"]
+				: null;
 		if (!cond) return em.fail(n, `連鎖できない比較です（${n.compareName}）`);
 		const sides = [n.left, n.middle, n.right];
 		const ok = (side) => {
@@ -4410,7 +4428,7 @@ function cannotBeUnit(node, env, scope) {
 		if (n.kind === "identifier") return !!(scope && scope.total && scope.total.has(n.value));
 		return n.kind === "number" || n.kind === "address" || n.kind === "char" || n.kind === "unicode";
 	}
-	if (n.type === "operation" && INT_OPS[n.name] && n.position === "infix") {
+	if (isAsmForm(n, "alu")) {
 		if (n.atomType === "Char" || n.name === "div") return false;
 		return cannotBeUnit(n.left, env, scope) && cannotBeUnit(n.right, env, scope);
 	}
