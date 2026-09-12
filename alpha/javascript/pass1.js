@@ -82,7 +82,7 @@ const EXPORT_MARKERS = { "#_": "#", "##_": "##", "###_": "###" };
 function countArity(paramTokens) {
   if (paramTokens.length === 0) return null;
   if (paramTokens.length === 1 && Array.isArray(paramTokens[0])) {
-    return countNestedArity(paramTokens[0]);
+    return countNested(paramTokens[0], TOTAL_SLOTS);
   }
   // **単一の裸パラメータもアリティ1である。** ここだけ null を返していたので、1引数の
   // 関数は「アリティ不明」になり、余積の解決で未飽和と見なされず（pass2.js の wantsMore）、
@@ -147,23 +147,36 @@ function isBracketEntryToken(token) {
   return Array.isArray(cur) && cur.length >= 1 && cur.every((line) => isFlatLine(line) || isTaggedBlockToken(line));
 }
 
+// **総スロット数と必須スロット数は、同じ歩き方を2つの数え方で歩いたものである。**
+// 違うのは3つだけ——裸の行をどう数えるか（`bare`）、`name : デフォルト式` の1エントリが
+// 何スロットか（`slot`。総数では1、必須ではデフォルトで埋まるので0）、降りられない生
+// トークンを何と数えるか（`atom`）。歩き方の写しを2つ置くと、この3つ以外の差が黙って
+// 入る——同じ事実が2箇所で決まって食い違う、という countArity/countRequiredArity で
+// 既に一度踏んだ形である（上の countArity のコメント）。だから歩き方は1つにして、
+// 差は数え方 `m` で渡す。
+const TOTAL_SLOTS = { bare: countBareArity, slot: 1, atom: 1 };
+// 必須スロットの数え方（デフォルト・rest以外だけを数える。下の countRequiredArity を参照）。
+const REQUIRED_SLOTS = { bare: countBareRequiredArity, slot: 0, atom: 0 };
+
 // 「文の並び」（またはラップされた1文）を再帰的に数える。pass2.jsのflattenParamStatements
 // と同じ構造を、生トークンの段階で軽量に再現する（循環import回避のためここで別途最小実装）。
-function countStatements(node) {
-  if (isFlatLine(node)) return countBareArity(node);
-  if (isParamEntryLine(node)) return 1;
-  // 配列でないもの（文字列トークン等）がここへ来たら1トークンとして数え、降りない。
-  // 文字列に対する `for...of` は1文字ずつ回るため、降りると自分自身を呼び直して
-  // 無限再帰する（デフォルト式の括弧で実際に踏んだ）。
-  if (!Array.isArray(node)) return 1;
+function countStatements(node, m) {
+  if (isFlatLine(node)) return m.bare(node);
+  if (isParamEntryLine(node)) return m.slot;
+  // 配列でないもの（文字列トークン等）がここへ来たら降りない。文字列に対する `for...of`
+  // は1文字ずつ回るため、降りると自分自身を呼び直して無限再帰する（デフォルト式の括弧で
+  // 実際に踏んだ）。数えるのは `atom`——総数では1トークン、必須では数えない。
+  if (!Array.isArray(node)) return m.atom;
   let total = 0;
   for (const stmt of node) {
     let c;
-    if (isFlatLine(stmt)) c = countBareArity(stmt);
-    else if (isParamEntryLine(stmt)) c = 1; // `name : 式` は括弧を含んでも1スロット
-    else if (isBracketEntryToken(stmt)) c = 1; // 1エントリとしてのブラケット分割代入は1スロット分
-    else if (isTaggedBlockToken(stmt)) c = countStatements(stmt[1]);
-    else c = countStatements(stmt); // さらにネストした1文（例: func_mixedのブラケット単独文）
+    if (isFlatLine(stmt)) c = m.bare(stmt);
+    else if (isParamEntryLine(stmt)) c = m.slot; // `name : 式` は括弧を含んでも1スロット
+    else if (isBracketEntryToken(stmt)) c = 1; // ブラケット分割代入は、総数でも必須でも1スロット
+    else if (isTaggedBlockToken(stmt)) c = countStatements(stmt[1], m);
+    else c = countStatements(stmt, m); // さらにネストした1文（例: func_mixedのブラケット単独文）
+    // rest（`~_`）で総数が可変長になったら、そこで打ち切る。必須の側は Infinity を
+    // 作らない（countBareRequiredArity は `~_` を飛ばして数える）ので素通りする。
     if (c === Infinity) return Infinity;
     total += c;
   }
@@ -171,9 +184,8 @@ function countStatements(node) {
 }
 
 // インデント/ブラケット形の仮引数部のエントリ数を数える。
-function countNestedArity(token) {
-  const lines = Array.isArray(token) && (token[0] === '"INDENT_"' || token[0] === '"ABS_"') ? token[1] : token;
-  return countStatements(lines);
+function countNested(token, m) {
+  return countStatements(isTaggedBlockToken(token) ? token[1] : token, m);
 }
 
 // **仮引数部がブラケット1つか。**
@@ -210,7 +222,7 @@ function countRequiredArity(paramTokens) {
     // list_model.md §2.4）。エントリ数は分解後の束縛の数であって実引数の数ではない。
     // インデントブロック形（デフォルト引数）は別物なので従来通り数える。
     if (isWholeBracketParams(paramTokens)) return 1;
-    return countNestedRequiredArity(paramTokens[0]);
+    return countNested(paramTokens[0], REQUIRED_SLOTS);
   }
   if (paramTokens.length === 1) return 1; // 単一の裸パラメータ（デフォルト無し前提）
   return countBareRequiredArity(paramTokens);
@@ -232,28 +244,6 @@ function countBareRequiredArity(tokens) {
     i++;
   }
   return count;
-}
-
-function countRequiredStatements(node) {
-  if (isFlatLine(node)) return countBareRequiredArity(node);
-  if (isParamEntryLine(node)) return 0; // デフォルト付きエントリは必須に数えない
-  if (!Array.isArray(node)) return 0; // countStatements と同じ理由の防御
-  let total = 0;
-  for (const stmt of node) {
-    let c;
-    if (isFlatLine(stmt)) c = countBareRequiredArity(stmt);
-    else if (isParamEntryLine(stmt)) c = 0; // デフォルト付きエントリは必須に数えない
-    else if (isBracketEntryToken(stmt)) c = 1; // ブラケット分割代入は常に1個の必須スロット
-    else if (isTaggedBlockToken(stmt)) c = countRequiredStatements(stmt[1]);
-    else c = countRequiredStatements(stmt);
-    total += c;
-  }
-  return total;
-}
-
-function countNestedRequiredArity(token) {
-  const lines = Array.isArray(token) && isTaggedBlockToken(token) ? token[1] : token;
-  return countRequiredStatements(lines);
 }
 
 function buildEnvScope(lines) {

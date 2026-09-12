@@ -70,7 +70,6 @@ const SIGNEDNESS = { Address: "unsigned", Int: "signed", Char: "unsigned", Float
  *
  * `Float` はこの値を使えない（負のゼロという正当な値である）。浮動小数の niche は未定。
  */
-const UNIT_NICHE = 0x8000000000000000n;
 const UNIT_NICHE_ASM = "0x8000000000000000";
 
 // 幅クラスへの割り当て。`String` は `List(0u)` と同型なので要素は Char。
@@ -214,4 +213,4 @@ function literalDigits(text) {
   const p = literalParts(text);
   return p ? p.digits : String(text ?? "").slice(2);
 }
-export { TARGET_WIDTHS, SIGNEDNESS, UNIT_NICHE, UNIT_NICHE_ASM, WIDTH_CLASS, CHARSETS, DEFAULT_CHARSET, charSizeOf, charLimitOf, widthsOf, isSupported, sizeOf, reduceToMachineType, literalParts, literalDigits };
+export { TARGET_WIDTHS, SIGNEDNESS, UNIT_NICHE_ASM, WIDTH_CLASS, CHARSETS, DEFAULT_CHARSET, charSizeOf, charLimitOf, widthsOf, isSupported, sizeOf, reduceToMachineType, literalParts, literalDigits };

@@ -156,13 +156,20 @@ function lookup(symbol, position) {
   return defs.find((d) => d.position === position) || null;
 }
 
+// 連鎖として遡る演算の名前。素の適用だけを見る側と、部分適用（アリティ不足の印が
+// 付いた apply）も同じ1本の連鎖として見る側があるので、**どちらの読みかは呼ぶ側が渡す**。
+const APPLY_ONLY = new Set(["apply"]);
+const APPLY_OR_PARTIAL = new Set(["apply", "partial_apply"]);
+
 // apply[apply[apply[f, a1], a2], a3] のような左結合のapplyチェーンを遡り、
 // 消費済みの引数の数（depth）と、根本の呼び出し先ノード（base、通常は識別子）を返す。
-function applyChainInfo(node) {
+// args を渡すと、各段の実引数（.right）を書かれた順で積む。
+function applyChainInfo(node, names = APPLY_ONLY, args = null) {
   let depth = 0;
   let n = node;
-  while (n && n.type === "operation" && n.name === "apply") {
+  while (n && n.type === "operation" && names.has(n.name)) {
     depth++;
+    if (args) args.unshift(n.right);
     n = n.left;
   }
   return { depth, base: n };
@@ -218,14 +225,9 @@ function resolveKnownArity(node, env) {
   if (node.type === "block" && node.kind !== "indent" && node.kind !== "abs" && node.kind !== "norm" && node.lines.length === 1) {
     return resolveKnownArity(node.lines[0], env);
   }
-  if (node.type === "operation" && (node.name === "apply" || node.name === "partial_apply")) {
-    let depth = 0;
-    let n = node;
-    while (n && n.type === "operation" && (n.name === "apply" || n.name === "partial_apply")) {
-      depth++;
-      n = n.left;
-    }
-    const inner = resolveKnownArity(n, env);
+  if (node.type === "operation" && APPLY_OR_PARTIAL.has(node.name)) {
+    const { depth, base } = applyChainInfo(node, APPLY_OR_PARTIAL);
+    const inner = resolveKnownArity(base, env);
     if (!inner) return null;
     return { arity: inner.arity, requiredArity: inner.requiredArity, consumed: inner.consumed + depth, containerParam: !!inner.containerParam };
   }
@@ -273,12 +275,7 @@ function markUndersaturatedApplies(node, env) {
   if (!node || typeof node !== "object") return node;
   if (node.type === "operation" && node.name === "apply") {
     const argNodes = [];
-    let n = node;
-    while (n && n.type === "operation" && n.name === "apply") {
-      argNodes.unshift(n.right);
-      n = n.left;
-    }
-    const base = n;
+    const { base } = applyChainInfo(node, APPLY_ONLY, argNodes);
     for (const a of argNodes) markUndersaturatedApplies(a, env);
     markUndersaturatedApplies(base, env);
     // resolveKnownArityはbaseが素の識別子の場合だけでなく、丸括弧越しの部分適用
@@ -369,8 +366,7 @@ function derefBoundNode(node, env) {
 
 // `@f`、または `@f x …`（前置 `@` を根に持つ適用の鎖）か。
 function isAtHeaded(node) {
-  let n = node;
-  while (n && n.type === "operation" && (n.name === "apply" || n.name === "partial_apply")) n = n.left;
+  const n = applyChainInfo(node, APPLY_OR_PARTIAL).base;
   return !!n && n.type === "operation" && n.position === "prefix" && n.op === "@";
 }
 
@@ -379,7 +375,7 @@ function isClosedAtApply(node) {
   if (!node || node.type !== "block" || node.kind === "indent" || node.kind === "abs" || node.kind === "norm") return false;
   if (!Array.isArray(node.lines) || node.lines.length !== 1) return false;
   const inner = unwrapSoloBlock(node.lines[0]);
-  return !!inner && inner.type === "operation" && (inner.name === "apply" || inner.name === "partial_apply") && isAtHeaded(inner);
+  return !!inner && inner.type === "operation" && APPLY_OR_PARTIAL.has(inner.name) && isAtHeaded(inner);
 }
 
 function unwrapSoloBlock(node) {
@@ -955,17 +951,24 @@ function parseParamLine(tokens) {
   return splitBareParamTokens(tokens);
 }
 
+// タグ付きブロックの印と、それがなる block の kind。**印の綴りを書くのはここだけ**である
+// （タグ付きブロックの形そのものは resolveBlock の節のコメントを参照）。
+//
+// ノルム（`"NORM_"`、`||...||`、要素数）を絶対値と分けるのは、1要素の器が存在しない
+// からである——`[5] ≅ 5` なので `|[5]|` は絶対値なら 5、要素数なら 1 になってしまう。
+//
+// `__proto__: null` は、印でない字句（`constructor` など Object の鍵と同じ綴り）が
+// 当たらないようにするため。表に在るか否かだけで判定する側が黙って誤らない。
+const BLOCK_KIND = { __proto__: null, '"INDENT_"': "indent", '"ABS_"': "abs", '"NORM_"': "norm" };
+
 // ブラケット（[x ~xs]等）／インデントブロック（デフォルト引数）の仮引数部から、
 // 「1行=1エントリ」の行配列を取り出す。resolveBlockのkind判定と対称。
 function extractParamLines(token) {
-  if (Array.isArray(token) && token[0] === '"INDENT_"') return token[1];
-  if (Array.isArray(token) && token[0] === '"ABS_"') return token[1];
-  if (Array.isArray(token) && token[0] === '"NORM_"') return token[1];
-  return token; // bracket系: tokenそのものがexprs（行の配列）
+  return isTaggedBlock(token) ? token[1] : token; // bracket系: tokenそのものがexprs（行の配列）
 }
 
 function isTaggedBlock(x) {
-  return Array.isArray(x) && (x[0] === '"INDENT_"' || x[0] === '"ABS_"' || x[0] === '"NORM_"');
+  return Array.isArray(x) && BLOCK_KIND[x[0]] !== undefined;
 }
 
 // extractParamLinesが返す「文の並び」を、1文=1識別子宣言の生トークン列（flat token line）の
@@ -984,22 +987,32 @@ function flattenParamStatements(node) {
   });
 }
 
+// Term-wrap（grammarのTerm規則が作る1階層のラップ）を剥がし切ったとき、全要素が
+// flat token lineかタグ付きブロックになる形か。そうであれば剥がし終えた行配列（lines）と
+// 実際に1回でも剥がしたか（peeled）を返し、そうでなければnullを返す。
+// peelBracketEntryToken（1エントリ）とisBracketParamList（パラメータリスト全体）が
+// 同じ規則を見る——**剥がし方を2箇所で決めない**ための唯一の置き場である。
+function peelParamLines(x) {
+  if (!Array.isArray(x)) return null;
+  let cur = x;
+  let peeled = false;
+  while (Array.isArray(cur) && cur.length === 1 && Array.isArray(cur[0]) && !isFlatTokenLine(cur[0]) && !isTaggedBlock(cur[0])) {
+    cur = cur[0];
+    peeled = true;
+  }
+  if (cur.length >= 1 && cur.every((line) => isFlatTokenLine(line) || isTaggedBlock(line))) return { lines: cur, peeled };
+  return null;
+}
+
 // tokenが「複数の裸パラメータの中の1エントリとして書かれたブラケット分割代入パターン」
 // （例: `dist [h ~t]`の`[h ~t]`、`walk :\n\tdist\n\t[h ~t]\n ?`の`[h ~t]`行）かどうかを判定し、
 // そうであれば中身（flat token lineの配列＝そのブラケット自身の各行）を返す。そうでなければnull。
-// isBracketParamListと同じTerm-wrap剥がしロジックだが、対象が「パラメータリスト全体」では
+// isBracketParamListと同じ剥がし（peelParamLines）を使うが、対象が「パラメータリスト全体」では
 // なく「その中の1エントリ」である点が異なる（剥がす前の段階でTerm-wrapが1段少ないため、
-// 剥がし回数は0回で済むこともある——単一行`dist [h ~t]`の場合がそれ）。
+// 剥がし回数は0回で済むこともある——単一行`dist [h ~t]`の場合がそれ。だからpeeledを問わない）。
 function peelBracketEntryToken(token) {
-  if (!Array.isArray(token)) return null;
-  let cur = token;
-  while (Array.isArray(cur) && cur.length === 1 && Array.isArray(cur[0]) && !isFlatTokenLine(cur[0]) && !isTaggedBlock(cur[0])) {
-    cur = cur[0];
-  }
-  if (Array.isArray(cur) && cur.length >= 1 && cur.every((line) => isFlatTokenLine(line) || isTaggedBlock(line))) {
-    return cur;
-  }
-  return null;
+  const r = peelParamLines(token);
+  return r ? r.lines : null;
 }
 
 // peelBracketEntryTokenが返した「ブラケットの中身の各行」から、そのブラケット自身の
@@ -1100,21 +1113,16 @@ function splitBareParamTokens(tokens) {
 // 見えてしまうため（README「Lambda仮引数部の専用処理」参照）。
 // 判定方法: INDENT_/ABS_タグが無ければ直接ブラケット。タグ付きなら、その中身が
 // 「唯一の要素で、かつさらに入れ子になった（flat token lineでもタグ付きでもない）配列」で
-// ある限り再帰的に剥がしていき（flattenParamStatementsと同じTerm-wrap剥がしロジック）、
-// 実際に1回でも剥がせて、かつ最終的に「複数のflat token line（＝ブラケットの各行）」に
-// 行き着いた場合のみブラケットとみなす。単に「1個の裸パラメータだけがインデントブロックに
-// 単独で書かれている」ケース（それ自体がflat token line）や、「複数の裸パラメータ行が
-// 直接並んでいる」通常のデフォルト引数形式は、どちらもfalseになる。
+// ある限り再帰的に剥がしていき（peelParamLines——flattenParamStatementsと同じTerm-wrap
+// 剥がしロジック）、実際に1回でも剥がせて（peeled）、かつ最終的に「複数のflat token line
+// （＝ブラケットの各行）」に行き着いた場合のみブラケットとみなす。単に「1個の裸パラメータ
+// だけがインデントブロックに単独で書かれている」ケース（それ自体がflat token line）や、
+// 「複数の裸パラメータ行が直接並んでいる」通常のデフォルト引数形式は、どちらもfalseになる。
 function isBracketParamList(token) {
   if (!Array.isArray(token)) return false;
   if (!isTaggedBlock(token)) return true;
-  let inner = token[1];
-  let peeled = false;
-  while (Array.isArray(inner) && inner.length === 1 && Array.isArray(inner[0]) && !isFlatTokenLine(inner[0]) && !isTaggedBlock(inner[0])) {
-    inner = inner[0];
-    peeled = true;
-  }
-  return peeled && Array.isArray(inner) && inner.length >= 1 && inner.every((line) => isFlatTokenLine(line) || isTaggedBlock(line));
+  const r = peelParamLines(token[1]);
+  return !!(r && r.peeled);
 }
 
 // 仮引数部の生トークン列を解析し、{ node, scope } を返す。
@@ -1532,7 +1540,8 @@ function desugarHoles(node, env) {
     node.right = desugarHoles(node.right, env);
     return node;
   }
-  if (isHoleNode(node)) return node; // 単独の `_` は包む意味が無いのでそのまま
+  // 単独の `_` もここを素通りする——`replaceHoles` は演算でないノードで即戻るので
+  // `names` が空のまま、下の行が node をそのまま返す（包む意味が無い、で同じ答え）。
   const names = [];
   replaceHoles(node, names);
   if (names.length === 0) return node;
@@ -1557,22 +1566,10 @@ function desugarHoles(node, env) {
 // 配列を返す（以前は ...exprs と展開しており、bracket系と保護膜の厚みが
 // 非対称でExpressionのflat()で漏れる原因になっていたが、修正済み）。
 function resolveBlock(term, env) {
-  let kind = "paren"; // 【既知の制限】paren/brace/bracketはgrammar.pegjs側で区別されないため固定値
-  let exprsArray;
-  if (Array.isArray(term) && term[0] === '"INDENT_"') {
-    kind = "indent";
-    exprsArray = term[1];
-  } else if (Array.isArray(term) && term[0] === '"ABS_"') {
-    kind = "abs";
-    exprsArray = term[1];
-  } else if (Array.isArray(term) && term[0] === '"NORM_"') {
-    // ノルム（`||...||`、要素数）。絶対値と分けるのは、1要素の器が存在しないからである
-    // ——`[5] ≅ 5` なので `|[5]|` は絶対値なら 5、要素数なら 1 になってしまう。
-    kind = "norm";
-    exprsArray = term[1];
-  } else {
-    exprsArray = term; // bracket系: term がそのまま exprs
-  }
+  // 印は BLOCK_KIND が唯一の表である（ノルムを絶対値と分ける理由もそこに書いてある）。
+  const tag = Array.isArray(term) ? BLOCK_KIND[term[0]] : undefined;
+  const kind = tag || "paren"; // 【既知の制限】paren/brace/bracketはgrammar.pegjs側で区別されないため固定値
+  const exprsArray = tag ? term[1] : term; // bracket系: term がそのまま exprs
   // このブロック内の行だけを対象にした子スコープを作る（ネストしたスコープ連鎖）
   const inner = childEnv(exprsArray.filter(Array.isArray), env);
   const lines = exprsArray.map((line) => (Array.isArray(line) ? reduceAll(line, inner) : toNode(line, inner)));

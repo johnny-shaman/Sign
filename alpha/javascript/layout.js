@@ -580,6 +580,23 @@ function listItems(node, env = null) {
   return items.length === 1 && items[0] === node ? null : items;
 }
 
+// **器を開いて要素の並びにする**（要素が無ければ null）。参照を辿り、行を割り、
+// 1行のブロックの中身が積（`[p , p]`）ならそこがそのまま要素の並びである
+// ——`listItems` はブロックの行を割るが、行の中の積までは割らない。
+//
+// **2箇所で別々に数えない。** 先頭の形を訊く `elementShapeOfList` と、何番目かの形を
+// 訊く `itemShapeOfListAt` は、開き方が同じでなければ同じ器を違う並びに見る。
+function itemsOfList(node, conf) {
+  const n = deref(node, conf && conf.env);
+  if (!n) return null;
+  let items = listItems(n, conf && conf.env);
+  if (!items || items.length === 0) return null;
+  if (items.length === 1 && items[0] && items[0].type === "operation" && items[0].name === "product") {
+    items = flattenProduct(items[0]);
+  }
+  return items.length ? items : null;
+}
+
 /**
  * **器の要素が構造体なら、その並び。**
  *
@@ -591,16 +608,8 @@ function listItems(node, env = null) {
  * 先頭の1つを見れば足りる。1つも無い（空の器）なら並びは決まらない。
  */
 function elementShapeOfList(node, conf) {
-  const n = deref(node, conf && conf.env);
-  if (!n) return null;
-  let items = listItems(n, conf && conf.env);
-  if (!items || items.length === 0) return null;
-  // 1行のブロックの中身が積（`[p , p]`）なら、そこがそのまま要素の並びである
-  // ——`listItems` はブロックの行を割るが、行の中の積までは割らない。
-  if (items.length === 1 && items[0] && items[0].type === "operation" && items[0].name === "product") {
-    items = flattenProduct(items[0]);
-  }
-  if (!items.length) return null;
+  const items = itemsOfList(node, conf);
+  if (!items) return null;
   const first = layoutOfStruct(items[0], conf);
   if (!first) return null;
   // **「要素はどれも同じ形である」を確かめる。** そう書いておきながら先頭1つの並びを
@@ -629,7 +638,8 @@ function elementShapeOfList(node, conf) {
  * 段は番号で引く。連番スロットを持つ構造体を `slotOfKey` がリテラルの添字で引けるのと
  * 同じ話が、器の要素にも成り立つ。
  *
- * 要素の並べ方は `elementShapeOfList` と同じ手続きで数える——**2箇所で別々に数えない**。
+ * 要素の並べ方は `elementShapeOfList` と同じ手続き（`itemsOfList`）で数える——**2箇所で
+ * 別々に数えない**。
  */
 /**
  * **どのスロットも同じ形なら、鍵が実行時に決まっても引いた結果の形は決まる。**
@@ -657,13 +667,8 @@ function commonSlotShape(shape) {
 
 function itemShapeOfListAt(node, conf, index) {
   if (!Number.isInteger(index) || index < 0) return null;
-  const n = deref(node, conf && conf.env);
-  if (!n) return null;
-  let items = listItems(n, conf && conf.env);
-  if (!items || items.length === 0) return null;
-  if (items.length === 1 && items[0] && items[0].type === "operation" && items[0].name === "product") {
-    items = flattenProduct(items[0]);
-  }
+  const items = itemsOfList(node, conf);
+  if (!items) return null;
   if (index >= items.length) return null;
   return layoutOfStruct(items[index], conf);
 }
@@ -908,24 +913,6 @@ function packSlots(entries, conf, slotKind) {
 }
 
 /**
- * レイアウトを1行ずつの読める形にする（観測用）。
- */
-function formatLayout(layout) {
-  if (!layout) return "(決まらない)";
-  // 規則裏打ちは要素ではなく規則が並ぶ。`end` の有無が Iterator と List を分けている。
-  if (layout.repr === "rule") {
-    const head = `size ${layout.size} / align ${layout.align} / rule`;
-    const body = layout.fields.map((f) => `  +${String(f.offset).padStart(3)}  ${f.name.padEnd(8)} ${String(f.type).padEnd(8)} ${f.size} byte`);
-    return [head, ...body, `  添字: ${layout.access}`].join("\n");
-  }
-  const head = `size ${layout.size} / align ${layout.align} / ${layout.slotKind}`;
-  const body = layout.slots.map(
-    (s) => `  +${String(s.offset).padStart(3)}  ${(s.name !== undefined ? s.name : `[${s.ordinal}]`).padEnd(8)} ${String(s.type).padEnd(8)} ${s.size} byte  (宣言順 ${s.ordinal})`
-  );
-  return [head, ...body].join("\n");
-}
-
-/**
  * 値が呼び出しをどう渡るか（`stack_abi.md` §4.6）。決まらなければ null。
  *
  * **参照で渡すのは「メモリに置かれているもの」だけである。**
@@ -1025,7 +1012,6 @@ export {
   elementShapeOfList,
   itemShapeOfListAt,
   commonSlotShape,
-  formatLayout,
   alignUp,
   passingOf,
   stringLength,

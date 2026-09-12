@@ -95,17 +95,18 @@ function describeUnresolved(node) {
  * 前は元の関数である。元は AST に残す——インタプリタは元の形をそのまま走らせられるし、
  * 「均した先が同じ列になるか」はそれと突き合わせて初めて言える。
  */
-function markCursorEntries(nodes, entries, superseded, group) {
+function markCursorEntries(nodes, entries, group) {
   const names = new Set(entries);
-  const dead = new Set(superseded);
   const last = new Map();
   const advName = group ? group + CURSOR_SUFFIXES.adv : null;
   let adv = null;
+  // 定義と「`<>` を剥がした綴り」の対を1度で集める。入口を決めるのも、置き換えられた方に
+  // 印を付けるのも同じ並びを見るので、走査は1回でよい。
+  const defs = [];
   for (const node of nodes) {
-    if (!node || node.type !== "operation" || node.name !== "define") continue;
-    const id = node.left;
-    if (!id || id.type !== "atom" || id.kind !== "identifier") continue;
-    const raw = String(id.value).replace(/^<|>$/g, "");
+    if (!isDefineNode(node) || !isIdentNode(node.left)) continue;
+    const raw = String(node.left.value).replace(/^<|>$/g, "");
+    defs.push([node, raw]);
     if (names.has(raw)) last.set(raw, node);
     if (raw === advName) adv = node;
   }
@@ -134,13 +135,7 @@ function markCursorEntries(nodes, entries, superseded, group) {
   if (adv) markBody(adv, group, false);
   // 元の定義（同じ名前の、入口ではない方）は機械語を出さない。糖衣が置き換えたものを
   // もう一度出しても、同じ列を2通りに出すだけである。
-  for (const node of nodes) {
-    if (!node || node.type !== "operation" || node.name !== "define") continue;
-    const id = node.left;
-    if (!id || id.type !== "atom" || id.kind !== "identifier") continue;
-    const raw = String(id.value).replace(/^<|>$/g, "");
-    if (dead.has(raw) && last.get(raw) !== node) node.supersededByDesugar = true;
-  }
+  for (const [node, raw] of defs) if (names.has(raw) && last.get(raw) !== node) node.supersededByDesugar = true;
 }
 
 /**
@@ -224,6 +219,13 @@ function resolveImports(lines, options, parseFn, base, state) {
 // 呼び出しの実引数を読むときに「ここで式が切れる」と判る字句の頭文字（演算子）。
 const OPERATOR_HEADS = new Set([..."?:#;|&=<>!+*/%^~@$,", "-"]);
 
+// 字句1つを見るだけの規則。`pasteVisiblePipelines` と `specializeRefCalls` の両方が
+// **同じ切り方**で読まなければならない——ずれると別の `$` を実体化して黙って違う答えを
+// 返すので、写しを持たずにここ1箇所で決める（tryCall の実引数読みの注記）。
+const isId = (x) => typeof x === "string" && x.startsWith("<") && x.endsWith(">");
+const isOp = (t) => typeof t === "string" && !isId(t) && OPERATOR_HEADS.has(t[0]) && !/^-?[0-9`]/.test(t);
+const isPostfixMark = (t) => typeof t === "string" && /^_[^\w<`"]+$/.test(t);
+
 /**
  * **器に並べた関数は、中身が見えれば呼べる**（operator_table.md の後置 `~` の項、
  * type_system.md §3.5）。
@@ -242,9 +244,6 @@ const OPERATOR_HEADS = new Set([..."?:#;|&=<>!+*/%^~@$,", "-"]);
  * 全部値の器も触らない（撒いたときの読みを変えない）。`$` を付けたスロットは番地（値）である。
  */
 function pasteVisiblePipelines(lines, env) {
-  const isId = (x) => typeof x === "string" && x.startsWith("<") && x.endsWith(">");
-  const isOp = (t) => typeof t === "string" && !isId(t) && OPERATOR_HEADS.has(t[0]) && !/^-?[0-9`]/.test(t);
-  const isPostfixMark = (t) => typeof t === "string" && /^_[^\w<`"]+$/.test(t);
   // 括りで書いた器（`[[+ 2], [* 4], 3]`）は、積を1行持つ括り1つである
   const unbracket = (toks) => (toks.length === 1 && Array.isArray(toks[0]) && toks[0].length === 1 && Array.isArray(toks[0][0]) ? toks[0][0] : toks);
   // 最上位の `,` で割ったスロット。関数のスロットが1つも無ければ器ではなくデータとして扱う。
@@ -356,7 +355,6 @@ function pasteVisiblePipelines(lines, env) {
 function specializeRefCalls(lines, nodes, env, options) {
   const top = env && env.bindings;
   if (!top) return;
-  const isId = (x) => typeof x === "string" && x.startsWith("<") && x.endsWith(">");
   // 1. `@p` を持つ関数：`<F> : 仮引数… ? 本体` で、本体に `@_ <p>` が在る
   const fns = new Map();
   // 入れ子の中まで見る：`@_ <p>` がどこかに在るか。本体は字下げのブロックや括りを持つ。
@@ -494,7 +492,6 @@ function specializeRefCalls(lines, nodes, env, options) {
   const tryCall = (arr, s, fn, idx, binders) => {
     const F = arr[s];
     const isPrefixMark = (t) => typeof t === "string" && (t === "$_" || /^[^\w<`"$]+_$/.test(t));
-    const isPostfixMark = (t) => typeof t === "string" && /^_[^\w<`"]+$/.test(t);
     // 実引数を仮引数の数ぶん読む。単純な形（識別子・字面・括り・`$_ <X>`・前置の印の連なりと
     // その対象）だけ。**区切りは pass2 と同じ所で切る**——ずれると別の `$` を実体化し、黙って
     // 違う答えを返す（`h ~@p $dbl $inc` で `~` と `@p` を別の実引数に読んでいた）。
@@ -518,7 +515,7 @@ function specializeRefCalls(lines, nodes, env, options) {
         while (j < arr.length && isPrefixMark(arr[j])) j++;
         if (j >= arr.length) break;
         arg = { from: i, to: j, ref: null };
-      } else if (typeof tok === "string" && !isId(tok) && OPERATOR_HEADS.has(tok[0]) && !/^-?[0-9`]/.test(tok)) {
+      } else if (isOp(tok)) {
         // 負の字面（`-1`）は演算子ではない。演算子として読むと実体を作らずに素通ししていた。
         break;
       } else {
@@ -1164,7 +1161,7 @@ function compile(source, options = {}) {
   checkDefineLeftSides(nodes);
   // 均した先の入口に印を付ける。**同じ名前が2回定義されている**ので、後の方（生成側）が
   // カーソルの入口で、前の方（元の関数）は Pass 4 が飛ばす対象である。
-  for (const g of options.__cursorGroups || []) markCursorEntries(nodes, g.entries, g.entries, g.group);
+  for (const g of options.__cursorGroups || []) markCursorEntries(nodes, g.entries, g.group);
   // **`$` で渡した関数を、実体ごとに pass2 へ通し直す。** 型とアリティが実体の中へ
   // 流れ込むように、Pass 3 より前でやる（specializeRefCalls の注記）。
   specializeRefCalls(lines, nodes, env, options);
@@ -1316,6 +1313,9 @@ function mapNameFor(m) {
   return `_pf_map_${hex(m.op)}_${hex(m.operand)}`;
 }
 
+/** **1行を持つ括りは、その1行である**（`([+])` は `[+]`）。1行でなければそのまま返す。 */
+const solo = (n) => (n && Array.isArray(n.lines) && n.lines.length === 1 ? n.lines[0] : n);
+
 /**
  * その式は「残りアリティ1の貪欲なポイントフリー」か（`[* 2,]`）。穴は左辺である。
  *
@@ -1328,7 +1328,7 @@ function mapNameFor(m) {
  * 相手が式の形は、これまで通り解釈側の貪欲な道を通る（機械では出せないと名指しされる）。
  */
 function greedyMapOf(node) {
-  const n = node && Array.isArray(node.lines) && node.lines.length === 1 ? node.lines[0] : node;
+  const n = solo(node);
   if (!n || n.type !== "operation" || !n.partial || !n.pointfreeMap || n.position !== "infix") return null;
   if (n.left || !n.right || !n.op) return null;
   // **添字の写像（`[' 0,]`）は扱わない。** 相手は要素の中の位置であって、走査する器の
@@ -1347,7 +1347,7 @@ function foldNameFor(op) {
 
 /** その式は「残りアリティ2の貪欲なポイントフリー」か（`[+]` / `[*]`）。 */
 function isGreedyFold(node) {
-  const n = node && Array.isArray(node.lines) && node.lines.length === 1 ? node.lines[0] : node;
+  const n = solo(node);
   return !!(n && n.type === "operation" && n.partial && !n.pointfreeMap && n.position === "infix" && !n.left && !n.right && n.op);
 }
 
@@ -1372,7 +1372,7 @@ function isGreedyFold(node) {
 function expandGreedyFold(node) {
   if (!node || node.type !== "operation" || node.name !== "apply" || node.position !== "infix") return null;
   if (!isGreedyFold(node.left)) return null;
-  const inner = node.left.lines ? node.left.lines[0] : node.left;
+  const inner = solo(node.left);
   const leaves = constructLeaves(node.right);
   if (!leaves || leaves.length < 2) return null; // 1つだけの形は畳む相手が無く、器かもしれない
   return leaves.reduce((acc, x) => ({
@@ -1392,7 +1392,7 @@ function expandGreedyFold(node) {
  * ——`(1 2)` は入れ子の器であって、外の並びの1要素である。
  */
 function constructLeaves(node) {
-  const outer = node && Array.isArray(node.lines) && node.lines.length === 1 ? node.lines[0] : node;
+  const outer = solo(node);
   const isChain = (n) => !!(n && n.type === "operation" && n.name === "construct" && n.position === "infix");
   if (!isChain(outer)) return null;
   const leaves = [];
@@ -1458,9 +1458,8 @@ function expandGreedyMap(node) {
  */
 function expandCompose(node, named) {
   if (!node || node.type !== "operation" || node.name !== "apply" || node.position !== "infix") return null;
-  const peelParen = (x) => (x && Array.isArray(x.lines) && x.lines.length === 1 ? x.lines[0] : x);
   const isCompose = (x) => !!(x && x.type === "operation" && x.name === "compose" && x.position === "infix");
-  let fn = peelParen(node.left);
+  let fn = solo(node.left);
   // **名前を付けた合成（`h : f g`）も同じ形である。** `buildEnv` の束縛は型とアリティしか
   // 持たないので（値ノードは後の pass が入れる）、トップレベルの定義から直に引く。
   if (!isCompose(fn) && fn && fn.type === "atom" && fn.kind === "identifier" && named) {
@@ -1471,6 +1470,13 @@ function expandCompose(node, named) {
   const call = (f, x) => ({ type: "operation", name: "apply", op: " ", position: "infix", left: f, right: x });
   return call(fn.right, call(fn.left, node.right));
 }
+
+/** 定義（`h : f g`）の右辺が中置 `compose` なら、それを返す。そうでなければ null。 */
+const composeRhsOf = (n) => {
+  if (!isDefineNode(n)) return null;
+  const v = solo(n.right);
+  return v && v.type === "operation" && v.name === "compose" && v.position === "infix" ? v : null;
+};
 
 /**
  * 木の中の展開できる畳み込み・写像・合成を、その場で終わらせる。
@@ -1483,10 +1489,8 @@ function expandGreedyFoldsIn(nodes) {
   // 名前を付けた合成を先に集める（`h : f g`）。
   const named = new Map();
   for (const n of nodes) {
-    if (!n || n.type !== "operation" || n.name !== "define") continue;
-    if (!n.left || n.left.type !== "atom" || n.left.kind !== "identifier") continue;
-    const v = n.right && Array.isArray(n.right.lines) && n.right.lines.length === 1 ? n.right.lines[0] : n.right;
-    if (v && v.type === "operation" && v.name === "compose" && v.position === "infix") named.set(n.left.value, v);
+    const v = composeRhsOf(n);
+    if (v && isIdentNode(n.left)) named.set(n.left.value, v);
   }
   const one = (n) => expandGreedyFold(n) || expandGreedyMap(n) || expandCompose(n, named) || null;
   for (let pass = 0; pass < 16; pass++) {
@@ -1508,11 +1512,7 @@ function expandGreedyFoldsIn(nodes) {
   //
   // 開けなかった使い方（`$h` のように値として渡す形）が残っていれば、そちらは
   // 「まだ出せない識別子です（h）」と名指しで止まる——**黙って消えることはない**。
-  for (const n of nodes) {
-    if (!n || n.type !== "operation" || n.name !== "define") continue;
-    const v = n.right && Array.isArray(n.right.lines) && n.right.lines.length === 1 ? n.right.lines[0] : n.right;
-    if (v && v.type === "operation" && v.name === "compose" && v.position === "infix") n.supersededByDesugar = true;
-  }
+  for (const n of nodes) if (composeRhsOf(n)) n.supersededByDesugar = true;
 }
 
 /** 貪欲なポイントフリーを演算子ごとに集め、生成すべきソースを返す。 */
@@ -1539,7 +1539,7 @@ function collectGreedyFolds(nodes) {
  */
 function replaceGreedyFolds(nodes) {
   walkNodes(nodes, null, (child) => {
-    const inner = child && child.lines ? child.lines[0] : child;
+    const inner = solo(child);
     if (isGreedyFold(child)) {
       return { type: "atom", kind: "identifier", value: `<${foldNameFor(inner.op)}>` };
     }
@@ -1601,7 +1601,7 @@ function isHole(n) {
  * @returns 合成したラムダノード。合成できない形なら null。
  */
 function synthesizePointfree(node, scope) {
-  const inner = node && Array.isArray(node.lines) && node.lines.length === 1 ? node.lines[0] : node;
+  const inner = solo(node);
   if (!inner || inner.type !== "operation" || !inner.partial || inner.pointfreeMap) return null;
   const name = "<_pf>";
   const param = { type: "atom", kind: "identifier", value: name };

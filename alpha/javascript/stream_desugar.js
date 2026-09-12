@@ -123,7 +123,6 @@ function readStreamFunction(node, group) {
 		const guarded = line && line.type === "operation" && line.name === "define";
 		const value = guarded ? line.right : line;
 		const arm = readArm(value, group);
-		if (!arm) return null;
 		arms.push({ guard: guarded ? line.left : null, ...arm });
 	}
 	if (arms.length === 0) return null;

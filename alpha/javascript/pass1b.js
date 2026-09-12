@@ -47,6 +47,13 @@ function paramNamesOf(paramNode) {
   return [];
 }
 
+// このファイルの2つの走査（detectGenericParams / collectCallsites）が見る「子」。
+// pass3.js の childrenOf よりわざと狭い——`middle` と entries[].default を外してある。
+// 広げると両方の走査が見るノードが増え、`@`の検出と呼び出しサイトの数が変わる。
+function subNodes(n) {
+  return [n.left, n.right, n.operand, ...(n.type === "block" && Array.isArray(n.lines) ? n.lines : [])];
+}
+
 // 本体（bodyNode）を走査し、`@`前置演算子が直接かかっている仮引数名の集合を返す。
 // これらは「参照先がLambdaかAtomか定義サイト単体では決まらない」ジェネリックな仮引数
 // （type_system.md §3.5, §5 Pass1b）とみなす。
@@ -61,10 +68,7 @@ function detectGenericParams(bodyNode, paramNames) {
         generic.add(operand.value);
       }
     }
-    if (node.left) visit(node.left);
-    if (node.right) visit(node.right);
-    if (node.operand) visit(node.operand);
-    if (node.type === "block" && Array.isArray(node.lines)) node.lines.forEach(visit);
+    subNodes(node).forEach(visit);
   }
 
   visit(bodyNode);
@@ -105,10 +109,7 @@ function collectCallsites(resolvedNodes, fnName) {
         return;
       }
     }
-    if (node.left) visit(node.left);
-    if (node.right) visit(node.right);
-    if (node.operand) visit(node.operand);
-    if (node.type === "block" && Array.isArray(node.lines)) node.lines.forEach(visit);
+    subNodes(node).forEach(visit);
   }
 
   for (const n of resolvedNodes) visit(n);

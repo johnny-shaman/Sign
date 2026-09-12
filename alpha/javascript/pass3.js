@@ -42,7 +42,10 @@ import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 const ARITHMETIC_OPS = new Set(["add", "sub", "mul", "div", "mod", "pow"]);
 // coproduct_resolver.md §3-4: Atom-Atom間の余積（スペース）が縮約される演算。
 // これらの結果はList（1次元配列）そのものであり、左辺の個別の型を素通しすべきではない。
-const LIST_BUILDING_OPS = new Set(["construct", "concat", "push", "unshift"]);
+// **綴りはこの1行だけ。** 同じ並びを Set と配列で2度書いていたので、片方だけ足す形に
+// なっていた（族で割る側は配列で引く：`positionalSlots` / `listItemNodes`）。
+const COPRODUCT_OPS = ["construct", "concat", "push", "unshift"];
+const LIST_BUILDING_OPS = new Set(COPRODUCT_OPS);
 
 // **後置 `@`（import）は名前の由来を隠さない。** `g : inc@` は「inc を取り込んで g と
 // 呼ぶ」であって、行き着く定義は `inc` そのもの（`system_architecture.md` §2.1 の
@@ -198,6 +201,14 @@ function rangeResultType(node, env) {
   return "List";
 }
 
+// 括りを剥いでから整数リテラルを読む（読めなければ null）。`sliceLengthOne` の2つの枝
+// （`~+` 付きと素の `~`）が同じものを読むので、規則はここに1つだけ置く。
+function intLiteral(n) {
+  let d = n;
+  while (d && d.type === "block" && Array.isArray(d.lines) && d.lines.length === 1) d = d.lines[0];
+  return d && d.type === "atom" && d.kind === "number" && Number.isInteger(Number(d.value)) ? Number(d.value) : null;
+}
+
 // 切り出しの長さが静的に1か（`s ' (1 ~+ 1 ~ 1)`）。終端の無い形は器の長さが要るので
 // 判定しない——決まらないものを決まったことにはしない（原理4）。
 function sliceLengthOne(node, env) {
@@ -207,33 +218,23 @@ function sliceLengthOne(node, env) {
   // **終端の無い形でも、器の長さが分かれば決まる。** リテラルの器（`` `abc` ' 2~ ``）は
   // 長さが静的に分かるので、そこから 1 になるかどうかも静的に出る。決まるものは決める。
   if (r.type === "operation" && RANGE_STEP_OPS.has(r.name)) {
-    const num0 = (n) => {
-      let d = n;
-      while (d && d.type === "block" && Array.isArray(d.lines) && d.lines.length === 1) d = d.lines[0];
-      return d && d.type === "atom" && d.kind === "number" && Number.isInteger(Number(d.value)) ? Number(d.value) : null;
-    };
-    const st = num0(r.left);
-    const sp = num0(r.right);
+    const st = intLiteral(r.left);
+    const sp = intLiteral(r.right);
     if (st === null || sp !== 1) return false;
     const total = stringLength(node.left, env);
     return total !== null && total - st === 1;
   }
   if (r.type !== "operation" || r.name !== "range") return false;
-  const num = (n) => {
-    let d = n;
-    while (d && d.type === "block" && Array.isArray(d.lines) && d.lines.length === 1) d = d.lines[0];
-    return d && d.type === "atom" && d.kind === "number" && Number.isInteger(Number(d.value)) ? Number(d.value) : null;
-  };
-  const end = num(r.right);
+  const end = intLiteral(r.right);
   if (end === null) return false;
   let l = r.left;
   while (l && l.type === "block" && Array.isArray(l.lines) && l.lines.length === 1) l = l.lines[0];
   if (l && l.type === "operation" && RANGE_STEP_OPS.has(l.name)) {
-    const st = num(l.left);
-    const sp = num(l.right);
+    const st = intLiteral(l.left);
+    const sp = intLiteral(l.right);
     return st !== null && sp === 1 && st === end;
   }
-  return num(l) === end;
+  return intLiteral(l) === end;
 }
 
 // 端点が静的に等しいレンジか（`[3 ~ 3]`）。**1要素の器は存在しない**ので、そのときは
@@ -879,8 +880,8 @@ function sliceIndexNode(node) {
 }
 
 // 連番スロットを左から並べる。`1 , \`a\` , 2.5` は product の入れ子なので均す。
-const COPRODUCT_OPS = ["construct", "concat", "push", "unshift"];
-
+// 余積の演算子の並びは冒頭の `COPRODUCT_OPS`（`LIST_BUILDING_OPS` と同じ1つの綴り）。
+//
 // 連番スロットへ均す＝`slotsByFamily`。**根の演算子と同じ族でだけ割る**という規則は
 // layout.js の `flattenByFamily`（冒頭で別名 import）にあり、ここにあったのはコメントごと
 // 同じ写しだった。型が言う次元と配置が言う次元は同じ規則から出ていなければならない。
@@ -961,21 +962,12 @@ function listItemNodes(node, env) {
   if (!d) return null;
   // 括りのブロックを剥がす。中身が何であれ、1行だけのブロックは括りでしかない。
   while (Array.isArray(d.lines) && d.lines.length === 1) d = d.lines[0];
-  // **均質な直積も List である**（カンマが上げた次元の行）。行の並びを数えるには
-  // 直積で割る必要がある——`[1 2 , 3 4]` は行が2つであって1つではない。
-  // どの族で割るかは根が決める（族を混ぜると次元が潰れる）。
-  const coproduct = ["construct", "concat", "push", "unshift"];
-  const isProduct = d.type === "operation" && d.name === "product";
-  const same = (n) =>
-    n && n.type === "operation" && (isProduct ? n.name === "product" : coproduct.includes(n.name));
-  const flat = (n) => {
-    if (same(n)) return [...flat(n.left), ...flat(n.right)];
-    if (!isProduct && n && Array.isArray(n.lines) && n.lines.length === 1 && same(n.lines[0])) return flat(n.lines[0]);
-    return [n];
-  };
   // 行のブロック（`L :` の下に行が並ぶ形）は行そのものが要素である。
   if (Array.isArray(d.lines) && d.lines.length > 1 && d.lines.every((l) => !isDefineNode(l))) return d.lines;
-  const items = flat(d);
+  // **均質な直積も List である**（カンマが上げた次元の行）。行の並びを数えるには
+  // 直積で割る必要がある——`[1 2 , 3 4]` は行が2つであって1つではない。
+  // どの族で割るかは根が決める（族を混ぜると次元が潰れる）＝`slotsByFamily`。
+  const items = slotsByFamily(d, !(d.type === "operation" && d.name === "product"));
   return items.length === 1 && items[0] === d ? null : items;
 }
 
@@ -1117,6 +1109,12 @@ function widestMember(type) {
   return parts.find((t) => CONTAINER_TYPES.has(t)) || type;
 }
 
+// 配置（`layoutOfStruct`）を引くときの設定。**pass3 自身はターゲットに依らない**
+// ——揃っているかどうかはターゲットが決めないからである（`slotShapeKey` の注）。それでも
+// 配置を引くには conf が要るので、**その1つの事実をここで決める**。3箇所に綴りを散らすと、
+// ターゲットや charset を増やしたとき片方だけ直る形になる。
+const shapeConf = (env) => ({ target: "aarch64_qemu", charset: "ascii", env });
+
 /**
  * **構造体を返す式の並び。** Pass 4 の `structShapeOf` と同じ問いで、同じ3通りである
  * ——リテラル（名前を経由するものを含む）、仮引数（`binding.shape`）、そして
@@ -1128,7 +1126,7 @@ function widestMember(type) {
 function structShapeOfNode(node, env, depth = 0) {
   const u = node && node.type === "block" && node.kind === "paren" && node.lines && node.lines.length === 1 ? node.lines[0] : node;
   if (!u || depth > 8) return null;
-  const conf = { target: "aarch64_qemu", charset: "ascii", env };
+  const conf = shapeConf(env);
   const direct = layoutOfStruct(u, conf);
   if (direct) return direct;
   if (isIdentifierNode(u) && env) {
@@ -1199,11 +1197,9 @@ function slotOfKey(shape, key) {
     const i = parseInt(key.value, 10);
     return shape.slots.find((x) => x.ordinal === i) || null;
   }
-  // 名前は綴りではなく中身（layout.js の `bareName` と同じ規則）。
+  // 名前は綴りではなく中身——規則は layout.js の `bareName`（ここでの `bareKey`）そのもの。
   if (key.type === "atom" && (key.kind === "identifier" || key.kind === "string")) {
-    const v = String(key.value);
-    const bare = v.length >= 2 && ((v[0] === "<" && v[v.length - 1] === ">") || (v[0] === "`" && v[v.length - 1] === "`")) ? v.slice(1, -1) : v;
-    return shape.slots.find((x) => x.name === bare) || null;
+    return shape.slots.find((x) => x.name === bareKey(String(key.value))) || null;
   }
   return null;
 }
@@ -1533,8 +1529,7 @@ function computeAtomType(node, env) {
       // ある——場所は規則として歩けるが（`makeWalk`：器の上を走るイテレータ）、規則を
       // 場所へ戻すには確保が要るからである。type_system.md §2 の「表現の違う枝の直和は
       // 広い方に揃える」を、型ではなく実体の側へ当てたもの。
-      const armNodes = node.lines.map((line) => (isDefineNode(line) ? line.right : line));
-      if (armNodes.some((a) => a && a.repr === "closure")) node.repr = "closure";
+      if (armValues.some((a) => a && a.repr === "closure")) node.repr = "closure";
       // **要素型も枝で合流する。** 型（`List`）だけ合流させて要素型を落とすと、返値を
       // 引く側で幅が決まらない——`(m [1 2 3]) ' 1` が「まだ出せない」になっていた。
       // 基底の枝は `__`（`Unit`）で要素型を持たないので、**持っている枝から採る**
@@ -1548,7 +1543,7 @@ function computeAtomType(node, env) {
       //
       // 本当に合流しない枝（`joinElementTypes` が `NO_JOIN` を返す）だけは、これまで
       // 通り決めない。原理4——決まらないものを決まったことにはしない。
-      const els = [...new Set(armNodes.map((a) => a && a.elementType).filter((x) => x))];
+      const els = [...new Set(armValues.map((a) => a && a.elementType).filter((x) => x))];
       if (els.length === 1) node.elementType = els[0];
       else if (els.length > 1) {
         const j = els.reduce((x, y) => (x === null || x === NO_JOIN ? x : joinElementTypes(x, y)));
@@ -2283,13 +2278,7 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
         [node.left, node.right],
         [node.right, node.left],
       ]) {
-        if (
-          side &&
-          side.type === "atom" &&
-          side.kind === "identifier" &&
-          paramNames.has(side.value) &&
-          true
-        ) {
+        if (isIdentifierNode(side) && paramNames.has(side.value)) {
           // 相手がリテラルなら**その型がこの仮引数の型を決める**。相手が分からなければ
           // 演算子が要求する族（`Scalar`）までしか言えない。
           //
@@ -2341,13 +2330,7 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
     ) {
       refine(node.left.value, "Container");
     }
-    if (
-      node.type === "operation" &&
-      node.position === "postfix" &&
-      node.name === "expand" &&
-      isIdentifierNode(node.operand) &&
-      bare.has(node.operand.value)
-    ) {
+    if (isSpreadNode(node) && isIdentifierNode(node.operand) && bare.has(node.operand.value)) {
       refine(node.operand.value, "Container");
     }
     // **前置 `@` / `#` はアドレスを要求する。** §3.5 の表が `@` を
@@ -2400,7 +2383,7 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
         [ends[0], ends[1]],
         [ends[1], ends[0]],
       ]) {
-        if (side && side.type === "atom" && side.kind === "identifier" && paramNames.has(side.value)) {
+        if (isIdentifierNode(side) && paramNames.has(side.value)) {
           const fromOther = constraintFromLiteral(other) || typeOfKnownOperand(other, scope, paramNames);
           // 端点になれるのは点だけなので、相手が分からなくても `Scalar` までは言える。
           refine(side.value, fromOther && RANGE_ENDPOINT_TYPES.has(fromOther) ? fromOther : "Scalar");
@@ -2447,14 +2430,7 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
           // 入るのは rest 自身ではなくその要素である。したがってスロットの型がそのまま
           // rest の**要素型**になる——`sum : x ~xs ? x + (sum xs~)` の `xs` の要素は、
           // 展開された先が `x` である以上 `x` と同じ型でなければならない。
-          if (
-            arg &&
-            arg.type === "operation" &&
-            arg.position === "postfix" &&
-            arg.name === "expand" &&
-            isIdentifierNode(arg.operand) &&
-            paramNames.has(arg.operand.value)
-          ) {
+          if (isSpreadNode(arg) && isIdentifierNode(arg.operand) && paramNames.has(arg.operand.value)) {
             refine(arg.operand.value, t);
           }
         });
@@ -2791,6 +2767,55 @@ function callsitesOf(nodes, fnName, rootEnv) {
 }
 
 /**
+ * 生きているトップレベルの定義（`名前 : 値`）を左から並べる。
+ *
+ * **糖衣が置き換えた元の定義は見ない。** ストリームの糖衣は同じ名前の定義を2つ作る
+ * （元のものと、器を引く形へ均したもの）。**同じ名前の束縛が2つある**ので、両方から
+ * 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
+ * 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
+ *
+ * この規則は9つの走査が同じ文面で持っていた——**1つの事実が9箇所で決まっていた**ので、
+ * ここへ寄せた。`callsitesOf` だけはこれを使わない（定義でない行も歩くため、
+ * `supersededByDesugar` しか見ない）。
+ */
+function* liveDefines(nodes) {
+  for (const node of nodes) {
+    if (!node || node.supersededByDesugar) continue;
+    if (isDefineNode(node) && isIdentifierNode(node.left)) yield node;
+  }
+}
+
+/**
+ * 呼び出しサイト全体で、`index` 番目の実引数が語る**要素の型と器の型**を観測する。
+ *
+ * 全サイトで一致したときだけ値として採る（`el` / `ct`）——食い違うなら決まらないのが
+ * 正しい（複数の型で呼ばれている）。族（`FAMILY_MEMBERS`）と `Unit` は観測に数えない
+ * ——どちらも「まだ決まっていない」であって、決まった型ではないからである。
+ *
+ * 集合そのもの（`els` / `cts`）も返す。一致の判定を呼び手側でやり直す場所があるためで、
+ * `noteElementType` は集合を丸ごと受ける。
+ *
+ * `unwrapSpread` は**ストリーム形の仮引数**（`f : x ~xs`）のためにある。そこへ渡るのは
+ * 展開された1つ（`f l~`）なので、剥いでから観測する——`~` 無しの List は §5.4 が禁じて
+ * いる。器形と違うのは実体化するかどうかだけで、型の読み方は同じである。
+ */
+function observeArgTypes(sites, index, env, unwrapSpread = false) {
+  const els = new Set();
+  const cts = new Set();
+  for (const args of sites) {
+    if (args.length <= index) continue;
+    const sc = args.scope || env;
+    const a = args[index];
+    const inner = unwrapSpread && isSpreadNode(a) ? a.operand : a;
+    const el = containerElementType(inner, sc) || elementTypeOf(inner, sc);
+    if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) els.add(el);
+    const ct = inferAtomType(inner, sc);
+    if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) cts.add(ct);
+  }
+  return { els, cts, el: els.size === 1 ? [...els][0] : null, ct: cts.size === 1 ? [...cts][0] : null };
+}
+
+/**
  * 呼び出しサイトから仮引数の型を確定させる（§5 Pass 1b の Layer 2 版）。
  *
  * §7.1 の `Scalar` は「String を含まない Atom」という**族**であり、「呼び出しサイトで
@@ -2812,12 +2837,7 @@ function callsitesOf(nodes, fnName, rootEnv) {
  */
 function collectCallsiteParamTypes(nodes, env) {
   let changed = false;
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
     const binding = envLookup(env, node.left.value);
@@ -2877,21 +2897,8 @@ function collectCallsiteParamTypes(nodes, env) {
       const ssites = callsitesOf(nodes, node.left.value, env);
       const sscope = rhs.scope;
       if (ssites.length > 0 && sscope) {
-        const els = new Set();
-        const cts = new Set();
-        for (const args of ssites) {
-          if (args.length === 0) continue;
-          const sc = args.scope || env;
-          const a = args[0];
-          // 展開（`l~`）で渡されたものだけを見る。`~` 無しの List は §5.4 が禁じている。
-          const inner = a && a.type === "operation" && a.position === "postfix" && a.name === "expand" ? a.operand : a;
-          const el = containerElementType(inner, sc) || elementTypeOf(inner, sc);
-          if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) els.add(el);
-          const ct = inferAtomType(inner, sc);
-          if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) cts.add(ct);
-        }
-        const el = els.size === 1 ? [...els][0] : null;
-        const ct = cts.size === 1 ? [...cts][0] : null;
+        // 展開（`l~`）で渡されたものだけを見る＝`observeArgTypes` の `unwrapSpread`。
+        const { el, ct } = observeArgTypes(ssites, 0, env, true);
         const hb = envLookup(sscope, entries[0].name);
         if (hb && el && hb.atomType !== el) { hb.atomType = el; changed = true; }
         const rb2 = envLookup(sscope, entries[1].name);
@@ -2977,7 +2984,7 @@ function collectCallsiteParamTypes(nodes, env) {
           let anyL = false, anyE = false;
           for (const args of sites) {
             if (args.length <= ai) continue;
-            const cf = { target: "aarch64_qemu", charset: "ascii", env: args.scope || env };
+            const cf = shapeConf(args.scope || env);
             const at = args[ai] && args[ai].atomType;
             // **並びの引き方は `structShapeOfNode` 1箇所である。** ここで `layoutOfStruct` を
             // 直に呼んでいたため、リテラルしか引けなかった——`f (mk 7)` のように**関数の返す器を
@@ -3026,7 +3033,7 @@ function collectCallsiteParamTypes(nodes, env) {
         let layout = null;
         for (const args of bsites) {
           if (args.length === 0) { agree = false; break; }
-          const lay = layoutOfStruct(args[0], { target: "aarch64_qemu", charset: "ascii", env: args.scope || env });
+          const lay = layoutOfStruct(args[0], shapeConf(args.scope || env));
           if (!lay || lay.slotKind !== "named") { agree = false; break; }
           layout = lay;
           for (const s of lay.slots || []) {
@@ -3055,19 +3062,8 @@ function collectCallsiteParamTypes(nodes, env) {
           }
         }
       }
-      const obsEl = new Set();
-      const obsCt = new Set();
-      for (const args of bsites) {
-        if (args.length === 0) continue;
-        const sc = args.scope || env;
-        const el = containerElementType(args[0], sc) || elementTypeOf(args[0], sc);
-        if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) obsEl.add(el);
-        const ct = inferAtomType(args[0], sc);
-        if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) obsCt.add(ct);
-      }
-      // 食い違うなら決まらないのが正しい（複数の型で呼ばれている）。
-      const el = obsEl.size === 1 ? [...obsEl][0] : null;
-      const ct = obsCt.size === 1 ? [...obsCt][0] : null;
+      // 食い違うなら決まらないのが正しい（複数の型で呼ばれている）＝`observeArgTypes`。
+      const { el, ct } = observeArgTypes(bsites, 0, env);
       for (const e of entries) {
         if (!e.name || e.pattern) continue;
         const b = envLookup(bscope, e.name);
@@ -3153,15 +3149,7 @@ function collectCallsiteParamTypes(nodes, env) {
     // sret の計画が立たない——`String` は型名に要素が入っている（`≅ List(Char)`）ので
     // 偶然通り、`List` だけが落ちていた。
     if (rhs.scope && isIdentifierNode(paramNode)) {
-      const obsEl = new Set();
-      const obsCt = new Set();
-      for (const args of sites) {
-        if (args.length === 0) continue;
-        const el = containerElementType(args[0], args.scope || env) || elementTypeOf(args[0], args.scope || env);
-        if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) obsEl.add(el);
-        const ct = inferAtomType(args[0], args.scope || env);
-        if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) obsCt.add(ct);
-      }
+      const { els: obsEl, cts: obsCt } = observeArgTypes(sites, 0, env);
       const b0 = envLookup(rhs.scope, paramNode.value);
       if (b0) {
         // 全サイトで一致したときだけ採る（食い違うなら決まらないのが正しい）。
@@ -3403,12 +3391,7 @@ function cursorGroupOfNode(n, env) {
  */
 function seedCursorPullers(nodes, env) {
   let changed = false;
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || !rhs.cursorEntry || !rhs.scope) continue;
     // 入口の仮引数が捕まえた入力である。
@@ -3472,12 +3455,7 @@ function reprOfNode(n, scope) {
  */
 function collectParamTypes(nodes, env) {
   let changed = false;
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const binding = envLookup(env, node.left.value);
     if (!binding) continue;
     const rhs = node.right;
@@ -4057,6 +4035,15 @@ function applyCalleeBinding(node, env) {
   return resolveThroughAddress(envLookup(env, base.value), env) || null;
 }
 
+// ノードの子はこの4つの枝と、行と、既定値である——「どの欄が子か」を決める場所を
+// 1つにする（以前は同じ並びが5つの走査に散っており、欄を足すたび5箇所直す形だった）。
+// **`collectPolymorphicIndex` はここを使わない。** あちらは `middle` をわざと見ない
+// ——畳むと歩くノードが増え、今は黙って飛ばしている診断が出てしまう。
+// pass1b の `subNodes` も別物である（あちらは `middle` も既定値も見ない）。
+function childrenOf(n) {
+  return [n.left, n.right, n.operand, n.middle, ...(n.lines || []), ...(n.entries || []).map((e) => e.default)];
+}
+
 // 不動点計算のために、前回付けた型注釈を消す。
 function clearTypeAnnotations(node) {
   if (!node || typeof node !== "object") return;
@@ -4071,21 +4058,14 @@ function clearTypeAnnotations(node) {
   delete node.mergedSlots;
   delete node.slotOrigins;
   delete node.mergeBase;
-  for (const k of ["left", "right", "operand", "middle"]) clearTypeAnnotations(node[k]);
-  for (const l of node.lines || []) clearTypeAnnotations(l);
-  for (const e of node.entries || []) clearTypeAnnotations(e.default);
+  for (const c of childrenOf(node)) clearTypeAnnotations(c);
 }
 
 // トップレベルの `名前 : ラムダ` から返値型を集めて識別子テーブルへ書き戻す。
 // 変化があったら true（不動点の判定に使う）。
 function collectReturns(nodes, env) {
   let changed = false;
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     const binding = envLookup(env, node.left.value);
     if (!binding) continue;
@@ -4215,9 +4195,7 @@ function collectCompositionMismatch(nodes, env, diagnostics) {
       }
       return;
     }
-    for (const k of ["left", "right", "operand", "middle"]) visit(node[k]);
-    for (const line of node.lines || []) visit(line);
-    for (const e of node.entries || []) visit(e.default);
+    for (const c of childrenOf(node)) visit(c);
   };
   for (const node of nodes) visit(node);
 }
@@ -4238,12 +4216,7 @@ function bareIdent(n) {
  * 型変数も制約ソルビングも使っていない（§1）——束を単調に上がるだけである。
  */
 function annotateAll(nodes, env, diagnostics) {
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
     const binding = envLookup(env, node.left.value);
@@ -4255,12 +4228,7 @@ function annotateAll(nodes, env, diagnostics) {
     }
   }
   // `名前 : $対象` の由来を記録する。`@名前` の呼び先を静的に解くのに使う。
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = stripImport(node.right);
     // **`名前 : 別名` も呼び先の由来である。** `g : f` と書いたとき `g 5` の呼び先は `f`
     // であり、構文から読める。`$` を挟むかどうかは持ち上げの有無の違いでしかなく、
@@ -4311,12 +4279,7 @@ function annotateAll(nodes, env, diagnostics) {
   };
   runFixpoint();
   // 返値だけを底へ戻して、確定した仮引数の型で回し直す。
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const b2 = envLookup(env, node.left.value);
     if (b2 && b2.returns !== undefined) {
       b2.returns = "Unit";
@@ -4351,9 +4314,7 @@ function annotateAll(nodes, env, diagnostics) {
     if (!node || typeof node !== "object" || seen.has(node)) return;
     seen.add(node);
     for (let s = node.scope; s && s.bindings && !scopes.has(s); s = s.parent) scopes.add(s);
-    for (const k of ["left", "right", "operand", "middle"]) bottomOutElementTypes(node[k], seen, scopes);
-    for (const l of node.lines || []) bottomOutElementTypes(l, seen, scopes);
-    for (const e of node.entries || []) bottomOutElementTypes(e.default, seen, scopes);
+    for (const c of childrenOf(node)) bottomOutElementTypes(c, seen, scopes);
   };
   {
     const seen = new Set();
@@ -4374,12 +4335,7 @@ function annotateAll(nodes, env, diagnostics) {
   // あるときは公理を止めるしかない（`preprocess.sn` の `walk` は残ったインデントを
   // 閉じる）。代償は、正当な「空」と失敗して `__` に落ちた値を区別できなくなること
   // である（`function_guide.md` の状態ベクタの節）。だから information に留める。
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
     const pn = rhs.left;
@@ -4407,12 +4363,7 @@ function annotateAll(nodes, env, diagnostics) {
   // `f : [x ~xs] ? xs` が `Unit` を返すと言い張りながら値はリストを返す——型と値が
   // 食い違う。分からないことを「分かった」と書かないのが `.st` の原則であり（§1）、
   // 「無い」と断じないのが原理4 の線引きである。
-  for (const node of nodes) {
-    // 糖衣が置き換えた元の定義は見ない。**同じ名前の束縛が2つある**ので、両方から
-    // 書き戻すと型が交互に書き換わって不動点が回り続ける（実際 `sep` が String と Struct を
-    // 300 周以上往復し、コンパイルが 85ms から 6 秒になっていた）。勝つのは後の定義である。
-    if (node && node.supersededByDesugar) continue;
-    if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+  for (const node of liveDefines(nodes)) {
     const binding = envLookup(env, node.left.value);
     if (binding && binding.returnsSeeded) binding.returns = null;
   }
@@ -4481,9 +4432,7 @@ function checkCharsetConstraints(nodes, charset) {
         }
       }
     }
-    for (const k of ["left", "right", "operand", "middle"]) visit(node[k]);
-    for (const l of node.lines || []) visit(l);
-    for (const e of node.entries || []) visit(e.default);
+    for (const c of childrenOf(node)) visit(c);
   };
   for (const n of nodes) {
     if (isBareComment(n)) continue;
@@ -4524,9 +4473,7 @@ function checkLayerConstraints(nodes, layer) {
 				);
 			}
 		}
-		for (const k of ["left", "right", "operand", "middle"]) visit(node[k]);
-		for (const line of node.lines || []) visit(line);
-		for (const e of node.entries || []) visit(e.default);
+		for (const c of childrenOf(node)) visit(c);
 	}
 	for (const node of nodes) visit(node);
 }

@@ -211,10 +211,9 @@ function unwrap(node) {
  * 黙って1本と決めつけず、名指しで落とす。
  */
 function slotsOf(type, conf) {
-	// 型注釈が無いノードは今まで通り1本として扱う（整数リテラルなど）。
-	if (!type || type === "Unit") return 1;
-	const pass = passingOf({ atomType: type }, { target: conf.target, charset: conf.charset });
-	return pass ? Math.max(pass.slots, 1) : null;
+	// 型しか手元に無いときの入口。答えは下の `slotsOfNode` と同じ規則なので、型注釈だけの
+	// ノードに包んでそちらへ渡す（型注釈が無いものを1本として扱うのも向こうが持つ）。
+	return slotsOfNode({ atomType: type }, conf);
 }
 
 /**
@@ -493,13 +492,6 @@ function collectMonomorphs(nodes) {
 	return table;
 }
 
-// 裸の仮引数の名前を宣言順で返す。分割代入・rest・デフォルトは null。
-function paramNamesOf(paramNode) {
-	if (isIdentifierNode(paramNode)) return [paramNode.value];
-	if (!paramNode || paramNode.type !== "params") return [];
-	return (paramNode.entries || []).map((e) => (e.pattern || e.rest || e.default ? null : e.name || null));
-}
-
 /**
  * 仮引数の形を宣言順で返す。
  *
@@ -507,8 +499,9 @@ function paramNamesOf(paramNode) {
  *   { kind: "destructure", head, rest } ブラケット分割代入 `[h ~t]`
  *   null                                まだ出せない形（rest・デフォルト）
  *
- * `paramNamesOf` と分けてあるのは、単相化（`collectMonomorphs`）が見るのは「名前で
- * 呼べる仮引数」だけであり、分割代入された仮引数は関数ポインタになりえないためである。
+ * 名前だけが要る場所（単相化＝`collectMonomorphs`）は、ここから `kind === "bare"` の
+ * 名前を拾って使う。単相化が見るのは「名前で呼べる仮引数」だけであり、分割代入された
+ * 仮引数は関数ポインタになりえないためである。
  */
 // スロットのキーになれるノード＝`isSlotKeyAtom` は layout.js の `isSlotKeyNode`
 // （冒頭で別名 import）。かつてここにも写しがあり、片方だけ広げると**同じソースが
@@ -701,8 +694,7 @@ function emitLiftToContainer(em, node, valueOff, why) {
 	em.emit(`mov ${SCRATCH[1]}, #1`, "len は 1");
 	em.emit(`csel ${SCRATCH[1]}, xzr, ${SCRATCH[1]}, eq`, "ただし __ なら len = 0（__ = []）");
 	em.emit(`mov ${SCRATCH[0]}, sp`, "ptr");
-	const po = em.push();
-	const lo = po === null ? null : em.push();
+	const [po, lo] = pushPair(em);
 	if (lo === null) return null;
 	em.store(SCRATCH[0], po, "ptr");
 	em.store(SCRATCH[1], lo, "len");
@@ -757,8 +749,7 @@ function emitSliceLift(em, node, env, scope) {
 	em.emit("mov x13, #0");
 	em.emit(`csel ${SCRATCH[1]}, x12, x13, lo`, "長さは 1（範囲外なら 0 ＝ __）");
 	em.pop(3);
-	const po2 = em.push();
-	const lo2 = po2 === null ? null : em.push();
+	const [po2, lo2] = pushPair(em);
 	if (lo2 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 	em.store(SCRATCH[0], po2, "長さ1の器の ptr（元の器の中を指す）");
 	em.store(SCRATCH[1], lo2, "len");
@@ -1024,6 +1015,21 @@ class Emitter {
 }
 
 /**
+ * 器の2本（`{ptr, len}`）をまとめて借りる。**借りるなら両方、取れなければ両方 null。**
+ *
+ * 1本目が取れなかったら2本目は取りに行かない。器は2本で1つの値なので、片方だけ持って
+ * 先へ進む道は無い——呼ぶ側は `len` だけを見れば足りる。
+ *
+ * **診断はここでは出さない。** 何が深すぎるのか（式か、束縛か）はここからは見えず、
+ * 名指しの文言は現場にしか書けない。呼ぶ側はそれぞれ自分のノードで落とす。
+ */
+function pushPair(em) {
+	const ptr = em.push();
+	const len = ptr === null ? null : em.push();
+	return len === null ? [null, null] : [ptr, len];
+}
+
+/**
  * 式を評価して、結果をフレームのスロットへ積む。
  *
  * @returns 積んだ**スロットの本数**。出せなければ `false`。
@@ -1203,8 +1209,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 置く本数が食い違うと、呼び出し側が読む本数が決まらない。`.rodata` は要らない
 		// （指す先が無いので `ptr` は 0 でよい）。
 		if (cps.length === 0) {
-			const po0 = em.push();
-			const lo0 = po0 === null ? null : em.push();
+			const [po0, lo0] = pushPair(em);
 			if (lo0 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.emit(`mov ${SCRATCH[0]}, #0`, "空文字列は __（len = 0）");
 			em.store(SCRATCH[0], po0, "ptr");
@@ -1218,8 +1223,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		// charset を変えた瞬間に添字がずれる——`charset` が決めるのは要素の幅だけで、
 		// **要素数は charset に依らない**という一点をここで守る。
 		const label = em.intern(cps);
-		const po = em.push();
-		const lo = po === null ? null : em.push();
+		const [po, lo] = pushPair(em);
 		if (lo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 		// AArch64 でラベルのアドレスを作る決まり文句。`adrp` が 4KB 単位の頁を取り、
 		// `:lo12:` が下位12ビットを足す。PC 相対なので位置独立のまま。
@@ -2260,8 +2264,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		em.load(SCRATCH[0], po);
 		em.load(SCRATCH[1], po + 8);
 		em.pop(3);
-		const p2 = em.push();
-		const l2 = p2 === null ? null : em.push();
+		const [p2, l2] = pushPair(em);
 		if (l2 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 		em.store(SCRATCH[0], p2, "ptr");
 		em.store(SCRATCH[1], l2, "len");
@@ -3307,8 +3310,7 @@ function genExpr(node, env, em, scope, tail = false) {
 				em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${t}`, `後ろの ${t} を足す`);
 				em.pop(1);
 			}
-			const po2 = em.push();
-			const lo2 = po2 === null ? null : em.push();
+			const [po2, lo2] = pushPair(em);
 			if (lo2 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[0], lo2, "len");
 			em.load(SCRATCH[1], em.sretDest);
@@ -3515,8 +3517,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			em.load(SCRATCH[0], cnt, "len は書いた個数");
 			em.load(SCRATCH[1], em.sretDest, "ptr は自分の宛先");
 			em.pop(1);
-			const po3 = em.push();
-			const lo3 = po3 === null ? null : em.push();
+			const [po3, lo3] = pushPair(em);
 			if (lo3 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[1], po3, "ptr");
 			em.store(SCRATCH[0], lo3, "len");
@@ -3580,8 +3581,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			}
 			em.emit(`mov ${SCRATCH[0]}, ${into16}`, "ptr");
 			em.pop(em.slot - base16);
-			const po16 = em.push();
-			const lo16 = po16 === null ? null : em.push();
+			const [po16, lo16] = pushPair(em);
 			if (lo16 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[0], po16, "ptr");
 			em.emit(`mov ${SCRATCH[1]}, #${count16}`, "len は要素数");
@@ -3628,8 +3628,7 @@ function genExpr(node, env, em, scope, tail = false) {
 				}
 				em.emit(`mov ${SCRATCH[0]}, ${into}`, "ptr");
 				em.pop(count);
-				const po = em.push();
-				const lo = po === null ? null : em.push();
+				const [po, lo] = pushPair(em);
 				if (lo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 				em.store(SCRATCH[0], po, "ptr");
 				em.emit(`mov ${SCRATCH[1]}, #${count}`, "len は要素数");
@@ -3654,8 +3653,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			}
 			em.emit(`mov ${SCRATCH[0]}, ${into}`, "ptr");
 			em.pop(count);
-			const po = em.push();
-			const lo = po === null ? null : em.push();
+			const [po, lo] = pushPair(em);
 			if (lo === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[0], po, "ptr");
 			em.emit(`mov ${SCRATCH[1]}, x13`, "len は書けた個数");
@@ -4115,8 +4113,7 @@ function genLoadListBinding(node, b, env, em) {
 	const m = measure({ atomType: el }, { target: em.conf.target, charset: em.conf.charset });
 	if (!m || !m.size) return null;
 	const label = em.internBinding(bareName(node.value), vals.join(", "), m.size, true);
-	const po = em.push();
-	const lo = po === null ? null : em.push();
+	const [po, lo] = pushPair(em);
 	if (lo === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 	em.emit(`adrp ${SCRATCH[0]}, ${label}`, `${bareName(node.value)} の場所（番地を取られている）`);
 	em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, :lo12:${label}`);
@@ -5267,8 +5264,7 @@ function genIndex(node, env, em, scope) {
 		em.emit("csel x14, x14, x12, lo");
 		em.emit("csel x15, x15, x12, lo");
 		em.pop(cw + 1);
-		const po16 = em.push();
-		const lo16 = po16 === null ? null : em.push();
+		const [po16, lo16] = pushPair(em);
 		if (lo16 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 		em.store("x14", po16, "要素の ptr");
 		em.store("x15", lo16, "その len");
@@ -5417,8 +5413,7 @@ function genBoxOperand(x, env, em, scope) {
 	em.load(SCRATCH[0], lifted, "ptr");
 	em.load(SCRATCH[1], lifted + 8, "len");
 	em.pop(3);
-	const pOff = em.push();
-	const lOff = pOff === null ? null : em.push();
+	const [pOff, lOff] = pushPair(em);
 	if (lOff === null) return null;
 	em.store(SCRATCH[0], pOff, "ptr");
 	em.store(SCRATCH[1], lOff, "len");
@@ -6070,8 +6065,7 @@ function genWidened(node, want, env, em, scope, cell = null) {
 			em.load(SCRATCH[0], (em.slot - 1) * 8);
 			em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #8]`, "その len");
 			em.pop(2);
-			const po16 = em.push();
-			const lo16 = po16 === null ? null : em.push();
+			const [po16, lo16] = pushPair(em);
 			if (lo16 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[1], po16, "ptr は返値スロット");
 			em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1（枡1つぶんの器）");
@@ -6101,8 +6095,7 @@ function genWidened(node, want, env, em, scope, cell = null) {
 				em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
 				em.emit(storeElem(SCRATCH[0], SCRATCH[1], 0, m1.size), `${m1.size} byte を1つ書く`);
 				em.pop(1);
-				const po0 = em.push();
-				const lo0 = po0 === null ? null : em.push();
+				const [po0, lo0] = pushPair(em);
 				if (lo0 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 				em.store(SCRATCH[1], po0, "ptr は返値スロット");
 				em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
@@ -6143,8 +6136,7 @@ function emitCharLiteralBox(node, env, em, cell = null) {
 	// 置くのは1文字ぶん（`w` byte）なので、枡がそれより広い器へは入れられない。
 	if (cell !== null && cell !== w) return null;
 	const label = em.intern(cps);
-	const po = em.push();
-	const lo = po === null ? null : em.push();
+	const [po, lo] = pushPair(em);
 	if (lo === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 	em.emit(`adrp ${SCRATCH[0]}, ${label}`, `${label} の頁（1文字を器として置く——確保は要らない）`);
 	em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, :lo12:${label}`);
@@ -6548,14 +6540,25 @@ function mutualGroups(nodes) {
 	return group;
 }
 
-function selfConsumes(part, name, params, restNames, group, defaults = null, indexedBy = null) {
-	const bare = (s) => String(s).replace(/[<>]/g, "");
+// **`apply` の鎖を、呼び先と実引数に分ける。** 左へ降りながら実引数を前から積む。
+//
+// `applyChain`（ファイル上部）とは**わざと**別である。あちらは `partial_apply` も同じ
+// 鎖として読み、実引数を剥がさずに返す——出す側（部分適用の畳み）が括りごと要るから
+// である。こちらは読む側（上界と sret の計画）で、`apply` だけを鎖と認め、実引数は
+// `unwrap` して返す。**2つの綴りであって、1つではない。**
+function applyParts(node) {
 	const args = [];
-	let head = part;
+	let head = node;
 	while (head && head.type === "operation" && head.name === "apply") {
 		args.unshift(unwrap(head.right));
 		head = unwrap(head.left);
 	}
+	return { head, args };
+}
+
+function selfConsumes(part, name, params, restNames, group, defaults = null, indexedBy = null) {
+	const bare = (s) => String(s).replace(/[<>]/g, "");
+	const { head, args } = applyParts(part);
 	// 自分か、呼び合う塊の中の誰かなら「食っている」。器の減り方は同じである。
 	const isSelf = isIdentifierNode(head) && (bare(head.value) === bare(name) || (group && group.has(bare(head.value))));
 	if (!args.length || !isSelf) return null;
@@ -6661,12 +6664,7 @@ function selfConsumes(part, name, params, restNames, group, defaults = null, ind
  */
 function selfCallSameArgs(part, name, params) {
 	const bare = (s) => String(s).replace(/[<>]/g, "");
-	const args = [];
-	let head = part;
-	while (head && head.type === "operation" && head.name === "apply") {
-		args.unshift(unwrap(head.right));
-		head = unwrap(head.left);
-	}
+	const { head, args } = applyParts(part);
 	if (!args.length || !isIdentifierNode(head) || bare(head.value) !== bare(name)) return false;
 	// 器を受ける位置が、同じ仮引数そのものか、**その切り出し**であること。
 	//
@@ -6736,6 +6734,32 @@ const measureOfKey = (nm) => (typeof nm === "string" && nm.startsWith(MU_MARK) ?
  * 切片（`ts ' o~`、添字が `Iterator`）は要素ではなく器そのものなので、今まで通り `len`
  * で測る。底が `String` の `s ' i` は `Char`（スカラー）なので、そもそもここへ来ない。
  */
+// **実引数の底にある仮引数を探す歩き**（μ と `len` で共有）。後置 `~`（撒く）と添字を
+// 剥がしながら左へ降り、着いた名前が仮引数で器ならそれを返す。
+//
+// **違いは `slicesOnly` だけである。** `len` で測るときに限り、添字は切片（`Iterator`）で
+// なければならない——同じ形でも測り方が違えば別の話で、その理由は下の2つに書いてある。
+function dominatingParam(a0, params, slicesOnly) {
+	let a = unwrap(a0);
+	for (let i = 0; i < 16 && a; i++) {
+		if (a.type === "operation" && a.position === "postfix" && a.name === "expand" && a.operand) {
+			a = unwrap(a.operand);
+			continue;
+		}
+		if (a.type === "operation" && a.name === "get_prop" && a.left) {
+			if (slicesOnly) {
+				const idx = unwrap(a.right);
+				if (!idx || idx.atomType !== "Iterator") return null; // 切片だけ。要素は器を跨ぐ
+			}
+			a = unwrap(a.left);
+			continue;
+		}
+		break;
+	}
+	if (!isIdentifierNode(a) || !params.includes(a.value)) return null;
+	return isBoxType(a.atomType) ? a.value : null;
+}
+
 /**
  * **その実引数の μ を抑える仮引数**（無ければ null）。
  *
@@ -6751,22 +6775,7 @@ const measureOfKey = (nm) => (typeof nm === "string" && nm.startsWith(MU_MARK) ?
  * 定数の引き算が要る——μ にはそれが要らない（総量は単調に減るだけ）ぶん、こちらの方が
  * 素直に言える。
  */
-function muDominatingParam(a0, params) {
-	let a = unwrap(a0);
-	for (let i = 0; i < 16 && a; i++) {
-		if (a.type === "operation" && a.position === "postfix" && a.name === "expand" && a.operand) {
-			a = unwrap(a.operand);
-			continue;
-		}
-		if (a.type === "operation" && a.name === "get_prop" && a.left) {
-			a = unwrap(a.left);
-			continue;
-		}
-		break;
-	}
-	if (!isIdentifierNode(a) || !params.includes(a.value)) return null;
-	return isBoxType(a.atomType) ? a.value : null;
-}
+function muDominatingParam(a0, params) { return dominatingParam(a0, params, false); }
 
 /**
  * **その実引数の要素数を抑える仮引数**（無ければ null）。`muDominatingParam` の `len` 版。
@@ -6778,41 +6787,7 @@ function muDominatingParam(a0, params) {
  * あり、その `len` は文字数——`||p||`（語の個数）とは何の関係も無い。μ の側なら「どの要素も
  * μ||p|| を超えない」と言えるが、`len` では言えない。**同じ形でも測り方が違えば別の話**である。
  */
-function lenDominatingParam(a0, params) {
-	let a = unwrap(a0);
-	for (let i = 0; i < 16 && a; i++) {
-		if (a.type === "operation" && a.position === "postfix" && a.name === "expand" && a.operand) {
-			a = unwrap(a.operand);
-			continue;
-		}
-		if (a.type === "operation" && a.name === "get_prop" && a.left) {
-			const idx = unwrap(a.right);
-			if (!idx || idx.atomType !== "Iterator") return null; // 切片だけ。要素は器を跨ぐ
-			a = unwrap(a.left);
-			continue;
-		}
-		break;
-	}
-	if (!isIdentifierNode(a) || !params.includes(a.value)) return null;
-	return isBoxType(a.atomType) ? a.value : null;
-}
-
-/**
- * **その実引数の μ は書いた時点で分かるか**（分からなければ null）。
- *
- * `knownLengthOf` の μ 版である。あちらが「要素が何個か」を答えるのに対し、こちらは
- * 「中身が何文字か」を答える——`__` は 0、文字列リテラルはその文字数、器の位置へ渡した
- * スカラーは長さ1の器へ持ち上がる（原理8）ので 1 である。
- */
-function knownMuOf(node) {
-	const u = unwrap(node);
-	if (!u) return null;
-	if (u.type === "atom" && u.kind === "unit") return 0;
-	if (u.type === "atom" && u.kind === "text") return String(u.value ?? "").length;
-	const t = u.atomType;
-	if (t && !isBoxType(t)) return 1;
-	return null;
-}
+function lenDominatingParam(a0, params) { return dominatingParam(a0, params, true); }
 
 function flatBaseParam(q0, params) {
 	const q = unwrap(q0);
@@ -6838,12 +6813,7 @@ function flatBaseParam(q0, params) {
 function boundedCallOf(part, known, params) {
 	const u = unwrap(part);
 	if (!u || u.type !== "operation" || u.name !== "apply") return null;
-	const args = [];
-	let head = u;
-	while (head && head.type === "operation" && head.name === "apply") {
-		args.unshift(unwrap(head.right));
-		head = unwrap(head.left);
-	}
+	const { head, args } = applyParts(u);
 	if (!isIdentifierNode(head)) return null;
 	const p = known.get(bareName(head.value));
 	if (!p) return null;
@@ -6897,7 +6867,7 @@ function boundedCallOf(part, known, params) {
 				addMerged(key, t.coef);
 				continue;
 			}
-			const km = knownMuOf(a);
+			const km = knownLengthOf(a);
 			if (km !== null) {
 				konstAcc += t.coef * km;
 				continue;
@@ -6937,12 +6907,16 @@ function boundedCallOf(part, known, params) {
  * 器の位置へスカラーを渡すと長さ1の器になる（`emitLiftToContainer`——同型は型では
  * 無償、表現では有償）。`__` は長さ0である。リテラルは書いてある通りの長さを持つ。
  * それ以外（名前で来た器）は中身が見えないので分からないと言う（原理4）。
+ *
+ * **μ（平らにしたときの総量）も、今はここへ訊く。** 別名 `knownMuOf` が同じ本文の写し
+ * として在ったが、答えは1字も違わなかった——「要素が何個か」と「中身が何文字か」が
+ * 分かれるのは要素がまた器のときだけで、その答えはここには無い（名前で来た器は null）。
+ * **分けるなら設計であって、写しではない。**
  */
 function knownLengthOf(node) {
 	const u = unwrap(node);
 	if (!u) return null;
 	if (u.type === "atom" && u.kind === "unit") return 0;
-	if (u.type === "atom" && u.kind === "text") return String(u.value ?? "").length;
 	const t = u.atomType;
 	if (t && !isBoxType(t)) return 1; // スカラーは持ち上がって長さ1
 	return null;
@@ -7270,7 +7244,7 @@ function returnSizeBound(lam, name, known, group) {
 				addResolved(key, c);
 				return true;
 			}
-			const km = d ? knownMuOf(d) : null;
+			const km = d ? knownLengthOf(d) : null;
 			if (km !== null) {
 				extra += c * km;
 				return true;
@@ -7300,6 +7274,17 @@ function returnSizeBound(lam, name, known, group) {
 	for (const [nm, c] of terms) if (!resolveTerm(nm, c, 0)) return null;
 	return { konst: konst + extra, terms: [...resolved].map(([sizeOf, coef]) => ({ sizeOf, coef })) };
 }
+
+// **覗き穴の家族が共有する読み方。** 行から命令だけを取り出す（行末の注記を落とす）、
+// ラベルか、スロットの読み書きの形か——同じ字面を関数ごとに書き直していた。
+//
+// `isBranch`/`isBreak` はここに置かない。**跨いでよい分岐が覗き穴ごとに違う**ので、
+// 3つの正規表現は同じに見えて別物である（`blr` まで見るもの・`br` まで・`bl` だけ）。
+const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
+const isLabel = (t) => /^[.\w]+:$/.test(t);
+// スロットは `x29` からの固定オフセット——読み書きの形はこの2つしかない。
+const SLOT_ST = /^str\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
+const SLOT_LD = /^ldr\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
 
 /**
  * **書いた直後に同じレジスタへ読み戻す対を消す**（覗き穴）。
@@ -7342,13 +7327,11 @@ function returnSizeBound(lam, name, known, group) {
  * **`stur` が要る**——ここを持たないと畳めない組み合わせが半分残る。
  */
 function peepholeShareAddressBase(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
 	// 即値は 16 進でも 10 進でも出る（`movz x9, #0x30` と `mov x10, #0`）。
 	const MOVZ = /^(?:movz|mov)\s+(x\d+),\s*#(0x[0-9a-fA-F]+|[0-9]+)(?:,\s*lsl\s*#(\d+))?$/;
 	const MOVK = /^movk\s+(x\d+),\s*#(0x[0-9a-fA-F]+|[0-9]+),\s*lsl\s*#(\d+)$/;
 	// 運ぶ側は `xzr`/`wzr` にもなる（0 を書くとき）。番地の側は普通の register だけ。
 	const MEM = /^(strb|strh|str|ldrb|ldrh|ldr)\s+([wx](?:\d+|zr)),\s*\[(x\d+)\]$/;
-	const isLabel = (t) => /^[.\w]+:$/.test(t);
 	const isBranch = (t) => /^(b|b\.\w+|cbz|cbnz|tbz|tbnz|bl|br|blr|ret)\b/.test(t);
 	const NOWRITE = /^(str|strb|strh|stur|sturb|sturh|stp|cmp|cmn|tst)\b/;
 	const FIRSTREG = /^[a-z.]+\s+([wx]\d+)/;
@@ -7474,10 +7457,6 @@ function peepholeShareAddressBase(lines) {
  * 番地が漏れている可能性があるので**関数ごと諦める**（`$名前` が典型）。
  */
 function peepholeDeadSlotStores(lines) {
-	const insOf = (l) => l.trim().replace(new RegExp("\\s*//.*$"), "");
-	const ST = new RegExp("^str\\s+(x\\d+),\\s*\\[x29,\\s*#(\\d+)\\]$");
-	const LD = new RegExp("^ldr\\s+(x\\d+),\\s*\\[x29,\\s*#(\\d+)\\]$");
-	const isLabel = (t) => new RegExp("^[.\\w]+:$").test(t);
 	const isBranch = (t) => new RegExp("^(b|b\\.\\w+|cbz|cbnz|tbz|tbnz|bl|br|ret)\\b").test(t);
 	const mentionsFp = new RegExp("\\bx29\\b");
 	const framePro = new RegExp("^mov\\s+x29,\\s*sp$");
@@ -7486,22 +7465,22 @@ function peepholeDeadSlotStores(lines) {
 	for (const l of lines) {
 		const t = insOf(l);
 		if (!mentionsFp.test(t)) continue;
-		if (ST.test(t) || LD.test(t)) continue;
+		if (SLOT_ST.test(t) || SLOT_LD.test(t)) continue;
 		if (framePro.test(t) || frameSave.test(t)) continue;
 		return lines;
 	}
 	const drop = new Set();
 	for (let i = 0; i < lines.length; i++) {
-		const st = ST.exec(insOf(lines[i]));
+		const st = SLOT_ST.exec(insOf(lines[i]));
 		if (!st) continue;
 		for (let m = i + 1; m <= lines.length; m++) {
 			if (m === lines.length) { drop.add(i); break; } // 関数の終わりまで誰も読まない
 			const t = insOf(lines[m]);
 			if (!t) continue;
 			if (isLabel(t) || isBranch(t)) break;
-			const ld = LD.exec(t);
+			const ld = SLOT_LD.exec(t);
 			if (ld && ld[2] === st[2]) break; // 読まれた
-			const st2 = ST.exec(t);
+			const st2 = SLOT_ST.exec(t);
 			if (st2 && st2[2] === st[2]) { drop.add(i); break; } // 上書きされた
 		}
 	}
@@ -7510,15 +7489,12 @@ function peepholeDeadSlotStores(lines) {
 
 function peepholeRedundantLoads(lines) {
 	const out = [];
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
-	const ST = /^str\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
-	const LD = /^ldr\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
 	for (const line of lines) {
 		const cur = insOf(line);
-		const ld = LD.exec(cur);
+		const ld = SLOT_LD.exec(cur);
 		if (ld && out.length > 0) {
 			const prev = insOf(out[out.length - 1]);
-			const st = ST.exec(prev);
+			const st = SLOT_ST.exec(prev);
 			// 同じレジスタ・同じスロットなら、この `ldr` は何も変えない。
 			if (st && st[1] === ld[1] && st[2] === ld[2]) continue;
 			// **別のレジスタなら、記憶を経由せず渡せる。** 直前に書いた値をそのまま
@@ -7554,17 +7530,13 @@ function peepholeRedundantLoads(lines) {
  * 加えて、写し元が途中で書き換わらないこと・写し先がちょうど1回だけ読まれることを見る。
  */
 function peepholeSlotMoves(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
-	const LD = /^ldr\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
-	const ST = /^str\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
-	const isLabel = (s) => /^[.\w]+:$/.test(s);
 	const isBranch = (s) => /^(b|b\.\w+|cbz|cbnz|tbz|tbnz|bl)\b/.test(s);
 	const drop = new Set();
 	const rewrite = new Map(); // 行番号 → 読み替え先スロット
 	for (let k = 0; k + 1 < lines.length; k++) {
 		if (drop.has(k) || drop.has(k + 1)) continue;
-		const a = LD.exec(insOf(lines[k]));
-		const b = ST.exec(insOf(lines[k + 1]));
+		const a = SLOT_LD.exec(insOf(lines[k]));
+		const b = SLOT_ST.exec(insOf(lines[k + 1]));
 		if (!a || !b || a[1] !== b[1] || a[2] === b[2]) continue;
 		const [src, dst] = [a[2], b[2]];
 		let at = -1;
@@ -7572,10 +7544,10 @@ function peepholeSlotMoves(lines) {
 		for (let m = k + 2; m < lines.length; m++) {
 			const s = insOf(lines[m]);
 			if (isLabel(s) || isBranch(s)) { ok = false; break; }
-			const st = ST.exec(s);
+			const st = SLOT_ST.exec(s);
 			if (st && st[2] === src) { ok = false; break; } // 写し元が書き換わった
 			if (st && st[2] === dst) break; // 写し先が上書きされた——ここまでで完結
-			const ld = LD.exec(s);
+			const ld = SLOT_LD.exec(s);
 			if (ld && ld[2] === dst) {
 				if (at >= 0) { ok = false; break; } // 2回以上読まれる
 				at = m;
@@ -7620,16 +7592,13 @@ const SCRATCH_REGS = ["x9", "x10", "x11", "x12", "x13", "x14", "x15"];
  * 収まり、往復の 93% がここに含まれる。
  */
 function slotsToRegisters(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
-	const ST = /^str\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
-	const LD = /^ldr\s+(x\d+),\s*\[x29,\s*#(\d+)\]$/;
 	// **番地が漏れていたら記憶でなければならない。** スロットの読み書き以外で `x29` が
 	// 出てきたら、そのフレームは誰かに指されている可能性がある（`$名前` が典型）。
 	// 相互末尾呼び出しの畳み（`ldp x29, x30`）だけは通す——戻しをその手前に差し込む。
 	for (const l of lines) {
 		const t = insOf(l);
 		if (!/\bx29\b/.test(t)) continue;
-		if (ST.test(t) || LD.test(t)) continue;
+		if (SLOT_ST.test(t) || SLOT_LD.test(t)) continue;
 		if (/^mov\s+x29,\s*sp$/.test(t)) continue;
 		// **`mov sp, x29` は漏れではない。** x29 を*読んで* `sp` を戻すだけで、番地は誰の
 		// 手にも渡らない——ここが見ているのは「フレームの番地が外へ出たか」である。
@@ -7644,7 +7613,7 @@ function slotsToRegisters(lines) {
 	// 使う深さを集める（飛び飛びでも、深さ→レジスタの対応は変えない）。
 	const used = new Set();
 	for (const l of lines) {
-		const m = ST.exec(insOf(l)) || LD.exec(insOf(l));
+		const m = SLOT_ST.exec(insOf(l)) || SLOT_LD.exec(insOf(l));
 		if (m) {
 			const d = (Number(m[2]) - 16) / 8;
 			if (!Number.isInteger(d) || d < 0) return null;
@@ -7704,7 +7673,7 @@ function slotsToRegisters(lines) {
 	const bodyUses = new Set();
 	for (const l of lines) {
 		const t = insOf(l);
-		if (ST.test(t) || LD.test(t)) continue;
+		if (SLOT_ST.test(t) || SLOT_LD.test(t)) continue;
 		for (const m of t.matchAll(/\b[wx](\d+)\b/g)) bodyUses.add("x" + m[1]);
 	}
 	// **使い捨てで足りるときだけそちらを使う。** 足りなければ callee-saved に落ちる
@@ -7726,7 +7695,7 @@ function slotsToRegisters(lines) {
 	// スロットがある）、順位で切ると往復の多い方を落としかねない。
 	const hits = new Map();
 	for (const l of lines) {
-		const m = ST.exec(insOf(l)) || LD.exec(insOf(l));
+		const m = SLOT_ST.exec(insOf(l)) || SLOT_LD.exec(insOf(l));
 		if (m) {
 			const d = (Number(m[2]) - 16) / 8;
 			hits.set(d, (hits.get(d) || 0) + 1);
@@ -7747,12 +7716,12 @@ function slotsToRegisters(lines) {
 	const off = (v) => to.get((Number(v) - 16) / 8);
 	const out = lines.map((l) => {
 		const t = insOf(l);
-		const st = ST.exec(t);
+		const st = SLOT_ST.exec(t);
 		if (st) {
 			const d = (Number(st[2]) - 16) / 8;
 			return at.has(d) ? "\tmov " + at.get(d) + ", " + st[1] : "\tstr " + st[1] + ", [x29, #" + off(st[2]) + "]";
 		}
-		const ld = LD.exec(t);
+		const ld = SLOT_LD.exec(t);
 		if (ld) {
 			const d = (Number(ld[2]) - 16) / 8;
 			return at.has(d) ? "\tmov " + ld[1] + ", " + at.get(d) : "\tldr " + ld[1] + ", [x29, #" + off(ld[2]) + "]";
@@ -7843,7 +7812,6 @@ function regsOf(t) {
  * ——`add w9, x19, w10` は命令として成り立たない。
  */
 function peepholeFoldMoves(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
 	const isBreak = (t) => !t || /^[.\w$]+:$/.test(t) || /^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz)\b/.test(t) || t.startsWith("b.");
 	const MOV = /^mov (x\d+), (x\d+)$/;
 	const out = lines.slice();
@@ -8054,7 +8022,6 @@ function liveOutSets(ins, labels) {
  * ならない——既にある名前へ向け直すだけである。
  */
 function propagateCopies(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
 	const idx = [];
 	const ins = [];
 	const labels = new Map();
@@ -8138,7 +8105,6 @@ function propagateCopies(lines) {
  * `x29`/`x30` には触らない。フレームと戻り先は、この本文の外（入口と出口）が読む。
  */
 function deadCodeElim(lines) {
-	const insOf = (l) => l.trim().replace(/\s*\/\/.*$/, "");
 	const idx = [];
 	const ins = [];
 	const labels = new Map();
@@ -8256,14 +8222,21 @@ function emitSretBase(em, dst, width) {
 	else em.emit(`sub ${dst}, ${dst}, ${SCRATCH[1]}`, "戻せば器の底");
 }
 
-function emitSretCapacityGuard(em, idxReg) {
+// **上限との照合はこの3命令だけである。** 上限を読み、比べ、越えていたら `__` へ飛ぶ
+// ——3箇所が同じことを別々に書いていた。違うのは比べる向きと条件だけなので、そこを
+// 引数にする。`em.sretLimit` が無い（スロットをもらっていない）なら何も出さない。
+function emitSretCapCheck(em, lhs, rhs, cond, why) {
 	if (em.sretLimit === null || em.sretLimit === undefined || !em.unitLabel) return;
+	em.load(SRET_LIMIT, em.sretLimit, "入る個数（この周の残り）");
+	em.emit(`cmp ${lhs}, ${rhs}`, why);
+	em.emit(`b.${cond} ${em.unitLabel}`, "入らなければ器は作れない（__ を返す）");
+}
+
+function emitSretCapacityGuard(em, idxReg) {
 	// **位置は底から数える。** ループにするとカーソルが周ごとに進むので、この周の中での
 	// 位置（`idxReg`）だけでは上限と比べられない——前の周までに書いた合計を足す。
 	// ループにならなければ合計は 0 のままで、足す命令は死んで消える。
-	em.load(SRET_LIMIT, em.sretLimit, "入る個数（この周の残り）");
-	em.emit(`cmp ${idxReg}, ${SRET_LIMIT}`, "入るか");
-	em.emit(`b.ge ${em.unitLabel}`, "入らなければ器は作れない（__ を返す）");
+	emitSretCapCheck(em, idxReg, SRET_LIMIT, "ge", "入るか");
 }
 
 /**
@@ -8300,11 +8273,7 @@ function emitSretLanding(em, width) {
 	em.emit(`b.eq ${skip}`, "在るなら写さない");
 	em.emit(`cbz x1, ${skip}`, "空なら写すものが無い（__ はそのまま）");
 	// **写す前に入るかを確かめる。** 器を丸ごと運ぶので、要素数がそのまま位置の上限である。
-	if (em.sretLimit !== null && em.sretLimit !== undefined && em.unitLabel) {
-		em.load(SRET_LIMIT, em.sretLimit, "入る個数（この周の残り）");
-		em.emit(`cmp x1, ${SRET_LIMIT}`, "入るか");
-		em.emit(`b.gt ${em.unitLabel}`, "入らなければ器は作れない（__ を返す）");
-	}
+	emitSretCapCheck(em, "x1", SRET_LIMIT, "gt", "入るか");
 	const shift = width === 16 ? 4 : width === 8 ? 3 : width === 4 ? 2 : width === 2 ? 1 : 0;
 	const top = em.newLabel("land");
 	const end = em.newLabel("lande");
@@ -8341,10 +8310,8 @@ function emitSretLanding(em, width) {
 }
 
 function emitSretCapacityNeed(em, need) {
-	if (em.sretLimit === null || em.sretLimit === undefined || !em.unitLabel || need <= 0) return;
-	em.load(SRET_LIMIT, em.sretLimit, "入る個数（この周の残り）");
-	em.emit(`cmp ${SRET_LIMIT}, #${need}`, `${need} 個入るか`);
-	em.emit(`b.lt ${em.unitLabel}`, "入らなければ器は作れない（__ を返す）");
+	if (need <= 0) return;
+	emitSretCapCheck(em, SRET_LIMIT, `#${need}`, "lt", `${need} 個入るか`);
 }
 
 
@@ -8481,7 +8448,13 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 		const sh = allShapes[i];
 		return !sh || sh.kind !== "bare" || !(sh.name in callees);
 	});
+	// 型は2つの経路から来る。裸の仮引数は呼び出しサイトからの逆算（`callsiteParamTypes`）、
+	// 分割代入された名前はラムダのスコープに直接ある——`[h ~t]` の `h` と `t` は仮引数の
+	// 位置に名前が無いので、束縛の側にしか書いていない。
 	const allTypes = lambdaNode.callsiteParamTypes || [];
+	// **束縛は直接の Map ではなく `envLookup` で引く。** `[c ~rest]` の `c` はラムダの
+	// スコープの Map に直接は載らない（載るのは器を受ける `rest` だけ）が、束縛としては
+	// 解決されている。Map を覗くと「型が無い」に見えて、要素の幅が決まらなくなる。
 	const typeOf = (raw) => {
 		const b = lambdaNode.scope ? envLookup(lambdaNode.scope, raw) : null;
 		return b ? b.atomType : null;
@@ -8699,12 +8672,7 @@ function returnsCallResult(arm, known) {
 	if (u.type === "operation" && u.name === "or") return returnsCallResult(u.left, known) || returnsCallResult(u.right, known);
 	if (Array.isArray(u.lines)) return u.lines.some((l) => returnsCallResult(isDefineNode(l) ? l.right : l, known));
 	if (u.type !== "operation" || u.name !== "apply") return false;
-	const args = [];
-	let head = u;
-	while (head && head.type === "operation" && head.name === "apply") {
-		args.unshift(unwrap(head.right));
-		head = unwrap(head.left);
-	}
+	const { head, args } = applyParts(u);
 	if (!isIdentifierNode(head)) return false;
 	const e = known.get(bareName(head.value));
 	if (!e) return false;
@@ -8784,6 +8752,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		// これが無いと、要素が `String` の器を返す関数——lexer.sn の `tokens` がまさに
 		// それ——は sret の計画に載らず、「フレームから出るので置けない」で止まっていた。
 		// レジスタに乗る要素（`Char`/`Int`）はこれまで通り `measure` の答えと同じである。
+		// その順（`passingOf` が先、`measure` は後）は `elementCellSize` が持っている。
 		// **幅は返す器が決める。** 組む節があればそれが言うし、無ければ返値の型が言う——
 		// 組まずに下から受け取って返す関数（`mark`）も、返すのは同じ形の器である。
 		const shape = build || lam.right;
@@ -8811,12 +8780,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 			continue;
 		}
 		const et = shape ? shape.elementType || (shape.atomType === "String" ? "Char" : null) : null;
-		const pass = et ? passingOf({ atomType: et }, { target: em.conf.target, charset: em.conf.charset }) : null;
-		const m = pass && pass.mode === "reference"
-			? { size: pass.size }
-			: et
-				? measure({ atomType: et }, { target: em.conf.target, charset: em.conf.charset })
-				: null;
+		const m = elementCellSize(et, em.conf);
 		// **幅が測れなくても落とさない。** 上界は合成のために誰のぶんも要る——ここで
 		// `continue` すると `continues` / `next_st` のぶんが消え、それを呼ぶ `walk` の
 		// 上界まで出せなくなる（walk が計画から落ち、器を置く先を失っていた）。
@@ -8908,8 +8872,7 @@ function callsItself(node, name) {
 function appendableCallee(node, em) {
 	const u = stripExpand(node);
 	if (!u || u.type !== "operation" || u.name !== "apply") return null;
-	let head = u;
-	while (head && head.type === "operation" && head.name === "apply") head = unwrap(head.left);
+	const { head } = applyParts(u);
 	if (!isIdentifierNode(head)) return null;
 	const nm = bareName(head.value);
 	const e = em.sretPlan && em.sretPlan.get(nm);
@@ -8929,27 +8892,11 @@ function genFunction(name, lambdaNode, env, em, mono) {
 	// （`repr`）は束縛にしか無い——規則を受けた仮引数が要素列への参照に見えていた。
 	// スコープは親へ繋がっているので、これでグローバルも今まで通り引ける。
 	env = lambdaNode.scope || env;
-	const paramNode = lambdaNode.left;
-	const allShapes = paramShapesOf(paramNode);
 	// 具体化された関数ポインタの仮引数は**引数として渡ってこない**（命令へ焼き込み済み）。
 	const callees = (mono && mono.callees) || {};
-	const keep = allShapes.map((_, i) => i).filter((i) => {
-		const sh = allShapes[i];
-		return !sh || sh.kind !== "bare" || !(sh.name in callees);
-	});
 	// 出せない形の報告は `paramRegWidths` が返す `error` に一本化してある（下）。
-	// ここで別文言を出すと、同じ理由が2通りの言い方で出ることになる。
-	// 型は2つの経路から来る。裸の仮引数は呼び出しサイトからの逆算（`callsiteParamTypes`）、
-	// 分割代入された名前はラムダのスコープに直接ある——`[h ~t]` の `h` と `t` は仮引数の
-	// 位置に名前が無いので、束縛の側にしか書いていない。
-	const allTypes = lambdaNode.callsiteParamTypes || [];
-	// **束縛は直接の Map ではなく `envLookup` で引く。** `[c ~rest]` の `c` はラムダの
-	// スコープの Map に直接は載らない（載るのは器を受ける `rest` だけ）が、束縛としては
-	// 解決されている。Map を覗くと「型が無い」に見えて、要素の幅が決まらなくなる。
-	const typeOf = (raw) => {
-		const b = lambdaNode.scope ? envLookup(lambdaNode.scope, raw) : null;
-		return b ? b.atomType : null;
-	};
+	// ここで別文言を出すと、同じ理由が2通りの言い方で出ることになる。仮引数の形と型を
+	// 数え直すのも同じ理由で向こう側だけにある——ここに写しを置くと、片方だけが正しくなる。
 
 	// 入ってくるレジスタの本数と、本体から見える名前を作る。
 	//   裸        1つの名前 : 型の幅ぶん

@@ -126,8 +126,6 @@ function markBlock(input) {
 
     const currentIndent = leadingWs.length; // タブの数をインデントレベルとする
 
-    let prefix = '';
-
     // インデントが浅くなった場合、スタックをポップしてDEDENTマーカーを出力
     while (indentStack.length > 1 && currentIndent < indentStack[indentStack.length - 1]) {
       indentStack.pop();
@@ -151,7 +149,7 @@ function markBlock(input) {
       if (lastContentLineIdx !== -1) {
         result[lastContentLineIdx] += ' ' + content;
       } else {
-        result.push(prefix + content);
+        result.push(content);
         lastContentLineIdx = result.length - 1;
       }
     } else if (currentIndent > indentStack[indentStack.length - 1]) {
@@ -165,7 +163,7 @@ function markBlock(input) {
       }
     } else {
       // インデントが同じ場合
-      result.push(prefix + content);
+      result.push(content);
       lastContentLineIdx = result.length - 1;
     }
 

@@ -26,19 +26,17 @@
  */
 
 import { inferLambdaParamTypes, pointfreeSignature, IDENTITY } from "./pass3.js";
-// ノードの形を見るだけの述語は layout.js が唯一の置き場である（理由はそこの
-// `isDefineNode` のコメント）。
-import { isDefineNode, isIdentifierNode } from "./layout.js";
+// ノードの形を見るだけの述語と、名前の綴りを剥ぐ規則は layout.js が唯一の置き場である
+// （理由はそこの `isDefineNode` のコメント）。`bareName` は `<name>` → `name`——識別子
+// トークンは常に山括弧で囲まれている（pass1 の判定基準と同じ）。ここで渡す名前は
+// 識別子ノードの `value` か、pass3 が `bareKey` で既に剥いだマージ済みスロットの鍵だけ
+// なので、layout.js 側がバッククォートも剥ぐことはここでは観測されない。
+import { isDefineNode, isIdentifierNode, bareName } from "./layout.js";
 
 const UNKNOWN = "_";
 
 function isLambdaNode(n) {
   return !!n && n.type === "operation" && n.name === "lambda";
-}
-
-// `<name>` → `name`。識別子トークンは常に山括弧で囲まれている（pass1 の判定基準と同じ）。
-function bareName(value) {
-  return typeof value === "string" && value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1) : value;
 }
 
 // 単一の identifier ノード、または params ノードから仮引数エントリを取り出す。
@@ -196,25 +194,23 @@ function slotTypeText(node) {
  */
 function structTypeText(node, atomType) {
   if (atomType !== "Struct" || !node) return atomType;
+  // **名前付きスロットの出どころは2つ、書き出しは1つ。** マージ済みの表から来ても
+  // 宣言の行から来ても、並ぶのは「名前・連番・型」の三つ組みなので、拾い方だけが
+  // 違って書き出しは同じである。`slots` を組んでから下の共通の尾へ落ちる。
+  let slots = null;
   // マージの結果はスロット表を直接持つ（list_model.md §5.3）。元の宣言は2つ以上の
   // 構造体に散っているので、書き写せるのは畳んだ後の並びだけである。
   if (node.mergedSlots) {
     // 宣言順は畳んだ後の並び（左の順、右の新しいキーが続く）。重複したキーは元の位置に
     // 留まり、値だけが右のものになる（§5.3 規則2）。物理配置は他の名前付き構造体と
     // 同じく名前順である（stack_abi.md §7.1）。
-    const slots = [...node.mergedSlots].map(([k, v], ordinal) => ({
+    slots = [...node.mergedSlots].map(([k, v], ordinal) => ({
       name: bareName(k),
       ordinal,
       type: slotTypeText(v),
     }));
-    if (slots.length === 0) return "Struct";
-    slots.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return `Struct{${slots.map((s) => `${s.name} : ${s.type} , ${s.ordinal}`).join("  ")}}`;
-  }
-  if (node.slotKind === "named") {
-    // 宣言順（連番）を先に確定させてから、名前でソートして並べる。
-    // 並び＝物理配置（正規順）、各名前が持つ値＝宣言順。両方が明示される。
-    const slots = (node.lines || [])
+  } else if (node.slotKind === "named") {
+    slots = (node.lines || [])
       .map((l, ordinal) => {
         if (isDefineNode(l) && isIdentifierNode(l.left)) {
           return { name: bareName(l.left.value), ordinal, type: slotTypeText(l.right) };
@@ -224,6 +220,10 @@ function structTypeText(node, atomType) {
         return null;
       })
       .filter(Boolean);
+  }
+  if (slots) {
+    // 宣言順（連番）を先に確定させてから、名前でソートして並べる。
+    // 並び＝物理配置（正規順）、各名前が持つ値＝宣言順。両方が明示される。
     if (slots.length === 0) return "Struct";
     slots.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     return `Struct{${slots.map((s) => `${s.name} : ${s.type} , ${s.ordinal}`).join("  ")}}`;

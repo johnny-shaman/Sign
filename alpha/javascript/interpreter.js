@@ -1,11 +1,11 @@
-import { charLimitOf, DEFAULT_CHARSET, literalDigits, literalParts } from "./target_info.js";
+import { literalDigits, literalParts } from "./target_info.js";
 // ノードの形を見るだけの述語は layout.js が唯一の置き場である（理由はそこの
 // `isDefineNode` のコメント）。ここに写しがあったときは「循環 import 回避のため」と
 // 書いてあったが、循環は無い——layout.js が引くのは葉の2つだけである。
-// 後置 `~` の判定は、ここでは `isStructSpreadLine` と `isSpreadNode` の2つの名前で
-// 呼ばれていた（マージが「双方に `~`」を条件にしているので、値ではなく**書かれ方**を
-// 見る：list_model.md §5.3）。同じ規則なので、どちらも layout.js の1つを別名で受ける。
-import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine, isExpandNode as isSpreadNode } from "./layout.js";
+// 後置 `~` の判定は、ここでは `isStructSpreadLine` という名前で受ける（マージが
+// 「双方に `~`」を条件にしているので、値ではなく**書かれ方**を見る：list_model.md §5.3）。
+// `isSpreadNode` という2つ目の名前も同居していたが、同じ規則の別名で誰も呼んでいない。
+import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine } from "./layout.js";
 
 /**
  * 最小インタプリタ（評価器）。Pass2/Pass1b が構築した二分木 AST を評価して値を出す。
@@ -110,14 +110,13 @@ function isStructBlock(node) {
 
 // ---- 実行時環境（Pass1の静的envとは別物、実際の値を保持する） ----
 // diagnosticsは子envにも同じ配列参照を引き継ぐ（ルートenvに一元的に蓄積される）。
-function newRuntimeEnv(parent, charset) {
-  // charset は根に置いて子は引き継ぐ。**文字の算術がここを見る**——足せることと、
-  // 足した先が文字であることは別で、後者は charset が決める。
+// charset はここに持たない。文字の算術は符号位置の算術そのもので、charset を見るのは
+// **書き出すときだけ**だからである（理由は `arithOnValues` のコメント）。
+function newRuntimeEnv(parent) {
   return {
     bindings: new Map(),
     parent: parent || null,
     diagnostics: parent ? parent.diagnostics : [],
-    charset: charset || (parent && parent.charset) || DEFAULT_CHARSET,
   };
 }
 function envDefine(env, name, value) {
@@ -340,11 +339,9 @@ function bindBracketParams(entries, value, env) {
   //
   // **仮引数名は静的に定まっていなければならない。** ここで見るのは書かれた綴りだけで、
   // 実行時の値からフィールド名を作る道は無い。
-  const claimedKeys = new Set();
   for (const entry of entries) {
     if (entry.rest) continue; // restは全エントリ処理後にまとめて扱う
     const key = entry.name.slice(1, -1); // "<foo>" -> "foo" / "`foo`" -> "foo"
-    claimedKeys.add(key);
     let v = Object.prototype.hasOwnProperty.call(value, key) ? value[key] : UNIT;
     if (isUnit(v)) {
       if (entry.default) v = evaluate(entry.default, env);
@@ -751,6 +748,21 @@ function constructValues(node, l, r) {
         return [...(accL || isSpread(l) ? asList(dl) : [dl]), ...(isSpread(r) ? asList(deIterate(r)) : [r])];
 }
 
+// `&`/`|` の短絡（§3.3・AGENTS.md）。**左辺は必ず値として評価する**——止まらずに右へ
+// 進んだときだけ、右辺は末尾位置になる。だから右辺の評価器を引数で受ける
+// （`evalIndentBlock` と同じ形であり、理由も同じ）。
+//
+//   `&` 左辺が Unit なら右辺を評価せず Unit（**左辺そのものではなく Unit**——`[]` や
+//       `""` で止まっても答えは零対象1つである）。
+//   `|` 左辺が非 Unit なら右辺を評価せずその左辺を返す。
+function evalShortCircuit(node, env, tailEval) {
+  const l = evaluate(node.left, env);
+  if (node.name === "and") {
+    if (isUnit(l)) return UNIT;
+  } else if (!isUnit(l)) return l;
+  return tailEval(node.right, env);
+}
+
 function evaluateTail(node, env) {
   if (!node || typeof node !== "object") return evaluate(node, env);
   if (
@@ -774,16 +786,8 @@ function evaluateTail(node, env) {
     return evaluateTail(node.lines[0], env);
   }
   if (node.type === "operation") {
-    if (node.name === "or") {
-      const l = evaluate(node.left, env);
-      if (!isUnit(l)) return l;
-      return evaluateTail(node.right, env);
-    }
-    if (node.name === "and") {
-      const l = evaluate(node.left, env);
-      if (isUnit(l)) return UNIT;
-      return evaluateTail(node.right, env);
-    }
+    // 短絡で右へ進んだ先は末尾位置である（規則そのものは `evalShortCircuit`）。
+    if (node.name === "or" || node.name === "and") return evalShortCircuit(node, env, evaluateTail);
     // **「前置き ＋ 末尾の呼び出し」は積まずに回せる。**
     //
     // `sep : [c ~rest] ? … c (sep rest)` は末尾呼び出しではない——呼んだ後に繋ぐ仕事が
@@ -1063,7 +1067,7 @@ function roundHalfAwayFromZero(x) {
 // 以前は後者が ARITH_OPS を直に叩いており型ガードを丸ごと迂回していたため、
 // `[+ 1] [1 2 3]` が `"1,2,31"`（JSの配列→文字列強制）、`[* 2,] \`abc\`` が NaN を
 // 静かに返していた。算術が何を意味するかを決める場所は1つでなければならない。
-function arithOnValues(name, l, r, limit = charLimitOf(DEFAULT_CHARSET)) {
+function arithOnValues(name, l, r) {
   // **`__` は算術の両側で単位元である**（爆発律）。
   //
   // 算術は `A × A → A`——**積**を食って**同じ対象**を返す。片方が始対象なら、返せる値は
@@ -1186,8 +1190,7 @@ function evalArith(node, env) {
   // ——ここは観測できる差である（`__ + ($UART # x)` は書き込みが起きる）。以前は
   // 「零射との合成は零だから右辺は結果に寄与しえない」という理由で飛ばしていたが、
   // `__` が単位元になった以上その前提が消えた。
-  const lim = charLimitOf(env && env.charset);
-  if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined, lim);
+  if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined);
   const r = unspreadScalar(evaluate(node.right, env));
   // **対象を置けば値が返り、射を置けば射が返る。**
   //
@@ -1213,7 +1216,7 @@ function evalArith(node, env) {
       { left: holeL ? undefined : l, right: holeR ? undefined : r }
     );
   }
-  const value = arithOnValues(name, l, r, lim);
+  const value = arithOnValues(name, l, r);
   // BigInt は「安全な範囲を超えた整数」であり、溢れの規則を適用する対象そのものである。
   // ここで早期に返してしまうと、幅を超えた値が型の規則を通らずに素通りする。
   if (typeof value !== "number" && typeof value !== "bigint") return value;
@@ -1314,13 +1317,13 @@ function buildCharRange(start, end) {
   const s = start.codePointAt(0);
   const e = end.codePointAt(0);
   const step = s <= e ? 1 : -1;
-  return buildRange(s, e, (v) => v + step)
+  // 符号位置の並びを作るのは**レンジそのもの**である——`makeIterator` が規則を持ち、
+  // 実体化は `materializeIterator` が1本で行う（終端の包含も百万件のガードもそこ）。
+  // 同じ走査をここでもう一度書くと、規則が2箇所になる。
+  return materializeIterator(makeIterator(s, (v) => v + step, e))
     .map((c) => String.fromCodePoint(c))
     .join("");
 }
-
-// start から end まで（終端を含む）、stepFnを繰り返し適用して配列へ実体化する。
-// 昇順・降順どちらもstart/endの大小関係だけから判定する（呼び出し元でstepの符号を揃える）。
 
 /**
  * レンジ式の実体（`Iterator`、list_model.md §2.3・type_system.md §2）。
@@ -1471,19 +1474,6 @@ function materializeIterator(it) {
 // 値としてリストが要る場面で、イテレータなら実体化して渡す。
 function deIterate(v) {
   return isIterator(v) ? materializeIterator(v) : v;
-}
-
-function buildRange(start, end, stepFn) {
-  const out = [];
-  let v = start;
-  let guard = 0;
-  const ascending = start <= end;
-  while (ascending ? v <= end : v >= end) {
-    out.push(v);
-    v = stepFn(v);
-    if (++guard > 1000000) throw new Error("interpreter: range: 要素数が多すぎます（stepが0または終端に向かっていない可能性）");
-  }
-  return out;
 }
 
 // type_system.md §6.2「`==` は常に純粋な構造比較（Hom集合の一致）であり、コンストラクタ名を
@@ -1769,7 +1759,7 @@ function getPropValue(l, rightNode, env) {
   }
   // **添字できる並びへ均す規則はここには無い。** `isString` と `asIndexable` の2つを
   // ここでも宣言していたが、直後の return が使っていない完全な死にコードだった
-  // ——生きているのは getPropByValue の側（同じ2つを同じ規則で作っている）。
+  // ——生きているのは getPropByValue の側（規則そのものは `asIndexableList` に1つ）。
   // 同じ問いに答える場所が2つあって、片方は誰も読んでいなかった。
   // get-rest（`list ' N~`）はここには無い。Pass 2 が `list ' (N ~+ 1)` へ均しており、
   // 「終端の無いレンジで引く＝そこから末尾まで」として `getPropByValue` が1本で扱う。
@@ -1805,6 +1795,16 @@ function isNamedSlots(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v) && !v.__lambda__ && !v.__address__ && !v.__iterator__;
 }
 
+// **引ける並びとして見る。** `'` は器の種類を問わず「位置で引く」ので、まず並びへ均す
+// ——String は符号位置の列（`String ≅ List(0u)`）、名前付きスロットは宣言順の値の列、
+// それ以外は1要素の器（`[x] ≅ x`、原理8）。
+//
+// この読み替えは `getPropByValue` の中に2つ（`l ' 1~` の側と `l ' 0` の側）写しで
+// あった。片方だけ器の種類が増えれば、同じ器から引いた添字とスライスが別の答えを出す。
+function asIndexableList(l) {
+  return Array.isArray(l) ? l : typeof l === "string" ? [...l] : isNamedSlots(l) ? Object.values(l) : [l];
+}
+
 function getPropByValue(l, r) {
   if (isUnit(l)) return UNIT;
   // **終端の無いレンジで引くのは「その位置から末尾まで」である。** 位置の列そのものは
@@ -1819,13 +1819,7 @@ function getPropByValue(l, r) {
       return cur;
     }
     const asStr = typeof l === "string";
-    const items = Array.isArray(l)
-      ? l
-      : asStr
-        ? [...l]
-        : isNamedSlots(l)
-          ? Object.values(l)
-          : [l];
+    const items = asIndexableList(l);
     // 負の添字は末尾から数える（`slice` の負 start 解釈が Sign の規約と一致する）。
     //
     // **スライスは覗き窓である**（`listView`）。`l ' 1~` と `[x ~xs]` の `xs` は同じ
@@ -1857,13 +1851,7 @@ function getPropByValue(l, r) {
   // ない**（同一性は `===` と `' !__` が担う、§6.2）。したがって
   // `point == point2` が真でありながら `point ' 0` と `point2 ' 0` が違う値になるのは、
   // `==` が比較していない別の性質を測っているだけであり、正しい観測である。
-  const asIndexable = Array.isArray(l)
-    ? l
-    : isString
-      ? [...l]
-      : isNamedSlots(l)
-        ? Object.values(l)
-        : [l];
+  const asIndexable = asIndexableList(l);
   // 負のインデックスは末尾から数える（`-1`=最後の要素、length+indexへ写像）。
   // 正側は0始まり、負側は-1始まり（-0が無いため対称にはならない）。
   // type_system.md §4.1: `'` は Address（位置）を構造的に要求するため、Float が
@@ -1983,19 +1971,14 @@ function applyPointfree(node, closureEnv, argValues, pfbound) {
     if (argValues.length === 0) return UNIT;
     return argValues.reduce((acc, v) => (isUnit(acc) ? UNIT : combine(acc, v)));
   }
-  if (rightBound && !leftBound) {
-    const bound = boundOf("right");
+  // 片側だけ束縛（右辺束縛 `[- 1]` = `x ? x - 1` / 左辺束縛 `[1 -]` = `x ? 1 - x`）。
+  // 両者は対称で、非可換な演算子では両方が要る——**違うのはオペランドの順序だけ**である。
+  // だから「どちらが束縛されているか」を一度決めて、束縛側の置き場所だけを分ける。
+  if (rightBound !== leftBound) {
+    const bound = boundOf(rightBound ? "right" : "left");
     const x = argValues.length > 0 ? argValues[0] : UNIT;
     if (isUnit(x)) return UNIT;
-    return combine(x, bound);
-  }
-  // 左辺束縛・右辺欠落（`[1 -]` = `x ? 1 - x`）。右辺束縛（`[- 1]`）と対称で、
-  // 非可換な演算子では両方が必要になる。オペランドの順序だけが逆になる。
-  if (leftBound && !rightBound) {
-    const bound = boundOf("left");
-    const x = argValues.length > 0 ? argValues[0] : UNIT;
-    if (isUnit(x)) return UNIT;
-    return combine(bound, x);
+    return rightBound ? combine(x, bound) : combine(bound, x);
   }
   return UNIT;
 }
@@ -2360,6 +2343,24 @@ function evaluate(node, env) {
     // （下のARITH_OPS/COMPARE_OPS分岐に落ちるとnode.left===nullをUnit扱いして
     // 誤った結果になるため、switch/算術分岐より前でここで捕捉する）。
     if (node.partial) return makePointfreeClosure(node, env);
+    // 2項形式 [start ~op step]（終端なし、5種いずれも）は**無限の Pull 型ストリーム**
+    // そのものである（list_model.md §2.3「2項指定」）。3項形式との違いは終端を持つか
+    // どうかだけで、どちらも同じイテレータである。
+    // （3項形式 [start ~op step ~ end] は switch の "range" ケースが処理する——ここへ
+    // 来るのは、外側に終端"~ end"が付いていない生の2項ノードのみ。）
+    // 実体化できないことは扱えないことではない——添字で引けるので、stack_abi.md §3.3 の
+    // ループカウンタ（`c : [0 ~+ 1]`）が成立する。
+    //
+    // 5種の綴りは `RANGE_ARITHMETIC_NAMES` が唯一の置き場である（3項形式の判定も同じ
+    // 集合を引く）。case ラベルとして並べ直すと、同じ一覧が2箇所になる。
+    if (RANGE_ARITHMETIC_NAMES.has(node.name)) {
+      const itStart = evaluate(node.left, env);
+      if (isUnit(itStart)) return UNIT;
+      const itStep = evaluate(node.right, env);
+      if (isUnit(itStep)) return UNIT;
+      if (!isRangePoint(itStart, false) || !isRangePoint(itStep, false)) return UNIT;
+      return makeIterator(itStart, rangeStepFn(node.op, itStep), null);
+    }
     switch (node.name) {
       case "define": {
         const value = node.right.name === "lambda" ? makeClosure(node.right.left, node.right.right, env) : evaluate(node.right, env);
@@ -2418,18 +2419,12 @@ function evaluate(node, env) {
         const g = evaluate(node.right, env);
         return makeComposed(f, g);
       }
-      case "and": {
-        // §3.3・AGENTS.md: 短絡評価。左辺がUnitなら右辺を評価せず即座にUnit。
-        const l = evaluate(node.left, env);
-        if (isUnit(l)) return UNIT;
-        return evaluate(node.right, env);
-      }
-      case "or": {
-        // 短絡評価: 左辺がUnitでなければ右辺を評価せず左辺を返す。
-        const l = evaluate(node.left, env);
-        if (!isUnit(l)) return l;
-        return evaluate(node.right, env);
-      }
+      // 短絡（規則そのものは `evalShortCircuit`）。**ここは末尾位置ではない**ので、
+      // 右辺は普通の `evaluate` で評価する——末尾から来た場合は evaluateTail 側が
+      // 同じ規則へ `evaluateTail` を渡す。
+      case "and":
+      case "or":
+        return evalShortCircuit(node, env, evaluate);
       case "xor": {
         const l = evaluate(node.left, env);
         const r = evaluate(node.right, env);
@@ -2448,20 +2443,8 @@ function evaluate(node, env) {
       // List（右がList~）で「aを先頭へ」、unshift(a,b)はa側がList（左がList~）で
       // 「bを末尾へ」（pass2.js冒頭コメント「優先度10.1の具体的な演算子名」参照、
       // 仕様は方向性を明記していないため実装時に決めた仮定）。
-      // **`push` は Pass 2 が作らなくなった**（余積の向きは常に「左辺が器」で足りる）。
-      // 外から与えられた AST を評価する経路のために残してある。
-      case "push": {
-        // 0 [1 2 3] → [0 1 2 3]（aを先頭に追加）。aがUnit（単位元）なら素通しでbのみ返す。
-        // **`~` が付いていれば撒く**——判定は値であって構文ではない。
-        const rawA = evaluate(node.left, env);
-        const b = deIterate(evaluate(node.right, env));
-        if (isUnit(rawA)) return asList(b);
-        {
-          const t = groupedAbsorb(rawA, b, node.left);
-          if (t !== null) return t;
-        }
-        return [...(isSpread(rawA) ? asList(deIterate(rawA)) : [rawA]), ...asList(b)];
-      }
+      // **`push` は Pass 2 が作らなくなった**（余積の向きは常に「左辺が器」で足りる）ので、
+      // ここにケースは無い——外から `push` ノードを差し込むと「未対応の演算」で止まる。
       case "unshift": {
         // [1 2 3] 4 → [1 2 3 4]（bを末尾に追加）。bがUnit（単位元）なら素通しでaのみ返す。
         const rawB = evaluate(node.right, env);
@@ -2544,25 +2527,9 @@ function evaluate(node, env) {
         const delta = start <= end ? 1 : -1;
         return makeIterator(start, (v) => v + delta, end, delta);
       }
-      case "range_arithmetic":
-      case "range_arithmetic_rev":
-      case "range_geometric":
-      case "range_geometric_rev":
-      case "range_power": {
-        // 2項形式 [start ~op step]（終端なし、5種いずれも）は**無限の Pull 型ストリーム**
-        // そのものである（list_model.md §2.3「2項指定」）。3項形式との違いは終端を持つか
-        // どうかだけで、どちらも同じイテレータである。
-        // （3項形式 [start ~op step ~ end] は上の"range"ケースが処理する——このケースに
-        // 来るのは、外側に終端"~ end"が付いていない生の2項ノードのみ。）
-        // 実体化できないことは扱えないことではない——添字で引けるので、stack_abi.md §3.3 の
-        // ループカウンタ（`c : [0 ~+ 1]`）が成立する。
-        const itStart = evaluate(node.left, env);
-        if (isUnit(itStart)) return UNIT;
-        const itStep = evaluate(node.right, env);
-        if (isUnit(itStep)) return UNIT;
-        if (!isRangePoint(itStart, false) || !isRangePoint(itStep, false)) return UNIT;
-        return makeIterator(itStart, rangeStepFn(node.op, itStep), null);
-      }
+      // 2項形式（`[start ~op step]`、5種いずれも）のケースはここには無い。
+      // 名前の一覧は `RANGE_ARITHMETIC_NAMES` が既に持っており、switch の手前で
+      // それを引いている——同じ5つを case ラベルとしても書くと、綴りが2箇所になる。
       case "product": {
         // list_model.md §2.1: `1,2,3,4,5`（スカラーのカンマ連鎖）は`1 2 3 4 5`と等価な
         // フラットリストだが、§(n次元配列の構築)の`1 2 3 , 4 5 6`は[[1,2,3],[4,5,6]]という
