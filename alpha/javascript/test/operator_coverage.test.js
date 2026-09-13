@@ -126,7 +126,7 @@ for (const [listName, list] of [["NOT_YET", NOT_YET], ["NOT_AN_INSTRUCTION", NOT
 
 // ---- 3. 1命令の行は、その綴りが本当に出る ----
 
-// 符号の軸。同じ式を `Int` と `Address` で呼び分ける——符号はオペランドの型が決める。
+// 符号の軸。同じ式を符号ありの型（`Int`）と符号なしの型で呼び分ける——符号はオペランドの型が決める。
 //
 // **右辺（`R`）は算術と比較で別のものを置く。** 偶然ではなく、どちらも規則から出てくる：
 //
@@ -136,6 +136,13 @@ for (const [listName, list] of [["NOT_YET", NOT_YET], ["NOT_AN_INSTRUCTION", NOT
 //   算術  符号は結果の型が決める（`reduceToMachineType(n.atomType).signed`）ので右辺は `2`
 //         でよい。というより `2` でなければならない——生の番地を算術に使えるのは layer 0
 //         だけで、`a + 0x2000` は層の門が断る（番地の捏造を防ぐため）。
+//
+// **算術の符号なしの欄は `Address` ではなく `Char` で踏む。** 番地の加減算は溢れを見るので、
+// 欄の綴りの上に旗を立てる形（`adds`/`subs`）と niche の選択が乗る（pass4 の `CARRY`、
+// integer_overflow.md §1.1）——検査するかどうかは符号ではなく結果の型が決める。欄の綴りが
+// そのまま命令になるのは、溢れを見ない符号なしの型である。番地の命令は pass4.test.js が綴りを
+// 直に書いて留めている（表から引くと、表の嘘に検査が付いて行く）。
+const UNSIGNED_OF = { cond: ["Address", "0x1000"], alu: ["Char", `${B}a`] };
 const SIGNED_PROBE = {
 	add: "a + R",
 	sub: "a - R",
@@ -161,7 +168,7 @@ const condOf = (insns) => {
 
 for (const [name, template] of Object.entries(SIGNED_PROBE)) {
 	const a = asmOf(name);
-	for (const [kind, arg] of [["Int", "1"], ["Address", "0x1000"]]) {
+	for (const [kind, arg] of [["Int", "1"], UNSIGNED_OF[a.form]]) {
 		const want = a.gpr[kind === "Int" ? "signed" : "unsigned"];
 		const other = a.gpr[kind === "Int" ? "unsigned" : "signed"];
 		const expr = template.replace("R", a.form === "cond" && kind === "Address" ? "0x2000" : "2");
@@ -174,6 +181,20 @@ for (const [name, template] of Object.entries(SIGNED_PROBE)) {
 			const clean = want === other || !hasInsn(r.insns, `^\\t${other} `);
 			checkTrue(`${expr}（${kind}）は ${want} で出る`, got && clean, got ? `${other} も出ている` : `出なかった / 診断 ${r.errors.join(" ")}`);
 		}
+	}
+}
+
+// 囲みの符号の軸。**絶対値は 0 と比べる条件コードを `cneg` に付ける**——比較の行が `csel` に
+// 付けるのと同じ欄の読み方で、違うのは付ける先だけである。符号なしの欄は空の綴り（命令が
+// 無い）なので、`cneg` そのものが出ないことを見る。
+{
+	const a = asmOf("abs");
+	for (const [kind, arg] of [["Int", "1"], ["Address", "0x1000"]]) {
+		const want = a.gpr[kind === "Int" ? "signed" : "unsigned"];
+		const r = emit(`f : a ? |a|${NL}f ${arg}`);
+		const m = r.insns.match(/^\tcneg [^,]+, [^,]+, (\w+)$/m);
+		const got = m ? m[1] : "";
+		checkTrue(`|a|（${kind}）の条件コードは ${want || "無い（恒等）"}`, r.errors.length === 0 && got === want, `出たのは ${got || "無し"} / 診断 ${r.errors.join(" ")}`);
 	}
 }
 
@@ -258,20 +279,13 @@ const NOT_YET_PROBE = {
 	factorial: `f : a ? a!${NL}f 1`,
 	bit_not: `f : a ? !!a${NL}f 1`,
 	negate: `f : a ? -a${NL}f 1`,
-	abs: `f : a ? |a|${NL}f 1`,
 };
 
-// **`|x|`（abs）だけは診断に名前が出ない。** 囲みが `kind: "abs"` のブロックとして落ちて
-// くるので、pass4 は `block` と言う（`n.name` では拾えない——節を足すときは `n.kind` で
-// 拾う。`||x||` が `kind: "norm"` で在るのと同じ形）。名簿の理由がそう書いてある。
-const REFUSAL_WORD = { abs: "block" };
-
 for (const [name, src] of Object.entries(NOT_YET_PROBE)) {
-	const word = REFUSAL_WORD[name] || name;
 	const r = emit(src);
 	checkTrue(
-		`NOT_YET の ${name} は名指しで断られる（${word}）`,
-		r.errors.some((m) => m.includes(`まだ出せない`) && m.includes(word)),
+		`NOT_YET の ${name} は名指しで断られる`,
+		r.errors.some((m) => m.includes(`まだ出せない`) && m.includes(name)),
 		`診断 ${r.errors.join(" ")}——出せるようになったなら NOT_YET から asm の行へ移してください`
 	);
 }
@@ -281,7 +295,7 @@ for (const [name, src] of Object.entries(NOT_YET_PROBE)) {
 // **名簿を増やしたら探針も増える。** ここが無いと、行だけ足して確かめないという抜け道が
 // 残る——「選ばないと通らない」を、選んだ後にも効かせる。
 {
-	const probed = new Set([...Object.keys(SIGNED_PROBE), ...Object.keys(SHAPE_PROBE), "input", "output", "address"]);
+	const probed = new Set([...Object.keys(SIGNED_PROBE), ...Object.keys(SHAPE_PROBE), "input", "output", "address", "abs"]);
 	const missing = [];
 	for (const tier of OPERATOR_BY_PRECEDENCE) {
 		for (const def of Object.values(tier || {})) {

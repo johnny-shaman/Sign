@@ -1438,12 +1438,22 @@ function computeAtomType(node, env) {
   if (node.type === "block") {
     // **絶対値と数え上げは別の演算である。** `|x|` は絶対値だけを返し、器は数えない
     // ——数えるのはノルム（`||x||`）の仕事で、絶対値が長さも返すなら 2 つに分けた
-    // 意味が無い。以前は abs がオペランドの型（`operandType`）を要求していたが、
+    // 意味が無い。以前は abs がオペランドの型（`operandType`）を欄に記録していたが、
     // 器を数えなくなったので不要になった。**書いて、消して、誰も読まない欄だった。**
     //
-    // 結果型はどちらも非負の機械語1語に収まるため Int（uint）。アドレスではない
-    // ——要素数はどこも指していない（§3.6）。
-    if (node.kind === "norm" || node.kind === "abs") return "Int";
+    // **2つは結果の型も違う。** 要素数はどこも指していないので `Int` である（§3.6）。
+    // 絶対値は、符号なしの値にとって恒等なので**オペランドの型をそのまま返す**——`|p|` は
+    // `Address` である。恒等なのに `Int` と名乗ると、次の演算が符号ありで出る：実測で
+    // `|p| / 2`（p = 0xFFFFFFFFFFFFFFF0）が機械では `sdiv` になり -8、解釈器は 2^63 - 8 だった。
+    //
+    // 恒等になるのは `Address` だけである。`Char` と `Raw` も符号なしの型だが、解釈器は
+    // 算術を通した `Char`（`c - 200` = -103）にも `Raw` にも本当に絶対値を取るので、恒等では
+    // なく `Int` のままにしておく（機械はどちらも名指しで断る——pass4 の絶対値の節）。
+    if (node.kind === "norm") return "Int";
+    if (node.kind === "abs") {
+      const inner = Array.isArray(node.lines) && node.lines.length > 0 ? node.lines[node.lines.length - 1] : null;
+      return inner && inferAtomType(inner, env) === "Address" ? "Address" : "Int";
+    }
     if (!Array.isArray(node.lines) || node.lines.length === 0) return "List";
     // 全行が define(key:val) かつ左辺が識別子 → Struct（list_model.md §5.3、
     // pattern_guide.mdの改行区切り構造体リテラルの形）。単一エントリの `[foo : 1]` も含む。
@@ -2299,6 +2309,17 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
           // 文字である。定数へ切り出した書き方（`tab : \t` と置いてから比べる）が、
           // リテラルを直接書いた場合より弱い型になってしまうのを防ぐ。
           const fromOther = constraintFromLiteral(other) || typeOfKnownOperand(other, scope, paramNames);
+          // **番地の右に置いた仮引数は、番地だとは限らない。** `Address ⊕ Int → Address` は
+          // オフセット計算であり（§3.6 の表）、左辺が域を決めるので右辺は何も言われていない。
+          // ここで番地と決めると、呼び出しサイトの `Int` を上書きする——実測で
+          // `f : p n m ? p + n + m` の `m` が `Address` になり、pass4 の溢れの検査が `-4` を
+          // 符号なしの大きな数と読んで `__` を返した（解釈器は 4100）。括弧で `(p + n) + m` と
+          // 書くと `Int` のままだったので、同じ式の型が括弧で変わってもいた。
+          // 左に置いた仮引数（`p + 0x0`）は域を決める側なので、型注釈の書き方として残す。
+          if (fromOther === "Address" && side === node.right && SCALAR_ARITHMETIC_OPS.has(node.name)) {
+            refine(side.value, "Scalar");
+            continue;
+          }
           refine(side.value, fromOther || "Scalar");
         }
       }

@@ -1166,5 +1166,65 @@ f 1`, "f") || [];
 	}
 }
 
+// ---- 絶対値の命令も、表を経由せずに釘で留める ----
+//
+// 上と同じ理由である。条件コードは表（`|...|` の行）から来るので、表から期待値を引くと
+// 表の嘘に検査が付いて行く。しかも**符号なしの嘘は値に出ない**——符号なしを `cmp #0` と
+// `cneg …, lo` で出しても、`lo` は決して立たないので答えは恒等のまま qemu を通る。
+// 見分けられるのは「命令が在るか」だけなので、ここは綴りを直に書く。
+//
+// **比べる相手は絶対値を書かない形である。** 仮引数の入口には `__` の検査（`b.eq`）が
+// 必ず出るので、分岐の有無をそのまま数えると絶対値のせいか入口のせいか分からない。
+{
+	const branches = (ls) => ls.filter((l) => /^(b(\.\w+)?|cbn?z|tbn?z) /.test(l)).length;
+	const intAbs = body("f : n ? |n|\nf -7", "f") || [];
+	const intId = body("f : n ? n\nf -7", "f") || [];
+	checkTrue("Int の絶対値は cmp x9, #0 と cneg x9, x9, lt", intAbs.includes("cmp x9, #0") && intAbs.includes("cneg x9, x9, lt"), intAbs.join(" / "));
+	check("Int の絶対値は分岐を足さない", branches(intAbs), branches(intId));
+	const addrAbs = body("f : p ? |p|\nf 0x40000000", "f") || [];
+	const addrId = body("f : p ? p\nf 0x40000000", "f") || [];
+	checkTrue("符号なしの絶対値は cneg を出さない", addrAbs.length > 0 && !addrAbs.some((l) => l.startsWith("cneg ")), addrAbs.join(" / "));
+	check("符号なしの絶対値は恒等（書かない形と同じ命令列）", addrAbs, addrId);
+}
+
+// ---- 番地の加減算の溢れの検査も、表を経由せずに釘で留める ----
+//
+// 旗を立てる綴りと条件コードは pass4 の `CARRY` から来る。**溢れの検査は、値の上では小さな入力で
+// 見えない**——検査を丸ごと落としても、条件コードを取り違えても、溢れない番地では答えが同じまま
+// qemu を通る。だから「どの命令が、どの順で出るか」を綴りで直に書く（上の幅の釘と同じ理由）。
+//
+// 並びも見る。旗の命令と `csel` のあいだに旗を壊す命令が入ると、検査は別の比較を読む。
+{
+	const seq = (ls, wants) => wants.every((w, i) => ls.indexOf(w) >= 0 && (i === 0 || ls.indexOf(w) === ls.indexOf(wants[i - 1]) + 1));
+	const noCheck = (ls) => !ls.some((l) => /^(adds|subs|adcs|sbcs|csel|asr) /.test(l));
+
+	// 番地 ⊕ 番地：上の語はどちらも 0 なので、桁上がりを直に読む（C の __builtin_add_overflow と同じ形）
+	const addPP = body("f : p q ? p + q\nf 0x1000 0x10", "f") || [];
+	checkTrue("Address + Address は adds の直後に csel …, hs", seq(addPP, ["adds x9, x9, x10", "csel x9, x12, x9, hs"]), addPP.join(" / "));
+	const subPP = body("f : p q ? p - q\nf 0x1000 0x10", "f") || [];
+	checkTrue("Address - Address は subs の直後に csel …, lo", seq(subPP, ["subs x9, x9, x10", "csel x9, x12, x9, lo"]), subPP.join(" / "));
+
+	// 番地 ⊕ 非負のリテラル：上の語は 0 のまま（`asr` を出さない）
+	const addPk = body("f : p ? p + 8\nf 0x1000", "f") || [];
+	checkTrue("Address + 8 は adds と csel …, hs だけ（asr を出さない）", seq(addPk, ["adds x9, x9, x10", "csel x9, x12, x9, hs"]) && !addPk.some((l) => l.startsWith("asr ")), addPk.join(" / "));
+
+	// 番地 ⊕ Int：負のオフセットがあるので、上の語を符号で伸ばして運ぶ
+	const addPn = body("f : p n ? p + n\nf 0x1000 -4", "f") || [];
+	checkTrue("Address + Int は asr・adds・adcs・csel …, ne の並び", seq(addPn, ["asr x13, x10, #63", "adds x9, x9, x10", "adcs x13, xzr, x13", "csel x9, x12, x9, ne"]), addPn.join(" / "));
+	const subPn = body("f : p n ? p - n\nf 0x1000 -4", "f") || [];
+	checkTrue("Address - Int は asr・subs・sbcs・csel …, ne の並び", seq(subPn, ["asr x13, x10, #63", "subs x9, x9, x10", "sbcs x13, xzr, x13", "csel x9, x12, x9, ne"]), subPn.join(" / "));
+
+	// Int は回ってよい——旗を立てない1命令のまま、検査の命令を1つも足さない
+	const addII = body("f : a b ? a + b\nf 1 2", "f") || [];
+	checkTrue("Int + Int は add 1命令で、溢れを見ない", addII.includes("add x9, x9, x10") && noCheck(addII), addII.join(" / "));
+	const subII = body("f : a b ? a - b\nf 1 2", "f") || [];
+	checkTrue("Int - Int は sub 1命令で、溢れを見ない", subII.includes("sub x9, x9, x10") && noCheck(subII), subII.join(" / "));
+
+	// **溢れうる番地は `__` になりうる。** 門を通った仮引数どうしの和でも、続く演算は左辺の
+	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。
+	const chain = body("f : p n m ? p + n + m\nf 0x1000 8 4", "f") || [];
+	checkTrue("番地の和に続く和は、左辺の __ を見る", chain.includes("csel x11, x10, x11, eq"), chain.join(" / "));
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

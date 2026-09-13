@@ -32,6 +32,7 @@
  * 走らせ方: node tools/gen_operator_table.mjs
  */
 import fs from "fs";
+import { pathToFileURL } from "url";
 import { OPERATOR_BY_PRECEDENCE, getStrictInfixOperators } from "../alpha/javascript/operator_table.js";
 
 const BQ = String.fromCharCode(96), BS = String.fromCharCode(92), T = "\t";
@@ -117,6 +118,8 @@ const L = [
 	s("form が alu なら3オペランドの命令、cond なら cmp に付く条件コード、mem なら番地を持つ"),
 	s("命令、adr なら番地を作る命令である"),
 	s("——綴りを見ても置き場所は分からないので表が言う。算術は A × A から A へ、比較は Ω へ戻る"),
+	s("欄の値が空の綴りなら、その軸のその側には命令が無い（符号なしの絶対値は恒等）"),
+	s("空の綴りは __ そのものなので引けばそのまま偽になり、しかも欄の幅は隣の行と揃ったままである"),
 	"",
 	s("表は 位置 と 軸 で分かれている（asm_prefix_width など）。軸はその綴りが何で分かれるか"),
 	s("——符号（signed）・幅（width）・場所（place）——であり、同時に欄の名前を決める"),
@@ -172,6 +175,10 @@ const L = [
 // **値を `__` にして欄だけ残す、はできない。** 実測すると「スロットの幅が合いません
 // （値は 1 本、スロットは 0 byte）」で断られ、仮に通っても行どうしの形が揃わない
 // （下の命令の表の注記）。「無い」は**値ではなく鍵の不在**で綴る。
+//
+// ただしそれは**行が在るか**の問いである。行は在って欄の片側だけ命令が無いとき（符号なしの
+// 絶対値）は、欄を消すと静的に断られるので、値を空の綴りにする——空の綴りは `__` そのもの
+// でありながら String の幅を持つ（operator_table.js 冒頭「欄の値が空の綴り」）。
 for (const p of POSITIONS) {
 	const rows = byPos[p];
 	if (!rows.length) continue;
@@ -199,7 +206,7 @@ for (const p of POSITIONS) {
 //
 // ## なぜ意味の表へ欄を足さず、別の表にしたのか
 //
-// 命令の行を持つのは表の56行のうち26行である。持たない側をどう綴るかを**実測した**：
+// 命令の行を持つのは表の56行のうち27行である。持たない側をどう綴るかを**実測した**：
 //
 //     意味の表に欄を足し、無い側は `asm_form : __`
 //         → 機械 ✗「スロット asm_form の幅が合いません（値は 1 本、スロットは 0 byte）」
@@ -289,7 +296,9 @@ L.push(
 // だから中身は関数の外へ出し、ファイルへ書くのは走らせたときだけにする。
 export const RENDERED = L.join("\n") + "\n";
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+// **直接走らせたときだけ書く。** `new URL(argv[1], "file:")` は Windows のパス（`C:\…`）を
+// `file:` URL に直せず、一致しないまま何も書き出さなかった——`pathToFileURL` が正しい変換である。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	fs.writeFileSync(new URL("../alpha/sign/operator_table.sn", import.meta.url), RENDERED);
 	const counts = POSITIONS.map((p) => p + " " + byPos[p].length).join(" / ");
 	console.log("書いた: " + counts + " / 曖昧でない中置 " + strict.length);

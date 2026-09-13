@@ -138,6 +138,74 @@ const FALSE_NZCV = {
 	hs: 0, // C=0 なら hs は偽
 };
 
+// **番地の加減算で溢れを見る命令。** 鍵は**表が返した命令**（`add`/`sub`）であって演算子では
+// ない。`FALSE_NZCV` と同じ理由で表の写しではなく、答えは AArch64 の命令の定義そのものである
+// ——旗を立てる形は `S` を付けた綴り、上の語を運ぶ形は桁を足し込む `adc`/`sbc` で、桁上がりの
+// 旗 C は足し算では「溢れた」、引き算では「借りが無かった」を言う。だから両辺の上の語が 0 の
+// とき、溢れの条件は足し算で `hs`（C=1）、引き算で `lo`（C=0）になる。
+//
+// **検査するかどうかは命令でも符号でもなく、結果の型が決める**（integer_overflow.md §1——
+// 溢れが致命的な `Address` だけが払う）。表の符号の軸へ `adds` を置けないのはこのためで、
+// `Char` と `Raw` も符号なしだが溢れを見ない。軸に置くと、旗を読まない `adds` が文字の算術に
+// 出るか、pass4 が欄を上書きするかのどちらかになる。
+//
+// `mul` と `udiv` の行は無い。**ここに無い命令で `Address` を出すと、検査は付かない**——番地の
+// 乗算の溢れ（上の語は `umulh`）と、負の `Int` で割る番地（解釈器は `__`、`udiv` は小さな数）は
+// まだ見ていない。
+const CARRY = {
+	add: { flags: "adds", carryIn: "adcs", over: "hs" },
+	sub: { flags: "subs", carryIn: "sbcs", over: "lo" },
+};
+
+/**
+ * **番地の加減算は、溢れたら `__` へ落とす**（integer_overflow.md §1.1）。
+ *
+ * 見るのは「数学の値が 0 以上 2^64 未満か」である。両辺をそれぞれの符号で1語伸ばし、上の語を
+ * 同じ演算で運ぶ（`adcs`/`sbcs`）と、収まったときだけ上の語が 0 になる。伸ばした上の語は、
+ * 符号なしの辺と非負のリテラルでは 0（`xzr`）、符号ありの辺では `asr #63`（0 か -1）である。
+ *
+ * **両辺とも 0 なら上の語は桁上がりそのもの**なので、`asr` と `adcs` を畳んで旗を直に読む
+ * ——C の `__builtin_add_overflow(u64, u64)` を clang -O2 で落とした形と同じ2命令になる。
+ * 畳めないのは符号ありの辺があるとき（`p + n` の `n` が `Int`）で、負の数を足して正しく戻る
+ * 番地は符号なしで見ると必ず桁が上がる——`hs` で見ると `p + -4` がいつも `__` になる。
+ *
+ * 呼ぶ側が `x12` に niche を置いておくこと。`asr` を旗の命令より前に置くのは、`dst` が左辺の
+ * レジスタそのもの（`x9`）であり得るからで、`asr` は旗を壊さない。
+ */
+function emitAddressCarry(n, carry, dst, em) {
+	const upper = (side, reg, scratch) => {
+		const u = unwrap(side);
+		if (u && u.type === "atom" && (u.kind === "number" || u.kind === "address")) {
+			try {
+				// **十進の字面は `Int` なので、64 ビットで回ってから符号を見る。** 字面のまま見ると
+				// `18446744073709551615` を非負と読むが、`Int` としては -1 である——上の語を 0 と
+				// 決めつけて、`p + 18446744073709551615` を `p - 1` の番地のまま通していた（実測、
+				// 解釈器は `__`）。番地の字面は符号なしなので字面のままでよい。
+				const v = literalBigInt(u.value);
+				if ((u.kind === "number" ? BigInt.asIntN(64, v) : v) >= 0n) return "xzr";
+			} catch {
+				// 読めないのは浮動小数だが、片側が浮動小数なら結果は `Float` なのでここへは来ない。
+			}
+		}
+		const m = reduceToMachineType(side && side.atomType, em.conf.target);
+		// 型の無い辺は符号なしと読む。そこへ来るのは `__`（`Unit`）で、その値は後ろの完全性公理が
+		// 上書きするので、どちらに伸ばしても答えは変わらない（実測では、実プログラム4本と検査の全体で
+		// それ以外は来なかった）。
+		if (!m || !m.signed) return "xzr";
+		em.emit(`asr ${scratch}, ${reg}, #63`, "符号で伸ばした上の語");
+		return scratch;
+	};
+	const hL = upper(n.left, SCRATCH[0], "x14");
+	const hR = upper(n.right, SCRATCH[1], "x13");
+	em.emit(`${carry.flags} ${dst}, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}（旗を立てる）`);
+	if (hL === "xzr" && hR === "xzr") {
+		em.emit(`csel ${dst}, x12, ${dst}, ${carry.over}`, "溢れたら __");
+		return;
+	}
+	em.emit(`${carry.carryIn} x13, ${hL}, ${hR}`, "上の語");
+	em.emit(`csel ${dst}, x12, ${dst}, ne`, "上の語が 0 でなければ溢れた——__");
+}
+
 // その比較を符号なしで出すか。オペランドの型が決める（結果の型ではない——結果は真偽である）。
 function unsignedCompare(node, conf, env) {
 	const t = (x) => {
@@ -1136,6 +1204,70 @@ function genExpr(node, env, em, scope, tail = false) {
 		return 1;
 	}
 
+	// **絶対値（`|...|`）は数えない。** 囲みは `name` を持たないので `kind` で拾う（ノルムと同じ）。
+	//
+	// 命令は表が言い（`asmOf("abs")` の条件コード、命令列はその行のコメント）、符号だけをここで
+	// 決める——算術の行と同じく `reduceToMachineType` の `signed` で、ここは**オペランドの型**を
+	// 見る（結果の型は、恒等になる `Address` だけがオペランドの型を保ち、残りは `Int` と
+	// 名乗る——pass3 の絶対値の節。だから結果の型ではオペランドの符号が分からない）。欄が空の
+	// 綴りなら命令は無く、中身を積んだスロットがそのまま答えになる。
+	//
+	// 出さずに断るものは3つで、どれも `abs` と名指しする：
+	//
+	//     2本以上で運ぶ値・Struct   器に絶対値は無い（解釈器は `__`）。数えるのはノルムである
+	//     Float                    fabs になるが、pass4 に浮動小数の道が無い（リテラルは手前で断られる）
+	//     Char                     解釈器と答えが割れる（下）
+	//
+	// **Char は符号なしなので機械では恒等だが、出さない。** 解釈器は1文字を文字列として持ち、
+	// 器の枝へ落として `__` を返す。どちらが正しいかは仕様の問いで、黙って恒等を出すと診断ゼロで
+	// 答えが割れる。
+	if (n.kind === "abs") {
+		const inner = n.lines && n.lines.length > 0 ? n.lines[n.lines.length - 1] : null;
+		if (!inner) return em.fail(n, "絶対値の中身が空です");
+		const iw = genExpr(inner, env, em, scope);
+		if (iw === false) return false;
+		const ty = inner.atomType;
+		if (iw !== 1 || ty === "Struct") {
+			em.pop(iw);
+			return em.fail(n, `器に絶対値はありません（abs、${ty}）——数えるのはノルム \`||x||\` です`);
+		}
+		// **Unit と Identity の型は、どちらの顔でも答えが `__` である。** 字面の `|__|` は中身が
+		// 既に niche なので足す命令が無い。だが型が Unit／Identity の値は、実行時には `__` か
+		// 恒等射（真、機械の上では `0`）のどちらかで、恒等射の `0` は整数の `0` と同じビットに
+		// なる——素通しすると機械は `0` を返し、解釈器は射に絶対値が無いので `__` を返す。
+		// 実測で `|!__|`・`t : !__` の後の `|t|`・`|!(a < b)|` が割れていた（HEAD は断っていた）。
+		// 型がそう言うなら、値を見ずに niche を置く。
+		if (ty === "Unit" || ty === "Identity") {
+			if (isUnitNode(unwrap(inner))) return 1;
+			const uo = (em.slot - 1) * 8;
+			em.emit(`movz ${SCRATCH[0]}, #0x8000, lsl #48`, "射に絶対値は無い——__");
+			em.store(SCRATCH[0], uo, "絶対値");
+			return 1;
+		}
+		const m = reduceToMachineType(ty, em.conf.target);
+		if (!m || m.class !== "gpr" || ty === "Char" || ty === "Raw") {
+			em.pop(1);
+			// `WIDTH_CLASS` の浮動小数は "float" である（"fp" と書いていて、この枝は死んでいた）。
+			if (m && m.class === "float") return em.fail(n, `浮動小数の絶対値はまだ出せません（abs、${ty}）——fabs になるが、pass4 に浮動小数の道が無い`);
+			// **Char は文字か数かが決まっていない。** 字面の `\a` なら解釈器は `__`、`c - 200` の
+			// ように算術を通すと Char と型付けされたまま負の数になる（実測 -103）。恒等を出すと
+			// `|c - 200|` で -103 が黙って出るので、決まるまで出さない。
+			if (ty === "Char") return em.fail(n, "Char の絶対値はまだ出せません（abs）——Char は文字か数かが決まっていない（算術を通すと負になる）");
+			// **Raw は符号を主張しない型である**（MMIO から読んだビット列）。符号なしとして恒等を
+			// 選ぶと、書き込んだ `-5` を読み戻して `|…|` が -5 になる。どちらと読むかは書いた側の話。
+			if (ty === "Raw") return em.fail(n, "Raw の絶対値は出せません（abs）——符号を主張しないビット列なので、読み方を型で言ってください");
+			return em.fail(n, `絶対値を出せるのは GPR 幅の整数だけです（abs、${ty}）`);
+		}
+		const cond = asmOf("abs").gpr[m.signed ? "signed" : "unsigned"];
+		if (!cond) return 1;
+		const io = (em.slot - 1) * 8;
+		em.load(SCRATCH[0], io, "中身");
+		em.emit(`cmp ${SCRATCH[0]}, #0`);
+		em.emit(`cneg ${SCRATCH[0]}, ${SCRATCH[0]}, ${cond}`, "負なら反転（niche は反転しても niche）");
+		em.store(SCRATCH[0], io, "絶対値");
+		return 1;
+	}
+
 	if (!isStructBlock(n) && Array.isArray(n.lines) && (n.lines.length > 1 || (n.lines.length === 1 && isDefineNode(n.lines[0])))) {
 		return genMatch(n, env, em, scope, tail);
 	}
@@ -1145,15 +1277,14 @@ function genExpr(node, env, em, scope, tail = false) {
 		// `Number` を経由しない——`0x123456789abcdef` のような番地は倍精度に載らず、
 		// 下の桁が黙って丸まる。文字列のまま `BigInt` へ渡せば桁は落ちない。
 		//
-		// **プリフィックスは `literalParts` が剥がす。** `BigInt` が読めるのは `0x` / `0b` の
+		// **プリフィックスは `literalParts` が剥がす**（`literalBigInt`）。`BigInt` が読めるのは `0x` / `0b` の
 		// 綴りだけなので、`04x…` をそのまま渡すと投げる——そして下の `catch` は「浮動小数か、
 		// 層が足りないか」だと決めつけているので、**幅を書いただけで「layer: 0 では Address を
 		// 使えません」という無関係な診断が出ていた**。catch が原因を1つに決めつけるのは、
 		// 今日何度も踏んだ形である。
 		let v;
 		try {
-			const lit = literalParts(n.value);
-			v = lit ? BigInt((lit.radix === 2 ? "0b" : "0x") + lit.digits) : BigInt(n.value);
+			v = literalBigInt(n.value);
 		} catch {
 			// **層の禁止と実装の穴を区別する。** `option_ms_schema.md` §4 が `Float` を
 			// layer 2 以上、`Vector` を layer 3 以上と定めている。layer が足りないなら
@@ -1423,13 +1554,23 @@ function genExpr(node, env, em, scope, tail = false) {
 		//
 		// **`__` になり得ない辺は検査しない。** 両辺とも分かっていれば命令は1つのまま
 		// で、公理は本当にタダになる。
+		//
+		// **番地の加減算だけは溢れを見る**（`CARRY` と `emitAddressCarry`）。溢れた番地は任意の
+		// 記憶を指すので払う。`Int` は回ってよい——間違った数は番地にならない。検査は完全性公理の
+		// 前に置く：公理の `cmp` が旗を壊すうえ、`__` の辺を足した値は公理が上書きするので、
+		// その値が溢れたかどうかは答えに関係しない。
 		const lMaybe = !cannotBeUnit(n.left, env, scope);
 		const rMaybe = !cannotBeUnit(n.right, env, scope);
-		if (!lMaybe && !rMaybe) {
+		const carry = n.atomType === "Address" ? CARRY[mn] : null;
+		if (!lMaybe && !rMaybe && !carry) {
 			em.emit(`${mn} ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
+		} else if (!lMaybe && !rMaybe) {
+			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
+			emitAddressCarry(n, carry, SCRATCH[0], em);
 		} else {
 			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
-			em.emit(`${mn} x11, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
+			if (carry) emitAddressCarry(n, carry, "x11", em);
+			else em.emit(`${mn} x11, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
 			if (rMaybe) {
 				em.emit(`cmp ${SCRATCH[1]}, x12`, "右辺が __ か");
 				em.emit(`csel x11, ${SCRATCH[0]}, x11, eq`, "右が __ なら左辺値（完全性公理）");
@@ -4020,7 +4161,11 @@ function slotImageLines(slot, value, env, em) {
 		// `{ptr, len}` で運ぶ幅（16 byte）なら中身を `.rodata` へ置いてラベルを指す。
 		// 1文字は符号位置そのもの（スカラー）なので、数と同じ置き方になる。
 		if (slot.size === 16) {
-			if (cps.length === 0) return null; // 空文字列は指す先が無い（`{0, 0}`）
+			// **空文字列は `{0, 0}` をそのまま置く。** 指す先が無いので `.rodata` の中身は要らず、
+			// `genExpr` が式の位置で組むのと同じ2語である（`len = 0` が `__`）。以前はここで
+			// 置くのを諦めていたので、空の綴りを1つ持つだけで表全体がフレームへ組み直された
+			// ——命令の表の「欄の値が空の綴り」（operator_table.js 冒頭）がそれを踏む。
+			if (cps.length === 0) return ["	.quad 0", "	.quad 0"];
 			return [`	.quad ${em.intern(cps)}`, `	.quad ${cps.length}`];
 		}
 		if (cps.length !== 1 || ![1, 2, 4, 8].includes(slot.size)) return null;
@@ -4419,17 +4564,36 @@ function isUnitAtom(node) {
 // リテラルは `__` ではない。算術の結果は、両辺が `__` でなければ `__` ではない
 // ——公理自身がそう言っている（左が `__` なら `__`、右が `__` なら左辺値）。
 // ただし `Char` は別で、charset の外へ出た結果は `__` になる。除算も別で、0 で
-// 割った結果をここでは決めていない。
+// 割った結果をここでは決めていない。`Address` も別で、溢れた加減算は `__` になる
+// （`emitAddressCarry`）——ここで「`__` になり得ない」と答えると、次の演算が公理の検査を
+// 省き、niche を番地として足してしまう。溢れの検査がそのまま無駄になる。
+//
+// **`Int` は別にしない。これは嘘を承知で選んでいる。** `Int` の和・差・積も回った先がちょうど
+// niche なら `__` だが（integer_overflow.md §1.2）、それは溢れた `Int` の話で致命的でないので、
+// 検査を払わない（同 §1 の基準）。代わりに、続く算術がその niche を数として足しうる——解釈器と
+// 答えが割れる形は同 §1.2 の WARNING が書いている。別にしても実プログラム4本の命令数は
+// 変わらなかった（実測）が、算術の連なりには1段ごとに4命令が乗る。
+//
+// **数のリテラルでも、ビットが niche なら `__` である**（integer_overflow.md §1.2）。
+// `-9223372036854775808` と `0x8000000000000000` は、`0u0000` と同じく綴りが違うだけの `__`
+// であり、置く命令は niche をそのまま作る。
 function cannotBeUnit(node, env, scope) {
 	const n = unwrap(node);
 	if (!n) return false;
 	if (isUnitAtom(n)) return false; // `0u0000` は綴りが違うだけの `__` である
 	if (n.type === "atom") {
 		if (n.kind === "identifier") return !!(scope && scope.total && scope.total.has(n.value));
-		return n.kind === "number" || n.kind === "address" || n.kind === "char" || n.kind === "unicode";
+		if (n.kind === "number" || n.kind === "address") {
+			try {
+				return BigInt.asUintN(64, literalBigInt(n.value)) !== BigInt(UNIT_NICHE_ASM);
+			} catch {
+				return true; // 浮動小数。GPR の niche とは別の話である（負のゼロは正当な値）
+			}
+		}
+		return n.kind === "char" || n.kind === "unicode";
 	}
 	if (isAsmForm(n, "alu")) {
-		if (n.atomType === "Char" || n.name === "div") return false;
+		if (n.atomType === "Char" || n.atomType === "Address" || n.name === "div") return false;
 		return cannotBeUnit(n.left, env, scope) && cannotBeUnit(n.right, env, scope);
 	}
 	// **スカラーへの `' 0` は恒等射である**（`[x] ≅ x`——1要素の器は存在しない）。
@@ -5925,6 +6089,14 @@ function rangeParts(node) {
 	// しまう。step が符号を持っていれば、切っても向きは動かない。
 	return { start: l, step: ONE, end: node.right, signedByEnds: true };
 }
+// 数のリテラルの値。**プリフィックスは `literalParts` が剥がす**（`BigInt` が読めるのは `0x` /
+// `0b` の綴りだけ）。読めなければ投げる——浮動小数である。値を置く道（`genExpr`）と、niche の
+// ビットかを見る道（`cannotBeUnit`）が同じ読み方でなければ、`04x8000…` の答えが割れる。
+function literalBigInt(text) {
+	const lit = literalParts(text);
+	return lit ? BigInt((lit.radix === 2 ? "0b" : "0x") + lit.digits) : BigInt(text);
+}
+
 /**
  * 64ビットの即値をレジスタへ置く。
  *

@@ -19,6 +19,8 @@
 `form が alu なら3オペランドの命令、cond なら cmp に付く条件コード、mem なら番地を持つ`
 `命令、adr なら番地を作る命令である`
 `——綴りを見ても置き場所は分からないので表が言う。算術は A × A から A へ、比較は Ω へ戻る`
+`欄の値が空の綴りなら、その軸のその側には命令が無い（符号なしの絶対値は恒等）`
+`空の綴りは __ そのものなので引けばそのまま偽になり、しかも欄の幅は隣の行と揃ったままである`
 
 `表は 位置 と 軸 で分かれている（asm_prefix_width など）。軸はその綴りが何で分かれるか`
 `——符号（signed）・幅（width）・場所（place）——であり、同時に欄の名前を決める`
@@ -369,6 +371,14 @@
 #asm_postfix_shape :
 	`~` :
 		form : `copy_loop`
+
+`--- enclosure の命令（signed） ---`
+
+#asm_enclosure_signed :
+	`|...|` :
+		form : `cond`
+		gpr_signed : `lt`
+		gpr_unsigned : ``
 
 `--- enclosure の命令（shape） ---`
 

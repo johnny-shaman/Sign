@@ -140,13 +140,20 @@ function evalLiteral(node) {
       // 整数リテラルは f64 では 2^53 までしか正しく持てない——`9223372036854775807` が
       // 読んだ時点で 2^63 になってしまう。8 byte の値を扱う言語で、リテラルが最初から
       // 壊れているのは通らないので、安全な範囲を超えるものは BigInt で読む。
-      return node.value.includes(".") ? parseFloat(node.value) : parseIntegerLiteral(node.value, 10);
+      //
+      // **十進の整数は `Int` なので、読んだ値も `Int` の幅へ回す**（`wrapInt`）。機械は
+      // リテラルを 64 bit へ回して置くので、`-9223372036854775808` は niche のビットになり
+      // `__` として扱われる——解釈器だけがその数を値として持っていた（integer_overflow.md §1.2）。
+      if (node.value.includes(".")) return parseFloat(node.value);
+      return wrapInt(toBig(parseIntegerLiteral(node.value, 10)));
     case "string":
       return node.value.slice(1, -1); // バッククォートを剥がす
     case "char":
       return node.value.slice(1); // "\a" -> "a"
     case "address":
-      return parseIntegerLiteral(literalDigits(node.value), 16);
+      // 番地のリテラルも番地の溢れ方を通る（`clampAddress`）。`0x8000000000000000` は niche の
+      // ビットそのもので、非正準なので番地にもならない。
+      return clampAddress(toBig(parseIntegerLiteral(literalDigits(node.value), 16)));
     case "unicode": {
       // `0u` は Char（String の要素型）のリテラルである——`String ≅ List(0u)` であり、
       // guide/example.sn も `uni_a : 0u3042` を「Unicodeで 'あ' を表現」と説明している。
@@ -950,15 +957,31 @@ function fromBig(b) {
   return b >= BigInt(Number.MIN_SAFE_INTEGER) && b <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(b) : b;
 }
 
+// **GPR 1語の niche（最上位ビットだけが立った語）は値ではなく `__` である**
+// （value_representation.md §3.5、integer_overflow.md §1.2）。`Int` として読めば `INT64_MIN`、
+// `Address` として読めば非正準の番地で、どちらの型にもそのビットの値は無い。機械はそのビットを
+// `__` として扱う（命令を足さずに）ので、解釈器の側が合わせる——実測で `9223372036854775807 + 1`
+// が解釈器では `-9223372036854775808`、機械では `__` だった。
+//
+// **回してから見る。** 見てから回すと回った先の niche を見逃す（`2^63` は回すと `INT64_MIN`）。
+// だから下の2つは、幅へ収めた後の語をこの1つで見る。
+function isNicheWord(b, bits) {
+  return BigInt.asUintN(bits, b) === 1n << BigInt(bits - 1);
+}
+
 // `Int` は符号付きでラップする（integer_overflow.md §1）。ビット列（`0r`/`0b`）も同じ。
+// **`Int` を作る道はここを通る**——算術（`applyOverflowRule`）・ビット演算・絶対値・階乗・
+// 十進のリテラル。道ごとに回すと、niche の規則を持たない道が1つ残る。
 function wrapInt(b, bits = DEFAULT_GPR_BITS) {
-  return fromBig(BigInt.asIntN(bits, b));
+  const v = BigInt.asIntN(bits, b);
+  return isNicheWord(v, bits) ? UNIT : fromBig(v);
 }
 
 // `Address` は符号なしで、幅を超えたら `__` へ収束する——不正アドレスの伝播を止めるため。
+// 溢れが致命的なのは番地だけなので、検査を払うのも番地だけである（integer_overflow.md §1）。
 function clampAddress(b, bits = DEFAULT_GPR_BITS) {
   const max = (1n << BigInt(bits)) - 1n;
-  return b < 0n || b > max ? UNIT : fromBig(b);
+  return b < 0n || b > max || isNicheWord(b, bits) ? UNIT : fromBig(b);
 }
 
 const BIT_OPS = {
@@ -1216,7 +1239,16 @@ function evalArith(node, env) {
       { left: holeL ? undefined : l, right: holeR ? undefined : r }
     );
   }
-  const value = arithOnValues(name, l, r);
+  let value = arithOnValues(name, l, r);
+  // **回す前の値が丸まっていたら、回しても正しくならない。** 両辺が Number に収まる整数でも、
+  // 積や和は 2^53 を超えうる——倍精度はそこで下の桁を黙って丸め、`applyOverflowRule` は丸まった
+  // 値を回す（実測で `3037000500 * 3037000500` が解釈器 -9223372036709302272、機械 …301616）。
+  // 整数の型の結果が倍精度の整数の外へ出たときだけ BigInt で計算し直す。`Float` は型で外れ、
+  // 0 除算の `Infinity`/`NaN` は整数でないので、これまでの答えのまま通る。
+  if ((node.atomType === "Int" || node.atomType === "Address") && typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && Number.isSafeInteger(l) && Number.isSafeInteger(r) && BIG_ARITH[name]) {
+    const exact = BIG_ARITH[name](BigInt(l), BigInt(r));
+    if (exact !== null) value = exact;
+  }
   // BigInt は「安全な範囲を超えた整数」であり、溢れの規則を適用する対象そのものである。
   // ここで早期に返してしまうと、幅を超えた値が型の規則を通らずに素通りする。
   if (typeof value !== "number" && typeof value !== "bigint") return value;
@@ -1668,6 +1700,14 @@ function evalUnaryOp(name, v) {
       return bitNot(v);
     case "factorial": {
       if (isUnit(v)) return UNIT;
+      // **整数の階乗は `Int` を作る道なので、回す**（`wrapInt`）。Number のまま掛けると 2^53 で
+      // 下の桁が丸まり（`20!` から）、`21!` は幅の外の数のまま返っていた。1段ごとに 64 bit へ
+      // 収めるので数は膨らまず、0 になったら（66! 以降は 2^64 で割り切れる）そこで止める。
+      if (Number.isInteger(v) || typeof v === "bigint") {
+        let b = 1n;
+        for (let i = 2n, n = BigInt(v); i <= n && b !== 0n; i++) b = BigInt.asUintN(DEFAULT_GPR_BITS, b * i);
+        return wrapInt(b);
+      }
       let r = 1;
       for (let i = 2; i <= v; i++) r *= i;
       return r;
@@ -2253,8 +2293,14 @@ function evaluate(node, env) {
       //
       // 器（List・String・Struct・イテレータ）に絶対値は定義されていないので零射へ落ちる。
       // これで pass3 が abs のためだけに記録していた `operandType` も要らなくなる。
-      if (typeof inner === "number") return Math.abs(inner);
-      if (typeof inner === "bigint") return inner < 0n ? -inner : inner;
+      //
+      // **結果も型の溢れ方を通る**（`applyOverflowRule`）。以前は通しておらず、`|n - 1|`
+      // （n = -(2^63 - 1)）が 9223372036854775808 という `Int` に無い数を返していた。中身の
+      // 算術が niche を `__` にするようになった今もここを通すのは、回していない数が中身に来る道
+      // （部分適用 `[+ 1]` の畳み込み、規則の歩み）がまだ残っているからで、絶対値がそれを正しい
+      // 値に見せてはいけない。型は pass3 が決め、番地なら恒等なので `Address` のまま収める。
+      if (typeof inner === "number") return applyOverflowRule(node.atomType, Math.abs(inner));
+      if (typeof inner === "bigint") return applyOverflowRule(node.atomType, inner < 0n ? -inner : inner);
       return UNIT;
     }
     // 構造体判定はpass3.jsのinferAtomTypeと同じ基準（全行がdefineかつ左辺が識別子）。
