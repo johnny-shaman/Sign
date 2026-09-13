@@ -5143,7 +5143,11 @@ function genNameSearch(node, env, em, scope, shape) {
 	if (!slots.every((x) => x.size === w && x.type === ty)) {
 		return em.fail(node, `鍵が実行時に決まる引き方は、全スロットが同じ幅でなければ出せません（引いた結果の型が枝で変わります）`);
 	}
-	if (w > 8) return em.fail(node, "鍵が実行時に決まる引き方は、参照で運ぶスロットではまだ出せません");
+	// **参照で運ぶスロット（`{ptr, len}` の 16 byte）も同じ探し方で引ける。** 名前の表が指すのは
+	// スロットの先頭なので、見つかったら 2 語を読むだけでよい。演算子表の命令の欄（`asm_…`）は
+	// 全部が文字列で揃っているので、型が欄を選ぶ引き方（`(表 ' 綴り~) ' 欄~`）がこの道に乗る。
+	const regs = w <= 8 ? 1 : w === 16 && slotsOf(ty, em.conf) === 2 ? 2 : null;
+	if (regs === null) return em.fail(node, "鍵が実行時に決まる引き方は、参照で運ぶスロットではまだ出せません");
 	// 鍵は `obj ' k~` の `k`。`~` は添字の糖衣として畳まれているので、その左辺が鍵である。
 	let key = unwrap(node.right);
 	if (key && key.desugaredFrom === "index-rest") key = unwrap(key.left);
@@ -5199,6 +5203,23 @@ function genNameSearch(node, env, em, scope, shape) {
 	em.label(hit);
 	em.emit("ldr x14, [x9, #16]", "そのスロットのオフセット");
 	em.load("x10", objOff, "器の ptr");
+	if (regs === 2) {
+		em.emit("add x10, x10, x14", "スロットの場所");
+		em.emit("ldr x11, [x10, #8]", "len");
+		em.emit("ldr x10, [x10]", "ptr");
+		em.emit(`b ${end}`);
+		em.label(miss);
+		// 器の `__` は空の器（長さ 0）である（`__ = []`、unit.md）。
+		em.emit("mov x10, xzr", "見つからなければ __（空の器）");
+		em.emit("mov x11, xzr");
+		em.label(end);
+		em.pop(3); // 器の ptr と鍵の 2 本
+		const [po, lo] = pushPair(em);
+		if (lo === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+		em.store("x10", po, "引いた値の ptr");
+		em.store("x11", lo, "引いた値の len");
+		return 2;
+	}
 	const sg = SIGNEDNESS[ty] === "signed";
 	const mn = w === 1 ? (sg ? "ldrsb x10" : "ldrb w10") : w === 2 ? (sg ? "ldrsh x10" : "ldrh w10") : w === 4 ? (sg ? "ldrsw x10" : "ldr w10") : "ldr x10";
 	em.emit(`${mn}, [x10, x14]`, `スロットの中身（${w} byte）`);

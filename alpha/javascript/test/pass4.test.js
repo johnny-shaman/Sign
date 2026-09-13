@@ -1303,5 +1303,16 @@ f 1`, "f") || [];
 	checkTrue("Int - (Int + Int)：和を見ない（sub 1命令で csel 無し）", intSum.includes("sub x9, x9, x10") && !intSum.some((l) => /^(cmp x10, x12$|csel )/.test(l)), intSum.join(" / "));
 }
 
+// ---- 実行時の鍵で、参照で運ぶスロット（文字列）を引く ----
+//
+// 名前の表で見つけたオフセットから、`{ptr, len}` の 2 語を読む。見つからなければ空の器（`__`）。
+// 値は qemu.test.js が演算子表の全マスで見ている。ここは読む語の並びと、見つからないときの形を留める。
+{
+	const seq = (ls, wants) => ls.some((_, k) => wants.every((w, i) => ls[k + i] === w));
+	const ns = body("asm :\n\tgpr_signed : `sdiv`\n\tgpr_unsigned : `udiv`\n\tform : `alu`\nat : k ? asm ' k~\n||at `gpr_unsigned`||", "at") || [];
+	checkTrue("文字列のスロットを探して引くと、場所を足して len・ptr の2語を読む", seq(ns, ["add x10, x10, x14", "ldr x11, [x10, #8]", "ldr x10, [x10]"]), ns.join(" / "));
+	checkTrue("見つからなければ ptr も len も 0（空の器が __）", seq(ns, ["mov x10, xzr", "mov x11, xzr"]), ns.join(" / "));
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

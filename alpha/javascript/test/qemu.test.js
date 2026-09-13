@@ -2211,6 +2211,52 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("名前を探す：器の要素が鍵", NT + "ts : [`ab` , `cd`]\ntier ' (ts ' 1)~");
 	agree("名前を探す：見つからなければ __", NT + "at : c ? tier ' c~\nat `zz`");
 	agree("名前を探す：名前へ置いてから", NT + "ts : [`ab` , `cd`]\nk : ts ' 1\ntier ' k~");
+
+	// **参照で運ぶスロット（文字列、`{ptr, len}` の 16 byte）も探せる。** 以前は「参照で運ぶスロットでは
+	// まだ出せません」で断っていた。演算子表の命令の欄は全部が文字列なので、型が欄を選ぶ引き方
+	// （`(表 ' 綴り~) ' 欄~`）はこの道を通る。見つからなければ空の器（長さ 0）が `__` である。
+	const NS = "asm :\n\tgpr_signed : `sdiv`\n\tgpr_unsigned : `udiv`\n\tform : `alu`\n";
+	const bothIs = (note, source, want) => {
+		machineIs(note, source, want);
+		total++;
+		const got = interp(source);
+		if (got === want) {
+			passed++;
+			console.log(`ok   ${("解釈 " + note).padEnd(34)} ${got}`);
+		} else console.log(`FAIL ${("解釈 " + note).padEnd(34)} 期待=${want} / 解釈=${got}`);
+	};
+	bothIs("文字列の欄を実行時の鍵で", NS + "at : k ? asm ' k~\n||(at `gpr_unsigned`) == `udiv`||", "4");
+	bothIs("文字列の欄：違う欄は別の綴り", NS + "at : k ? asm ' k~\n||(at `gpr_signed`) == `udiv`||", "0");
+	bothIs("文字列の欄：見つからなければ空", NS + "at : k ? asm ' k~\n||at `gpr_w8`||", "0");
+
+	// **演算子表の命令の欄を、機械の上で全部引く。** 綴りも欄も実行時の鍵にして（後段が型から欄を選ぶ
+	// 形）、表ごとに1本のプログラムで全マスを引き、一致した綴りの長さを足す。1マスでも違えば、そのマスの
+	// 項が 0 になって和が減る。期待値は operator_table.sn の字面そのもので、引く道とは別に数える。
+	{
+		const sn = readImport("operator_table.sn");
+		const cells = [];
+		let table = null;
+		let op = null;
+		for (const line of sn.split("\n")) {
+			let m;
+			if ((m = line.match(/^#(\w+) :$/))) { table = m[1]; op = null; continue; }
+			if (!table) continue;
+			if ((m = line.match(/^\t`([^`]*)` :(?: (.*))?$/))) { op = m[1]; continue; }
+			if ((m = line.match(/^\t\t(\w+) : `([^`]*)`$/)) && op !== null && table.startsWith("asm_")) cells.push({ table, op, col: m[1], value: m[2] });
+			if (line !== "" && !line.startsWith("\t") && !line.startsWith("`")) table = null;
+		}
+		const tables = [...new Set(cells.map((c) => c.table))];
+		// 表の読み方が壊れて 0 枚になれば、下の検査は黙って空振りする——枚数と欄の数を先に留める。
+		total++;
+		if (tables.length === 9 && cells.length === 64) passed++;
+		console.log(`${tables.length === 9 && cells.length === 64 ? "ok  " : "FAIL"} 演算子表：命令の表は 9 枚で、欄は 64（${tables.length} / ${cells.length}）`);
+		for (const t of tables) {
+			const cs = cells.filter((c) => c.table === t);
+			const terms = cs.map((c) => (c.value ? `||(g \`${c.op}\` \`${c.col}\`) == \`${c.value}\`||` : `||g \`${c.op}\` \`${c.col}\`||`));
+			const want = String(cs.reduce((a, c) => a + [...c.value].length, 0));
+			bothIs(`演算子表を機械で全部引く：${t}`, "`operator_table.sn`@~\n" + `g : op k ? (${t} ' op~) ' k~\n` + terms.join(" + "), want);
+		}
+	}
 }
 
 console.log(`\n${passed}/${total} passed`);
