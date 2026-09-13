@@ -188,8 +188,9 @@ function mayBeNegative(side, em) {
  *
  * - `+` / `-`：桁を運ぶ（`CARRY` と `emitAddressCarry`）。
  * - `*`：積の上の語が 0 か（`emitAddressMul`）。
- * - `/`：割る数が負になりうるときだけ見る。負の数で割った商は 0 以下なので、収まるのは商が
- *   0 のときだけである（`emitAddressDiv`）。符号なしの数で割る商は被除数を超えないので溢れない。
+ * - `/`：割る数が負か 0 になりうるときだけ見る。負の数で割った商は 0 以下なので、収まるのは商が
+ *   0 のときだけである。0 で割った番地は `__` である（`emitAddressDiv`）。符号なしの数で割る商は
+ *   被除数を超えないので溢れない。
  *
  * 結果が番地なら左辺は番地（か `__`・生の値）なので、符号を見るのは割る数だけでよい
  * （§3.6 の左辺優先——`8 / p` は `Int`）。
@@ -197,7 +198,7 @@ function mayBeNegative(side, em) {
 function addressCheckOf(mn, n, em) {
 	if (CARRY[mn]) return (dst) => emitAddressCarry(n, CARRY[mn], dst, em);
 	if (mn === "mul") return (dst) => emitAddressMul(n, dst, em);
-	if (mn === "udiv" && mayBeNegative(n.right, em)) return (dst) => emitAddressDiv(n, dst, em);
+	if (mn === "udiv" && (mayBeNegative(n.right, em) || mayBeZero(n.right))) return (dst) => emitAddressDiv(n, dst, em);
 	return null;
 }
 
@@ -243,11 +244,27 @@ function emitAddressMul(n, dst, em) {
  */
 function emitAddressDiv(n, dst, em) {
 	const [a, b] = SCRATCH;
-	em.emit(`cmp ${b}, #0`, "割る数の符号");
-	em.emit(`cneg x13, ${b}, lt`, "割る数の絶対値");
-	em.emit(`udiv ${dst}, ${a}, x13`, `${n.op}`);
-	em.emit(`ccmp ${dst}, #0, #4, lt`, "負の数で割ったときだけ商を見る");
-	em.emit(`csel ${dst}, x12, ${dst}, ne`, "商が 0 でなければ番地の外——__");
+	if (mayBeNegative(n.right, em)) {
+		em.emit(`cmp ${b}, #0`, "割る数の符号");
+		em.emit(`cneg x13, ${b}, lt`, "割る数の絶対値");
+		em.emit(`udiv ${dst}, ${a}, x13`, `${n.op}`);
+		em.emit(`ccmp ${dst}, #0, #4, lt`, "負の数で割ったときだけ商を見る");
+		em.emit(`csel ${dst}, x12, ${dst}, ne`, "商が 0 でなければ番地の外——__");
+	} else {
+		em.emit(`udiv ${dst}, ${a}, ${b}`, `${n.op}`);
+	}
+	if (!mayBeZero(n.right)) return;
+	// **0 で割った番地は `__` である。** `udiv` は 0 を返すが、0 番地は layer 0 では読める記憶なので、
+	// 黙って返すと致命的になる（`Int` は 0 のまま——命令を足さない、利用者の決定）。割る数のレジスタは
+	// 上の命令で書き換わっていない。
+	em.emit(`cmp ${b}, #0`, "0 で割ったか");
+	em.emit(`csel ${dst}, x12, ${dst}, eq`, "0 で割った番地は __");
+}
+
+// その辺は 0 になりうるか。0 でない字面だけが「ならない」と言える。
+function mayBeZero(side) {
+	const v = literalValue(unwrap(side));
+	return v === null || v === 0n;
 }
 
 /**
@@ -4079,8 +4096,50 @@ function addressRuleOf(node, env, scope, typed = false) {
 	const parts = u && u.type === "operation" && (u.name === "range" || u.name === "range_arithmetic") ? rangeParts(u) : null;
 	return {
 		step: parts && !parts.signedByEnds ? parts.step : null,
-		startMaybeUnit: !(parts && cannotBeUnit(parts.start, env, scope, true)),
+		startMaybeUnit: ruleStartMaybeUnit(node, env, scope),
 	};
+}
+
+// 規則の起点は `__` でありうるか。字面の規則なら起点の節点に、門を通った仮引数なら「ならない」と訊ける。
+// 切った規則などは、起点が `__` でありうる（終端の無い規則を負の位置から切れば `__`）。
+function ruleStartMaybeUnit(node, env, scope) {
+	const u = unwrap(node);
+	const parts = u && u.type === "operation" && (u.name === "range" || u.name === "range_arithmetic") ? rangeParts(u) : null;
+	if (parts) return !cannotBeUnit(parts.start, env, scope, true);
+	if (!isIdentifierNode(u)) return true;
+	if (cannotBeUnit(u, env, scope, true)) return false;
+	// 字面の規則へ束縛した名前（`c : [0 ~+ 1]`）は、その字面に訊く。
+	const b = env ? envLookup(env, u.value) : null;
+	const v = b && b.valueNode ? unwrap(b.valueNode) : null;
+	return v && v !== u && v.type === "operation" && (v.name === "range" || v.name === "range_arithmetic") ? ruleStartMaybeUnit(v, env, scope) : true;
+}
+
+/**
+ * **規則の負の添字を均す。** 呼ぶ前に x9 = start、x10 = step、x11 = 添字を置いておくこと。
+ *
+ * 終端のある規則は器と同じく**末尾から数える**——レンジは「リストに見えるだけ」で、リストと同じ
+ * インターフェースを持つ（list_model.md §2.3）。要素数は `(end - start) / step + 1` なので、負のときだけ
+ * 割り算を払う（器の均しと同じく、負でない添字の道は比べて跳ぶ2命令）。
+ *
+ * **終端の無い規則には末尾が無い**ので、負の添字は `__` である（利用者の決定、2026-09-13）。均しは
+ * 要らず、呼ぶ側が後で「負なら __」を見る。
+ *
+ * 添字が負になりえなければ何も出さず false を返す。
+ */
+function emitRuleNegativeIndex(cw, co, idxNode, em) {
+	if (!mayBeNegative(idxNode, em)) return false;
+	if (cw >= 3) {
+		const nonneg = em.newLabel("nonneg");
+		em.emit("cmp x11, #0", "負なら末尾から数える");
+		em.emit(`b.ge ${nonneg}`);
+		em.load("x13", co + 16, "end");
+		em.emit(`sub x13, x13, ${SCRATCH[0]}`, "end - start");
+		em.emit(`sdiv x13, x13, ${SCRATCH[1]}`, "÷ step");
+		em.emit("add x13, x13, #1", "要素数");
+		em.emit("add x11, x11, x13", "要素数 + 添字");
+		em.label(nonneg);
+	}
+	return true;
 }
 // カーソルかどうか。「どう置かれているか」の帳簿を見る（`repr`）。
 function cursorGroupOf(node, env) {
@@ -5380,12 +5439,23 @@ function genIndex(node, env, em, scope) {
 		em.load(SCRATCH[0], co0, "start");
 		em.load(SCRATCH[1], co0 + 8, "step");
 		em.load("x11", io0, "起点");
+		// 負の起点：終端のある規則は末尾から数え、それでも負なら先頭から（器の `' -9~` と同じ）。
+		const neg0 = emitRuleNegativeIndex(cw, co0, idx.left, em);
+		if (neg0 && cw >= 3) {
+			em.emit("cmp x11, #0");
+			em.emit("csel x11, xzr, x11, lt", "それでも負なら先頭から");
+		}
+		em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 		// 番地の規則なら、ずらした起点も番地の算術である（`emitAddressAffine`）。
 		const rule0 = addressRuleOf(node.left, env, scope);
 		if (rule0) {
-			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 			emitAddressAffine(rule0.step, idx.left, rule0.startMaybeUnit, em);
 		} else em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + i × step（ずらすだけ）");
+		// 終端の無い規則を負の位置から切ることはできない——切った規則は `__`（起点を niche にする）。
+		if (neg0 && cw === 2) {
+			em.emit("cmp x11, #0");
+			em.emit(`csel ${SCRATCH[0]}, x12, ${SCRATCH[0]}, lt`, "終端の無い規則の負の位置は __");
+		}
 		em.pop(1);
 		em.store(SCRATCH[0], co0, "切った先の start");
 		return cw;
@@ -5424,11 +5494,23 @@ function genIndex(node, env, em, scope) {
 		em.load(SCRATCH[0], co, "start");
 		em.load(SCRATCH[1], co + 8, "step");
 		em.load("x11", io2, "添字");
+		const neg2 = emitRuleNegativeIndex(cw, co, node.right, em);
 		const rule2 = node.atomType === "Address" ? addressRuleOf(node.left, env, scope, true) : null;
+		const startMaybeUnit2 = ruleStartMaybeUnit(node.left, env, scope);
+		if (rule2 || neg2 || startMaybeUnit2) em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 		if (rule2) {
-			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 			emitAddressAffine(rule2.step, node.right, rule2.startMaybeUnit, em);
+		} else if (startMaybeUnit2) {
+			// 起点が `__` の規則（切れなかった規則）の要素は `__` である。
+			em.emit(`madd x13, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + n × step（ロードではない）");
+			em.emit(`cmp ${SCRATCH[0]}, x12`, "起点が __ か");
+			em.emit(`csel ${SCRATCH[0]}, x12, x13, eq`, "起点が __ なら __");
 		} else em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + n × step（ロードではない）");
+		if (neg2) {
+			// 均しても負なら（終端の無い規則はいつも）要素は無い。
+			em.emit("cmp x11, #0");
+			em.emit(`csel ${SCRATCH[0]}, x12, ${SCRATCH[0]}, lt`, "負の添字の要素は無い——__");
+		}
 		if (cw >= 3) {
 			// 終端があるなら範囲を見る。**向きは歩幅の符号が持つ**——端点の並びを読み直す
 			// のではない。切った規則（`[0 ~ 3] ' 5~`）は起点が終端を越えているので、

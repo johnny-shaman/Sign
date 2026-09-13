@@ -1232,7 +1232,10 @@ f 1`, "f") || [];
 	const divPn = body("f : p n ? p / n\nf 0x1000 4", "f") || [];
 	checkTrue("Address / Int は cmp・cneg・udiv・ccmp・csel …, ne の並び", seq(divPn, ["cmp x10, #0", "cneg x13, x10, lt", "udiv x9, x9, x13", "ccmp x9, #0, #4, lt", "csel x9, x12, x9, ne"]), divPn.join(" / "));
 	const divPP = body("f : p q ? p / q\nf 0x1000 0x10", "f") || [];
-	checkTrue("Address / Address は udiv 1命令（商は被除数を超えない）", divPP.includes("udiv x9, x9, x10") && !divPP.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPP.join(" / "));
+	checkTrue("Address / Address は udiv の後に 0 で割ったかだけ見る（商は被除数を超えない）", seq(divPP, ["udiv x9, x9, x10", "cmp x10, #0", "csel x9, x12, x9, eq"]) && !divPP.some((l) => /^(cneg|ccmp) /.test(l)), divPP.join(" / "));
+	// `Int` を 0 で割ると 0（`sdiv` がそう答える）——命令を足さない
+	const divII = body("f : a b ? a / b\nf 7 0", "f") || [];
+	checkTrue("Int / Int は sdiv 1命令で、0 で割っても命令を足さない", divII.includes("sdiv x9, x9, x10") && !divII.some((l) => /^(csel|cneg|ccmp) /.test(l)), divII.join(" / "));
 	const divPk = body("f : p ? p / 4\nf 0x1000", "f") || [];
 	checkTrue("Address / 非負のリテラル は udiv 1命令", divPk.includes("udiv x9, x9, x10") && !divPk.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPk.join(" / "));
 
@@ -1250,6 +1253,13 @@ f 1`, "f") || [];
 	checkTrue("番地の範囲は ls で向きを決め、hi・lo で終端と比べる", rangeP.includes("csel x11, x11, x12, ls") && rangeP.includes("cset x15, hi") && rangeP.includes("cset x11, lo"), rangeP.join(" / "));
 	const rangeI = body("f : a e i ? [a ~ e] ' i\nf 1 5 1", "f") || [];
 	checkTrue("Int の範囲は le で向きを決め、gt・lt で終端と比べる", rangeI.includes("csel x11, x11, x12, le") && rangeI.includes("cset x15, gt") && rangeI.includes("cset x11, lt"), rangeI.join(" / "));
+	// 負の添字：終端の無い規則は `__`、終端のある範囲は末尾から数える（負のときだけ割り算を払う）
+	const negEndless = body("f : a k i ? [a ~+ k] ' i\nf 100 8 3", "f") || [];
+	checkTrue("終端の無い規則の添字は、負なら __ を選ぶ", seq(negEndless, ["madd x9, x10, x11, x9", "cmp x11, #0", "csel x9, x12, x9, lt"]), negEndless.join(" / "));
+	const litEndless = body("f : a k ? [a ~+ k] ' 3\nf 100 8", "f") || [];
+	checkTrue("非負の字面の添字は負を見ない", litEndless.some((l) => l.startsWith("madd ")) && !litEndless.includes("cmp x11, #0"), litEndless.join(" / "));
+	const negBounded = body("f : a e i ? [a ~ e] ' i\nf 1 5 -1", "f") || [];
+	checkTrue("終端のある範囲の負の添字は、要素数を足してから引く", seq(negBounded, ["cmp x11, #0", "b.ge .Lnonneg2"]) && seq(negBounded, ["sdiv x13, x13, x10", "add x13, x13, #1", "add x11, x11, x13"]), negBounded.join(" / "));
 
 	// **溢れうる番地は `__` になりうる。** 門を通った仮引数どうしの和でも、続く演算は左辺の
 	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。見た後は

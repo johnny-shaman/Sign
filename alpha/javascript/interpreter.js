@@ -1137,6 +1137,23 @@ function arithOnValues(name, l, r, resultType) {
     if (r === undefined) return UNIT;
     return typeof r === "string" && [...r].length !== 1 ? UNIT : r;
   }
+  // **整数を 0 で割ると、商は 0、剰余は被除数である**（利用者の決定、2026-09-13）。
+  //
+  // AArch64 の `sdiv`/`udiv` は 0 で割ると 0 を返し、剰余（`msub`）は被除数になる——命令を1つも
+  // 足さない形であり、除法の等式 `a = (a/b)*b + a%b` が `b = 0` でも崩れない（等式で書き換える最適化が
+  // 除数を確かめずに効く）。`0⁻¹ = 0` と置く草原（meadow）と同じ形でもある。
+  //
+  // **番地の商だけは `__` である。** 0 番地は layer 0 では読める記憶なので、黙って 0 を返すと致命的に
+  // なる（integer_overflow.md §1 の物差し）。剰余は被除数の番地そのものなので、そのまま返す。
+  //
+  // 以前は JS の `Infinity`/`NaN` が漏れていた（機械は 0）。`Float` は IEEE 754 のまま（ここへ来ない）。
+  if ((name === "div" || name === "mod") && (resultType === "Int" || resultType === "Address" || resultType === "Char")) {
+    const d = typeof r === "string" && [...r].length === 1 ? r.codePointAt(0) : r;
+    if (d === 0 || d === 0n) {
+      if (name === "mod") return l;
+      return resultType === "Address" ? UNIT : 0;
+    }
+  }
   // **1文字は符号位置そのものである**（`[x] ≅ x` なので長さ1の文字列は `Char`）。
   // 文字の算術は符号位置の算術である——**そして値としてはそれで全部**である。
   //
@@ -1282,8 +1299,8 @@ function evalArith(node, env) {
   // **回す前の値が丸まっていたら、回しても正しくならない。** 両辺が Number に収まる整数でも、
   // 積や和は 2^53 を超えうる——倍精度はそこで下の桁を黙って丸め、`applyOverflowRule` は丸まった
   // 値を回す（実測で `3037000500 * 3037000500` が解釈器 -9223372036709302272、機械 …301616）。
-  // 整数の型の結果が倍精度の整数の外へ出たときだけ BigInt で計算し直す。`Float` は型で外れ、
-  // 0 除算の `Infinity`/`NaN` は整数でないので、これまでの答えのまま通る。
+  // 整数の型の結果が倍精度の整数の外へ出たときだけ BigInt で計算し直す。`Float` は型で外れる
+  // （整数の 0 除算は `arithOnValues` が先に答えている）。
   if ((node.atomType === "Int" || node.atomType === "Address") && typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value) && Number.isSafeInteger(l) && Number.isSafeInteger(r) && BIG_ARITH[name]) {
     const exact = BIG_ARITH[name](BigInt(l), BigInt(r));
     if (exact !== null) value = exact;
@@ -1501,7 +1518,17 @@ function isInfiniteIterator(v) {
 // n 番目の要素を取り出す。**無限でも引ける**——これがループカウンタを成立させる。
 function iteratorAt(it, n) {
   if (typeof n === "bigint") n = fromBig(n);
-  if (typeof n === "bigint" ? n < 0n : !Number.isInteger(n) || n < 0) return UNIT;
+  if (typeof n === "number" && !Number.isInteger(n)) return UNIT;
+  // **負の添字は末尾から数える**——レンジは「リストに見えるだけ」で、リストと同じインターフェースを
+  // 持つ（list_model.md §2.3）。**終端の無い規則には末尾が無い**ので `__` である（利用者の決定、
+  // 2026-09-13）。機械は pass4 の `emitRuleNegativeIndex` が同じ規則で出す。
+  if (n < 0) {
+    if (isInfiniteIterator(it)) return UNIT;
+    const c = iteratorCount(it);
+    if (typeof c !== "number") return UNIT;
+    n = typeof n === "bigint" ? fromBig(BigInt(c) + n) : c + n;
+    if (n < 0) return UNIT;
+  }
   // 規則が一次なら、`i` 回進めるのは掛け算1回である——`start + i × step`。
   // type_system.md §2 のアクセス表が `Iterator(T)` の欄に書いているのがこれで、
   // Pass 4 が出すのもロードではなくこの算術になる。
@@ -1932,8 +1959,15 @@ function getPropByValue(l, r) {
     const from = r.start;
     // 左辺もイテレータなら、進めたイテレータそのものが答えである——**展開しない**。
     if (isIterator(l)) {
+      // 負の起点は末尾から数える（器の `' -2~` と同じ）。終端の無い規則には末尾が無いので `__`。
+      let start = from;
+      if (from < 0) {
+        if (isInfiniteIterator(l)) return UNIT;
+        const c = iteratorCount(l);
+        start = typeof c === "number" ? Math.max(0, c + from) : 0;
+      }
       let cur = l;
-      for (let i = 0; i < from && isIterator(cur); i++) cur = iteratorRest(cur);
+      for (let i = 0; i < start && isIterator(cur); i++) cur = iteratorRest(cur);
       return cur;
     }
     const asStr = typeof l === "string";
