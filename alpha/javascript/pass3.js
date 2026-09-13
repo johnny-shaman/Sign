@@ -2304,11 +2304,11 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
           // Sign には型注釈の構文が無いので（§1「型はコードの影」）、初期化時に型を
           // 決めたいときは値を変えない演算を書く。
           //
-          //   x : @p + 0      Address として読む
-          //   x : @p + 0.0    Float として読む
+          //   x : 0x0 + @p    Address として読む（`0 + @p` は Int——十進の字面は Int）
+          //   x : 0.0 + @p    Float として読む
           //   x : @p          型を決める情報が無い
           //
-          // `+ 0` は値を変えないので実行時コストは無い（コンパイル時に消える）が、
+          // `0x0 +` は値を変えないので実行時コストは無い（コンパイル時に消える）が、
           // 型は固定される。注釈構文を足さずに「キャスト情報がある場合と無い場合」を
           // 書き分けられる。比較でも同じで、`t = \`===\`` の `t` は String になる
           // ——比較は同種同士でしか成立しないため、相手の型がそのまま制約になる。
@@ -2328,8 +2328,8 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
             refine(side.value, "Scalar");
             continue;
           }
-          // **相手が `Int` なら、それは既定値であって証拠ではない。** `Int` は昇格格子の底なので、
-          // `p + 8` は「p は数である」までしか言っていない——p が番地なら和も番地である。
+          // **相手が `Int` なら、それは既定値であって証拠ではない。** `p + 8` の `8` は p が何の数かを
+          // 言っていない——p が番地なら和も番地、Float なら和も Float である。
           // だから呼び出しサイトの証拠が出揃うまでは族（`Scalar`）に留め、証拠の来なかった
           // 仮引数にだけ後で `Int` を埋める（`annotateAll` の最初の周回、`intPartnerDeferred`）。
           //
