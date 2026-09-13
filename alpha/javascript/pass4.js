@@ -1528,13 +1528,19 @@ function genExpr(node, env, em, scope, tail = false) {
 
 		// **完全性公理**（`operator_table.md` の算術行）。
 		//
-		// | | 左辺が `__` | 右辺が `__` |
+		// | 結果の型 | 左辺が `__` | 右辺が `__` |
 		// | --- | --- | --- |
-		// | `+` `-` `*` `/` | **右辺値** | **左辺値** |
+		// | `Address` 以外 | **右辺値** | **左辺値** |
+		// | `Address` | **`__`** | **`__`** |
 		//
 		// **`__` は両側で単位元である**（爆発律）。算術は `A × A → A`——積を食って同じ
 		// 対象を返すので、片方が始対象なら返せる値は残った方しか無い（始対象からの射は
 		// 一意）。型で言えば `__` は強さの**底**で、`Unit ⊕ T → T` である。
+		//
+		// **結果が番地なら `__` は両側で吸収する**（同じ欄の例外、解釈器の `absorbsUnit`）。
+		// 爆発律を当てると溢れた番地が次の演算で生き返り、足す数の側が失われたときに左辺を
+		// 返せば意図と違う番地が黙って出る——どちらも任意の記憶を指すので致命的である。命令は
+		// 同じ `csel` で、選ぶ先を残った辺から niche（`x12`）へ替えるだけである。
 		//
 		// 比較は違う。`A × A → Ω` で返す先が別の対象なので、相手の値を通しても行き先の
 		// 型にならない——爆発しようがなく `__` のままである。**積関手か冪関手が絡むか
@@ -1559,9 +1565,14 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 記憶を指すので払う。`Int` は回ってよい——間違った数は番地にならない。検査は完全性公理の
 		// 前に置く：公理の `cmp` が旗を壊すうえ、`__` の辺を足した値は公理が上書きするので、
 		// その値が溢れたかどうかは答えに関係しない。
-		const lMaybe = !cannotBeUnit(n.left, env, scope);
-		const rMaybe = !cannotBeUnit(n.right, env, scope);
-		const carry = n.atomType === "Address" ? CARRY[mn] : null;
+		//
+		// **番地の辺は `Int` の嘘を信じない**（`cannotBeUnit` の `critical`）。門を通った仮引数
+		// どうしの `Int` の和でも、回った先がちょうど niche なら `__` である。`Int` の算術が続く
+		// だけならその niche を数として足してよい（致命的でない）が、番地へ足すと別の番地が出る。
+		const absorb = n.atomType === "Address";
+		const lMaybe = !cannotBeUnit(n.left, env, scope, absorb);
+		const rMaybe = !cannotBeUnit(n.right, env, scope, absorb);
+		const carry = absorb ? CARRY[mn] : null;
 		if (!lMaybe && !rMaybe && !carry) {
 			em.emit(`${mn} ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
 		} else if (!lMaybe && !rMaybe) {
@@ -1573,11 +1584,13 @@ function genExpr(node, env, em, scope, tail = false) {
 			else em.emit(`${mn} x11, ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
 			if (rMaybe) {
 				em.emit(`cmp ${SCRATCH[1]}, x12`, "右辺が __ か");
-				em.emit(`csel x11, ${SCRATCH[0]}, x11, eq`, "右が __ なら左辺値（完全性公理）");
+				if (absorb) em.emit("csel x11, x12, x11, eq", "右が __ なら __（番地は吸収する）");
+				else em.emit(`csel x11, ${SCRATCH[0]}, x11, eq`, "右が __ なら左辺値（完全性公理）");
 			}
 			if (lMaybe) {
 				em.emit(`cmp ${SCRATCH[0]}, x12`, "左辺が __ か");
-				em.emit(`csel x11, ${SCRATCH[1]}, x11, eq`, "左が __ なら右辺値（爆発律）");
+				if (absorb) em.emit("csel x11, x12, x11, eq", "左が __ なら __（番地は吸収する）");
+				else em.emit(`csel x11, ${SCRATCH[1]}, x11, eq`, "左が __ なら右辺値（爆発律）");
 			}
 			em.emit(`mov ${SCRATCH[0]}, x11`);
 		}
@@ -4562,7 +4575,7 @@ function isUnitAtom(node) {
 // `Int` でも実行時の値は `__` になり得るので、型は答えにならない。
 //
 // リテラルは `__` ではない。算術の結果は、両辺が `__` でなければ `__` ではない
-// ——公理自身がそう言っている（左が `__` なら `__`、右が `__` なら左辺値）。
+// ——公理自身がそう言っている（`__` の辺は、相手の値で埋まるか、番地なら `__` のまま運ぶ）。
 // ただし `Char` は別で、charset の外へ出た結果は `__` になる。除算も別で、0 で
 // 割った結果をここでは決めていない。`Address` も別で、溢れた加減算は `__` になる
 // （`emitAddressCarry`）——ここで「`__` になり得ない」と答えると、次の演算が公理の検査を
@@ -4574,10 +4587,15 @@ function isUnitAtom(node) {
 // 答えが割れる形は同 §1.2 の WARNING が書いている。別にしても実プログラム4本の命令数は
 // 変わらなかった（実測）が、算術の連なりには1段ごとに4命令が乗る。
 //
+// **ただし番地の算術の辺として訊かれたら（`critical`）、嘘をつかない。** niche に落ちた `Int` を
+// 番地へ足すと、`__` ではなく別の、正しく見える番地が出る——致命的なので払う
+// （integer_overflow.md §1.3）。そのときは算術の結果をすべて「`__` になり得る」と答える。
+// 再帰の先（`' 0` / `~` / `@$` の恒等射）も同じ問いなので、`critical` を持ち回る。
+//
 // **数のリテラルでも、ビットが niche なら `__` である**（integer_overflow.md §1.2）。
 // `-9223372036854775808` と `0x8000000000000000` は、`0u0000` と同じく綴りが違うだけの `__`
 // であり、置く命令は niche をそのまま作る。
-function cannotBeUnit(node, env, scope) {
+function cannotBeUnit(node, env, scope, critical = false) {
 	const n = unwrap(node);
 	if (!n) return false;
 	if (isUnitAtom(n)) return false; // `0u0000` は綴りが違うだけの `__` である
@@ -4593,7 +4611,7 @@ function cannotBeUnit(node, env, scope) {
 		return n.kind === "char" || n.kind === "unicode";
 	}
 	if (isAsmForm(n, "alu")) {
-		if (n.atomType === "Char" || n.atomType === "Address" || n.name === "div") return false;
+		if (critical || n.atomType === "Char" || n.atomType === "Address" || n.name === "div") return false;
 		return cannotBeUnit(n.left, env, scope) && cannotBeUnit(n.right, env, scope);
 	}
 	// **スカラーへの `' 0` は恒等射である**（`[x] ≅ x`——1要素の器は存在しない）。
@@ -4609,13 +4627,13 @@ function cannotBeUnit(node, env, scope) {
 		const i = unwrap(n.right);
 		const zero = i && i.type === "atom" && i.kind === "number" && Number(i.value) === 0;
 		const lt = n.left && unwrap(n.left) ? unwrap(n.left).atomType : null;
-		if (zero && SCALAR_ATOM_TYPES.has(lt)) return cannotBeUnit(n.left, env, scope);
+		if (zero && SCALAR_ATOM_TYPES.has(lt)) return cannotBeUnit(n.left, env, scope, critical);
 	}
 	// **後置 `~`（撒く）はスカラーでは恒等射である。** 出す側も 0 命令で素通ししている
 	// （`genExpr` の `expand` の枝）ので、ここも同じ答えでなければならない。
 	if (n.type === "operation" && n.position === "postfix" && n.name === "expand" && n.operand) {
 		if (SCALAR_ATOM_TYPES.has(unwrap(n.operand) ? unwrap(n.operand).atomType : null))
-			return cannotBeUnit(n.operand, env, scope);
+			return cannotBeUnit(n.operand, env, scope, critical);
 	}
 	// **`@$名前` も恒等射である。** 仮引数の番地を作って読み直しても、束縛の値そのもの
 	// にしかならない——出す側は 10 命令を 0 に畳んでいる（`genExpr` の `input` の枝）。
@@ -4625,7 +4643,7 @@ function cannotBeUnit(node, env, scope) {
 		if (src && src.type === "operation" && src.position === "prefix" && src.name === "address") {
 			const named = unwrap(src.operand);
 			if (isIdentifierNode(named) && scope && scope.params && scope.params.indexOf(named.value) >= 0)
-				return cannotBeUnit(named, env, scope);
+				return cannotBeUnit(named, env, scope, critical);
 		}
 	}
 	return false;

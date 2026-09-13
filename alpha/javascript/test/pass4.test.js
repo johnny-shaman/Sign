@@ -1221,9 +1221,45 @@ f 1`, "f") || [];
 	checkTrue("Int - Int は sub 1命令で、溢れを見ない", subII.includes("sub x9, x9, x10") && noCheck(subII), subII.join(" / "));
 
 	// **溢れうる番地は `__` になりうる。** 門を通った仮引数どうしの和でも、続く演算は左辺の
-	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。
+	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。見た後は
+	// `__` を吸収する（下の節）ので、選ぶ先は右辺ではなく niche である。
 	const chain = body("f : p n m ? p + n + m\nf 0x1000 8 4", "f") || [];
-	checkTrue("番地の和に続く和は、左辺の __ を見る", chain.includes("csel x11, x10, x11, eq"), chain.join(" / "));
+	checkTrue("番地の和に続く和は、左辺の __ を見て niche を選ぶ", chain.some((l, k) => l === "cmp x9, x12" && chain[k + 1] === "csel x11, x12, x11, eq"), chain.join(" / "));
+}
+
+// ---- 結果が番地なら、爆発律の `csel` は niche を選ぶ ----
+//
+// 爆発律（`__ + 3` は `3`）の `csel` は `__` の辺を見て**残った辺**を選ぶ。結果が番地なら `__` は
+// 両側で吸収するので、同じ `csel` が **niche（`x12`）**を選ぶ（operator_table.md の爆発律の欄の例外）。
+// 値で見ると、`__` の辺が来ない入力では両者は同じ答えになる——だから選ぶ先を綴りで留める。
+// `Int` の側も留める。こちらが niche を選ぶようになったら、爆発律を壊している。
+{
+	// **並びはどこに在ってもよい。** 入口の門番も `cmp x9, x12` を出すので、最初に見つかった所で
+	// 比べると別の `cmp` を掴む。
+	const seq = (ls, wants) => ls.some((_, k) => wants.every((w, i) => ls[k + i] === w));
+
+	// 右辺が `__` になり得る（範囲の外を引いた添字）：番地は niche、Int は左辺（x9）
+	const addrR = body("f : p i ? p + ([1 2] ' i)\nf 0x1000 5", "f") || [];
+	checkTrue("Address：右が __ なら csel x11, x12, x11, eq", seq(addrR, ["cmp x10, x12", "csel x11, x12, x11, eq"]), addrR.join(" / "));
+	checkTrue("Address：右が __ でも左辺（x9）を選ばない", !addrR.includes("csel x11, x9, x11, eq"), addrR.join(" / "));
+	const intR = body("f : n i ? n + ([1 2] ' i)\nf 7 5", "f") || [];
+	checkTrue("Int：右が __ なら csel x11, x9, x11, eq（左辺値）", seq(intR, ["cmp x10, x12", "csel x11, x9, x11, eq"]), intR.join(" / "));
+	checkTrue("Int：右が __ でも niche を選ばない", !intR.includes("csel x11, x12, x11, eq"), intR.join(" / "));
+
+	// 左辺が `__`（字面）：番地は niche、Int は右辺（x10）
+	const addrL = body("f : p ? __ + p\nf 0x1000", "f") || [];
+	checkTrue("Address：左が __ なら csel x11, x12, x11, eq", seq(addrL, ["cmp x9, x12", "csel x11, x12, x11, eq"]), addrL.join(" / "));
+	checkTrue("Address：左が __ でも右辺（x10）を選ばない", !addrL.includes("csel x11, x10, x11, eq"), addrL.join(" / "));
+	const intL = body("f : n ? __ + n\nf 7", "f") || [];
+	checkTrue("Int：左が __ なら csel x11, x10, x11, eq（右辺値）", seq(intL, ["cmp x9, x12", "csel x11, x10, x11, eq"]), intL.join(" / "));
+	checkTrue("Int：左が __ でも niche を選ばない", !intL.includes("csel x11, x12, x11, eq"), intL.join(" / "));
+
+	// **niche に落ちた `Int` を番地へ足さない。** 門を通った仮引数どうしの和は、`Int` の算術が続く
+	// だけなら見ない（integer_overflow.md §1.2）が、番地の辺に来たら見る（同 §1.3）。
+	const addrSum = body("f : p a b ? p - (a + b)\nf 0x1000 1 2", "f") || [];
+	checkTrue("Address - (Int + Int)：右辺の和が niche かを見て niche を選ぶ", seq(addrSum, ["csel x11, x12, x11, ne", "cmp x10, x12", "csel x11, x12, x11, eq"]), addrSum.join(" / "));
+	const intSum = body("f : c a b ? c - (a + b)\nf 1 1 2", "f") || [];
+	checkTrue("Int - (Int + Int)：和を見ない（sub 1命令で csel 無し）", intSum.includes("sub x9, x9, x10") && !intSum.some((l) => /^(cmp x10, x12$|csel )/.test(l)), intSum.join(" / "));
 }
 
 console.log(`\n${passed}/${total} passed`);

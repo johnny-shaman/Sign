@@ -428,6 +428,11 @@ function arithmeticResultType(node, leftType, env) {
   // 3 を出すのに型が `Unit` なので、Pass 4 が「GPR 幅の整数演算だけを出せます（Unit）」で
   // 止まる——**意味と型が食い違っていた**。
   //
+  // **相手が `Address` でも型は `T` のままである。** 値の側では、結果が番地なら `__` が両側で
+  // 吸収する（operator_table.md の爆発律の欄の例外、interpreter.js の `absorbsUnit`）ので、
+  // 残るのは相手ではなく `__` である。だが `__` は番地の型の値でもある（niche）ので、型の答えは
+  // 変わらない——そしてその例外を選ぶのが、ここで決まる結果の型である。
+  //
   // 相手が算術の対象でないとき（String は上で落ちる、List や Implicit は下の規則）は
   // 通り抜けない。代数の中に居ないものは、底から持ち上がる先が無い。
   if (leftType === "Unit" && (NUMERIC_TYPES.has(rightType) || rightType === "Char")) return rightType;

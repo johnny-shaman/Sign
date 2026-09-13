@@ -1085,12 +1085,39 @@ function roundHalfAwayFromZero(x) {
   return x < 0 ? -Math.round(-x) : Math.round(x);
 }
 
+/**
+ * **その算術は `__` を吸収するか。** 結果の型が `Address` なら、`__` は両側で吸収する——
+ * `__ + k` も `p + __` も `__` である（operator_table.md「算術の `__` は両側とも恒等射である
+ * （爆発律）」の例外）。
+ *
+ * 爆発律を番地に当てると、溢れて `__` になった番地が次の演算で生き返る（`(p + n) - m` が
+ * `m` になる）。足す数の側が失われたときに `p` を返すのも、意図と違う・正しく見える番地を
+ * 黙って出すことなので、同じく致命的である。だから左右を問わない。`Int` は爆発律のまま
+ * ——溢れた数は番地にならない。
+ *
+ * **決めるのは結果の型であって値ではない。** 解釈器の番地は数と同じ JS の値なので、値を
+ * 見ても番地かどうかは分からない。結果の型は昇格格子が決める（`Address + Int` は `Address`、
+ * `Int + Address` は `Int`、`Unit + Address` は `Address`——type_system.md §3.6）。
+ *
+ * 算術（`arithOnValues`——中置もポイントフリーもそこを通る）とビット演算（`evalBit`）が
+ * ここへ訊く。同じ族の同じ規則なので、決める場所は1つである。機械の側は pass4 の算術の
+ * `csel` が同じ事実を持つ。
+ */
+function absorbsUnit(resultType, l, r) {
+  return resultType === "Address" && (isUnit(l) || isUnit(r));
+}
+
 // 算術族の型規則を**値に対して**適用する（type_system.md §3.2）。
 // 通常の中置（evalArith）とポイントフリー（applyPointfree の combine）の両方から呼ぶ——
 // 以前は後者が ARITH_OPS を直に叩いており型ガードを丸ごと迂回していたため、
 // `[+ 1] [1 2 3]` が `"1,2,31"`（JSの配列→文字列強制）、`[* 2,] \`abc\`` が NaN を
 // 静かに返していた。算術が何を意味するかを決める場所は1つでなければならない。
-function arithOnValues(name, l, r) {
+//
+// `resultType` は pass3 がノードへ載せた結果の型である。`__` を通すか吸収するかがそれで
+// 決まる（`absorbsUnit`）——値だけでは番地と数の区別が付かないので、呼ぶ側が渡す。
+function arithOnValues(name, l, r, resultType) {
+  // **結果が番地なら、`__` は両側で吸収する**（`absorbsUnit`）。下の爆発律より先に見る。
+  if (absorbsUnit(resultType, l, r)) return UNIT;
   // **`__` は算術の両側で単位元である**（爆発律）。
   //
   // 算術は `A × A → A`——**積**を食って**同じ対象**を返す。片方が始対象なら、返せる値は
@@ -1183,6 +1210,14 @@ function evalBit(node, env) {
   const l = evaluate(node.left, env);
   const r = unspreadScalar(evaluate(node.right, env));
   // 算術と同じ族（operator_table.md の同じ行）なので、`__` は両側とも単位元である。
+  // 例外も同じで、結果が番地なら吸収する（`absorbsUnit`——`p && mask` の mask が失われても
+  // `p` を返せば、意図と違う番地が黙って出る）。
+  //
+  // **左に `__` を置いた形はまだ番地と分からない。** pass3 はビット演算に `Unit ⊕ T → T` を
+  // 当てておらず（算術は `arithmeticResultType` が当てる）、`__ << p` の型を左辺の `Unit` の
+  // まま返す——値は `p` なのに型は `Unit` で、ここは爆発律で `p` を返す。機械はビット演算を
+  // まだ出さないので、答えが割れる相手は居ない。
+  if (absorbsUnit(node.atomType, l, r)) return UNIT;
   if (isUnit(l)) return r;
   if (isUnit(r)) return l;
   return bitOnValues(node.name, l, r);
@@ -1213,7 +1248,11 @@ function evalArith(node, env) {
   // ——ここは観測できる差である（`__ + ($UART # x)` は書き込みが起きる）。以前は
   // 「零射との合成は零だから右辺は結果に寄与しえない」という理由で飛ばしていたが、
   // `__` が単位元になった以上その前提が消えた。
-  if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined);
+  //
+  // 結果が番地なら `__` は吸収するので（`absorbsUnit`）、左辺の `__` だけで値は決まる。
+  // それでも右辺は評価している——そこで短絡するかは仕様が未決としている（operator_table.md
+  // の継続の規則）。決まるまでは `Int` と同じ道を通し、機械（両辺を積んでから `csel`）と揃える。
+  if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined, node.atomType);
   const r = unspreadScalar(evaluate(node.right, env));
   // **対象を置けば値が返り、射を置けば射が返る。**
   //
@@ -1239,7 +1278,7 @@ function evalArith(node, env) {
       { left: holeL ? undefined : l, right: holeR ? undefined : r }
     );
   }
-  let value = arithOnValues(name, l, r);
+  let value = arithOnValues(name, l, r, node.atomType);
   // **回す前の値が丸まっていたら、回しても正しくならない。** 両辺が Number に収まる整数でも、
   // 積や和は 2^53 を超えうる——倍精度はそこで下の桁を黙って丸め、`applyOverflowRule` は丸まった
   // 値を回す（実測で `3037000500 * 3037000500` が解釈器 -9223372036709302272、機械 …301616）。
@@ -1934,7 +1973,13 @@ function applyPointfree(node, closureEnv, argValues, pfbound) {
     // 算術は通常の中置と同じ型規則を通す（arithOnValues）。以前はARITH_OPSを直に
     // 叩いており、`[+ 1] [1 2 3]` → "1,2,31"（JSの配列→文字列強制）や
     // `[* 2,] \`abc\`` → NaN といった silent-wrong-value が漏れていた。
-    if (ARITH_OPS[node.name]) return arithOnValues(node.name, a, b);
+    //
+    // 結果の型は pass3 がポイントフリーのノードへ載せたものを渡す。埋まっている側が番地
+    // （`[0x1000 +]`）なら `Address` なので `__` を吸収する。**穴が左辺の形（`[+ 16]`）は型が
+    // 付かない**——結果の型は穴へ来る値で決まるが、値は番地と数を区別しない。そこでは爆発律の
+    // ままで、`[+ ([1] ' 5)] 0x1000` は 4096 を返す。溢れの規則（`applyOverflowRule`）もこの道は
+    // まだ通していない。どちらも機械には出せない形（呼び先が静的に決まらない）である。
+    if (ARITH_OPS[node.name]) return arithOnValues(node.name, a, b, node.atomType);
     if (COMPARE_OPS[node.name]) {
       // ポイントフリーはList側のfold/map/filterが前提（8/5の設計合意）のため、単位元の
       // 見方も算術側（0/1）ではなくList側に移る——真なら常に要素そのもの(a)を残す。
