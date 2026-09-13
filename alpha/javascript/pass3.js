@@ -2226,6 +2226,9 @@ function joinParamType(cur, next) {
   return null;
 }
 
+// 字面の相手から来る `Int` を、まだ仮引数の型として書かない周回か（`annotateAll` の最初の周回）。
+// 理由は `inferParamTypesFromUsage` の、相手の型から仮引数を決める節。
+let intPartnerDeferred = false;
 function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null, elemsOut = null) {
   const inferred = new Map();
 
@@ -2325,7 +2328,19 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
             refine(side.value, "Scalar");
             continue;
           }
-          refine(side.value, fromOther || "Scalar");
+          // **相手が `Int` なら、それは既定値であって証拠ではない。** `Int` は昇格格子の底なので、
+          // `p + 8` は「p は数である」までしか言っていない——p が番地なら和も番地である。
+          // だから呼び出しサイトの証拠が出揃うまでは族（`Scalar`）に留め、証拠の来なかった
+          // 仮引数にだけ後で `Int` を埋める（`annotateAll` の最初の周回、`intPartnerDeferred`）。
+          //
+          // 先に埋めると再帰で輪になる。`f : p n ?` / `f (p + 8) (n - 1)` の自己呼び出しは
+          // `p + 8` を実引数に渡すので、字面から来た `Int` が「p は Int で呼ばれた」という観測に
+          // 化け、外の `f 0xFFFFFFFFFFFFFFE0 4`（Address）と食い違って決まらない。決まらなければ
+          // 本体の `Int` が残るので番地の溢れの検査が付かず、両エンジンとも 0 番地を返していた。
+          // 輪が `g` を挟んでも（足すのが `g` の側でも）同じだった。**決めようとしているものを
+          // 証拠に数える循環**——`collectCallsiteParamTypes` が族を観測に数えない理由と同じ形が、
+          // 族ではなく具体型を通って起きていた。
+          refine(side.value, fromOther === "Int" && intPartnerDeferred ? "Scalar" : fromOther || "Scalar");
         }
       }
     }
@@ -3658,7 +3673,13 @@ function annotateTypes(node, env, diagnostics) {
   if (node.name === "lambda" && node.scope) {
     for (const [name, atomType] of inferLambdaParamTypes(node, env)) {
       const binding = envLookup(node.scope, name);
-      if (binding && !binding.atomType) binding.atomType = atomType;
+      // **族は具体型に譲る。** 一度書いたら動かさない書き方だったので、最初の周回（字面の相手の
+      // `Int` を保留する周回、`intPartnerDeferred`）で入った `Scalar` が焼き付いていた。実測で
+      // デフォルトに置いたラムダ（`f$g`）と `$` で渡した無名の関数（`apply5$ref$0`）が
+      // 「仮引数 y の渡し方が決まりません（直和か族）」に落ちた。
+      // 族の中で狭めるだけなので、書いた順には依らない（`inferParamTypesFromUsage` の `refine`）。
+      const members = binding && FAMILY_MEMBERS[binding.atomType];
+      if (binding && (!binding.atomType || (members && members.has(atomType)))) binding.atomType = atomType;
     }
   }
   if (node.left) annotateTypes(node.left, node.name === "lambda" ? env : inner, diagnostics);
@@ -4303,6 +4324,18 @@ function annotateAll(nodes, env, diagnostics) {
     if (!a && !b && !c && !d) break;
   }
   };
+  // **その前に、証拠だけで一度回す。** 字面の相手から来る `Int` は既定値なので
+  // （`inferParamTypesFromUsage`）、呼び出しサイトの証拠が出揃ってから埋める。
+  //
+  // **埋めるのは返値を底へ戻す前である。** 既定値を埋めるのは仮引数の型を狭めることなので、
+  // 2相目の中で狭めると上と同じ理由で返値が固まる——実測で parser.sn の末尾で飛ぶ枝が
+  // 「返す本数が決まりません（Int）」に落ちた。だから既定値を入れた1相目を回してから戻す。
+  intPartnerDeferred = true;
+  try {
+    runFixpoint();
+  } finally {
+    intPartnerDeferred = false;
+  }
   runFixpoint();
   // 返値だけを底へ戻して、確定した仮引数の型で回し直す。
   for (const node of liveDefines(nodes)) {
