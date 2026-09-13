@@ -1257,7 +1257,9 @@ function getPropResultType(node, env) {
       const el = containerElementType(node.left, env);
       if (el) return el;
     }
-    if (containerType === "List") node.elementType = containerElementType(node.left, env);
+    // 規則を切っても要素の型は同じである。落とすと、切った規則の添字が型を持たず、番地の規則でも
+    // 番地の算術（溢れの検査）にならない。
+    if (containerType === "List" || containerType === "Iterator") node.elementType = containerElementType(node.left, env);
     // **規則を切っても規則である。** `repr` は「どう置かれているか」を持つ帳簿なので、
     // ここで落とすと `[0 ~ 3] ' 2~` が「要素列への参照」に見え、Pass 4 が `start` を
     // ポインタとして読む命令を出す。切るというのは起点をずらす算術1つであって、

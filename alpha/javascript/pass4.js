@@ -251,6 +251,52 @@ function emitAddressDiv(n, dst, em) {
 }
 
 /**
+ * **番地の規則の n 番目は、番地の算術そのものである。** `start + n × step` を、溢れたら `__` へ落とす。
+ *
+ * 規則の添字はロードではなく算術なので（`genIndex` の規則の枝）、同じ物差し——数学の値が 0 以上
+ * 2^64 未満か——が当たる。`madd` 1命令のままだと `[p ~+ k] ' i` は下の 64 ビットの番地を返していた
+ * （実測で `f 0x10 4 2^62` が機械 0x10、解釈器 `__`）。
+ *
+ * **検査は作る所に置く。** 読む所（`@`）だけで見ると、作った値を名前へ置いて別の関数で読んだとき、
+ * もう溢れたことが分からない——回った番地は正しい番地と同じビットだからである。
+ *
+ * 積は 128 ビットで取る。両辺とも符号ありで読んでよければ上の語は `smulh` そのもので、64 ビット
+ * 全部を使う番地（`Address`）が混じるときだけ `umulh` から相手を引く（`emitAddressMul` と同じ式）。
+ * 起点を足して上の語が 0 なら収まっている。
+ *
+ * 入口: x9 = start、x10 = step、x11 = 添字、x12 = niche。出口: x9。x13–x15 を壊す。
+ */
+function emitAddressAffine(stepSide, idxSide, startMaybeUnit, em) {
+	const [s, k] = SCRATCH;
+	// 64 ビット全部を使う番地か。字面が 2^63 未満なら符号ありで読んでも同じ値である。
+	const wide = (side) => {
+		if (!side || side.atomType !== "Address") return false;
+		const v = literalValue(unwrap(side));
+		return !(v !== null && v !== NICHE_VALUE && v < NICHE_VALUE);
+	};
+	em.emit(`mul x13, ${k}, x11`, "n × step の下の語");
+	if (!wide(stepSide) && !wide(idxSide)) {
+		em.emit(`smulh x14, ${k}, x11`, "上の語（符号ありで見た）");
+	} else {
+		em.emit(`umulh x14, ${k}, x11`, "上の語（符号なしで見た）");
+		for (const [side, reg, other] of [[stepSide, k, "x11"], [idxSide, "x11", k]]) {
+			if (wide(side) || (side && !mayBeNegative(side, em))) continue;
+			em.emit(`asr x15, ${reg}, #63`, "負なら全部のビット");
+			em.emit(`and x15, x15, ${other}`, "負なら相手、そうでなければ 0");
+			em.emit("sub x14, x14, x15", "符号ありで見た上の語");
+		}
+	}
+	const sum = startMaybeUnit ? "x13" : s;
+	em.emit(`adds ${sum}, ${s}, x13`, "start + n × step（旗を立てる）");
+	em.emit("adcs x14, x14, xzr", "上の語");
+	em.emit(`csel ${sum}, x12, ${sum}, ne`, "上の語が 0 でなければ番地の外——__");
+	if (startMaybeUnit) {
+		em.emit(`cmp ${s}, x12`, "起点が __ か");
+		em.emit(`csel ${s}, x12, x13, eq`, "起点が __ なら __（番地の算術は吸収する）");
+	}
+}
+
+/**
  * **番地の加減算は、溢れたら `__` へ落とす**（integer_overflow.md §1.1）。
  *
  * 見るのは「数学の値が 0 以上 2^64 未満か」である。両辺をそれぞれの符号で1語伸ばし、上の語を
@@ -2564,7 +2610,9 @@ function genExpr(node, env, em, scope, tail = false) {
 			em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`);
 			em.emit("mov x11, #1");
 			em.emit("movn x12, #0", "−1");
-			em.emit("csel x11, x11, x12, le", "昇順なら +1、降順なら −1");
+			// 番地の端点は符号なしで並べる（`0x7FFF…F0 ~ 0x8000…10` は昇順である）。
+			const ascend = elementTypeOfNode(n, env) === "Address" ? "ls" : "le";
+			em.emit(`csel x11, x11, x12, ${ascend}`, "昇順なら +1、降順なら −1");
 			em.store("x11", (base + 1) * 8, "歩幅（向きを持つ）");
 		}
 		return want;
@@ -4016,6 +4064,24 @@ function isRuleNode(node, conf, env) {
 	const p = node ? passingOf(node, { target: conf.target, charset: conf.charset, env }) : null;
 	return !!p && p.mode === "register" && p.slots >= 2;
 }
+
+/**
+ * **その規則は番地を並べるか。** 並べるなら、歩幅の節点（分かれば）と、起点が `__` になりうるかを
+ * 返す。そうでなければ null。
+ *
+ * 要素の型は規則の節点が持つ（`elementType`）。添字の側（`typed`）は引いた結果の型も見られるので
+ * それで決める。起点が字面の規則なら起点の節点を訊き、名前などで運ばれてきた規則は起点が
+ * `__` でありうる（切った規則の起点は溢れていれば `__`）。
+ */
+function addressRuleOf(node, env, scope, typed = false) {
+	const u = unwrap(node);
+	if (!typed && elementTypeOfNode(node, env) !== "Address") return null;
+	const parts = u && u.type === "operation" && (u.name === "range" || u.name === "range_arithmetic") ? rangeParts(u) : null;
+	return {
+		step: parts && !parts.signedByEnds ? parts.step : null,
+		startMaybeUnit: !(parts && cannotBeUnit(parts.start, env, scope, true)),
+	};
+}
 // カーソルかどうか。「どう置かれているか」の帳簿を見る（`repr`）。
 function cursorGroupOf(node, env) {
 	if (!node) return null;
@@ -5314,7 +5380,12 @@ function genIndex(node, env, em, scope) {
 		em.load(SCRATCH[0], co0, "start");
 		em.load(SCRATCH[1], co0 + 8, "step");
 		em.load("x11", io0, "起点");
-		em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + i × step（ずらすだけ）");
+		// 番地の規則なら、ずらした起点も番地の算術である（`emitAddressAffine`）。
+		const rule0 = addressRuleOf(node.left, env, scope);
+		if (rule0) {
+			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
+			emitAddressAffine(rule0.step, idx.left, rule0.startMaybeUnit, em);
+		} else em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + i × step（ずらすだけ）");
 		em.pop(1);
 		em.store(SCRATCH[0], co0, "切った先の start");
 		return cw;
@@ -5353,7 +5424,11 @@ function genIndex(node, env, em, scope) {
 		em.load(SCRATCH[0], co, "start");
 		em.load(SCRATCH[1], co + 8, "step");
 		em.load("x11", io2, "添字");
-		em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + n × step（ロードではない）");
+		const rule2 = node.atomType === "Address" ? addressRuleOf(node.left, env, scope, true) : null;
+		if (rule2) {
+			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
+			emitAddressAffine(rule2.step, node.right, rule2.startMaybeUnit, em);
+		} else em.emit(`madd ${SCRATCH[0]}, ${SCRATCH[1]}, x11, ${SCRATCH[0]}`, "start + n × step（ロードではない）");
 		if (cw >= 3) {
 			// 終端があるなら範囲を見る。**向きは歩幅の符号が持つ**——端点の並びを読み直す
 			// のではない。切った規則（`[0 ~ 3] ' 5~`）は起点が終端を越えているので、
@@ -5361,8 +5436,9 @@ function genIndex(node, env, em, scope) {
 			em.load("x13", co + 16, "end");
 			em.load("x14", co + 8, "step");
 			em.emit(`cmp ${SCRATCH[0]}, x13`);
-			em.emit("cset x15, gt", "昇順なら end を越えたら外");
-			em.emit("cset x11, lt", "降順なら end を下回ったら外");
+			// 番地は符号なしで比べる——上半分の番地を負と読むと、範囲の内と外が入れ替わる。
+			em.emit(`cset x15, ${rule2 ? "hi" : "gt"}`, "昇順なら end を越えたら外");
+			em.emit(`cset x11, ${rule2 ? "lo" : "lt"}`, "降順なら end を下回ったら外");
 			em.emit("cmp x14, #0");
 			em.emit("csel x15, x15, x11, ge", "歩幅の符号で選ぶ");
 			em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");

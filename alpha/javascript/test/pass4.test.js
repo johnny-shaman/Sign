@@ -1240,6 +1240,17 @@ f 1`, "f") || [];
 	const bigLit = body("0x10000000000000010", "_sign_main") || [];
 	checkTrue("2^64 を超える番地の字面は niche を置く", bigLit.includes("movz x9, #0x8000, lsl #48") && !bigLit.some((l) => /#0x10\b|#16\b/.test(l)), bigLit.join(" / "));
 
+	// 番地の規則の n 番目は番地の算術：`madd` 1命令ではなく、128 ビットの積の上の語を見る
+	const rulePn = body("f : p k i ? [p ~+ k] ' i\nf 0x1000 8 3", "f") || [];
+	checkTrue("番地の規則の n 番目は mul・smulh・adds・adcs・csel …, ne の並び", seq(rulePn, ["mul x13, x10, x11", "smulh x14, x10, x11", "adds x9, x9, x13", "adcs x14, x14, xzr", "csel x9, x12, x9, ne"]), rulePn.join(" / "));
+	const ruleIn = body("f : a k i ? [a ~+ k] ' i\nf 1 8 3", "f") || [];
+	checkTrue("Int の規則の n 番目は madd 1命令で、溢れを見ない", ruleIn.includes("madd x9, x10, x11, x9") && !ruleIn.some((l) => /^(smulh|adcs) /.test(l)), ruleIn.join(" / "));
+	// 番地の端点は符号なしで並べ、符号なしで終端と比べる
+	const rangeP = body("f : p e i ? [p ~ e] ' i\nf 0x1000 0x1040 1", "f") || [];
+	checkTrue("番地の範囲は ls で向きを決め、hi・lo で終端と比べる", rangeP.includes("csel x11, x11, x12, ls") && rangeP.includes("cset x15, hi") && rangeP.includes("cset x11, lo"), rangeP.join(" / "));
+	const rangeI = body("f : a e i ? [a ~ e] ' i\nf 1 5 1", "f") || [];
+	checkTrue("Int の範囲は le で向きを決め、gt・lt で終端と比べる", rangeI.includes("csel x11, x11, x12, le") && rangeI.includes("cset x15, gt") && rangeI.includes("cset x11, lt"), rangeI.join(" / "));
+
 	// **溢れうる番地は `__` になりうる。** 門を通った仮引数どうしの和でも、続く演算は左辺の
 	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。見た後は
 	// `__` を吸収する（下の節）ので、選ぶ先は右辺ではなく niche である。

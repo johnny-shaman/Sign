@@ -1353,7 +1353,7 @@ const RANGE_ARITHMETIC_NAMES = new Set([
 function rangeStepFn(op, step) {
   switch (op) {
     case "~-":
-      return (v) => v - step;
+      return (v) => addIntegers(v, -step);
     case "~*":
       return (v) => v * step;
     case "~/":
@@ -1361,8 +1361,28 @@ function rangeStepFn(op, step) {
     case "~^":
       return (v) => Math.pow(v, step);
     default:
-      return (v) => v + step; // "~+" またはstep省略の単純形式
+      return (v) => addIntegers(v, step); // "~+" またはstep省略の単純形式
   }
+}
+
+// 規則を進める足し算。**端点は倍精度に載るとは限らない**——上半分の番地（2^53 以上）は BigInt で
+// 来るので、混ざったら整数で足す。以前は端点が BigInt なだけで範囲ごと `__` になり、機械が正しい
+// 番地を返す所で解釈器だけが割れていた。
+function addIntegers(a, b) {
+  if (typeof a === "number" && typeof b === "number") {
+    const v = a + b;
+    if (Number.isSafeInteger(v) || !Number.isInteger(a) || !Number.isInteger(b)) return v;
+  }
+  const x = toBig(a);
+  const y = toBig(b);
+  return x === null || y === null ? NaN : fromBig(x + y);
+}
+
+// 規則の歩幅が一次なら（`~+` `~-` と歩幅を書かない形）、その歩幅。そうでなければ null。
+function affineStepOf(op, step) {
+  if (op === "~+") return step;
+  if (op === "~-") return -step;
+  return null;
 }
 
 // 範囲の端点になれる値かを判定する。「点」であるのは数値と1文字だけで、それ以外
@@ -1376,7 +1396,7 @@ function rangeStepFn(op, step) {
 // `"abc"` → `"abc1"` → `"abc11"` と値を伸ばし続け、100万回のガードに当たるまで
 // 走っていた（無限ループではないが実用上はハング）。
 function isRangePoint(v, allowChar) {
-  if (typeof v === "number") return true;
+  if (typeof v === "number" || typeof v === "bigint") return true;
   return allowChar && typeof v === "string" && [...v].length === 1;
 }
 
@@ -1480,17 +1500,23 @@ function isInfiniteIterator(v) {
 
 // n 番目の要素を取り出す。**無限でも引ける**——これがループカウンタを成立させる。
 function iteratorAt(it, n) {
-  if (!Number.isInteger(n) || n < 0) return UNIT;
+  if (typeof n === "bigint") n = fromBig(n);
+  if (typeof n === "bigint" ? n < 0n : !Number.isInteger(n) || n < 0) return UNIT;
   // 規則が一次なら、`i` 回進めるのは掛け算1回である——`start + i × step`。
   // type_system.md §2 のアクセス表が `Iterator(T)` の欄に書いているのがこれで、
   // Pass 4 が出すのもロードではなくこの算術になる。
-  if (typeof it.affineStep === "number" && typeof it.start === "number") {
-    const v = it.start + n * it.affineStep;
+  const isInt = (x) => typeof x === "bigint" || (typeof x === "number" && Number.isInteger(x));
+  if (isInt(it.affineStep) && isInt(it.start)) {
+    // 倍精度に正確に載らなければ整数で計算する——番地の規則の溢れは 2^64 の境で見るので、
+    // 丸まった値では境のどちら側か分からない。
+    let v = typeof n === "number" && typeof it.start === "number" && typeof it.affineStep === "number" ? it.start + n * it.affineStep : NaN;
+    if (!Number.isSafeInteger(v)) v = fromBig(toBig(it.start) + toBig(n) * toBig(it.affineStep));
     // 器の上なら `v` は位置なのでそこを読む。規則の上なら `v` そのものが要素である。
     const pick = (x) => (it.source ? (x in it.source ? it.source[x] : UNIT) : x);
     if (isInfiniteIterator(it)) return pick(v);
     return iteratorOutOfRange(it, v) ? UNIT : pick(v);
   }
+  if (typeof n === "bigint") return UNIT; // 一次でない規則を 2^53 回以上は進められない
   let v = it.start;
   for (let i = 0; i < n; i++) {
     v = it.stepFn(v);
@@ -1507,9 +1533,18 @@ function iteratorAt(it, n) {
 function iteratorCount(it) {
   if (isInfiniteIterator(it)) return UNIT;
   const { start, end, affineStep } = it;
-  if (typeof affineStep === "number" && affineStep !== 0) {
+  if (typeof affineStep === "number" && affineStep !== 0 && typeof start === "number" && typeof end === "number") {
     const n = Math.floor((end - start) / affineStep) + 1;
     return n > 0 ? n : 0;
+  }
+  if (toBig(affineStep) !== null && toBig(affineStep) !== 0n && toBig(start) !== null && toBig(end) !== null) {
+    // 端点が倍精度に載らない規則。0 方向へ落とす BigInt の商を、床へ直してから数える。
+    const d = toBig(end) - toBig(start);
+    const k = toBig(affineStep);
+    let q = d / k;
+    if ((d % k !== 0n) && ((d < 0n) !== (k < 0n))) q -= 1n;
+    const c = q + 1n;
+    return c > 0n ? fromBig(c) : 0;
   }
   let v = start;
   let n = 0;
@@ -1921,7 +1956,7 @@ function getPropByValue(l, r) {
   if (isIterator(l)) {
     // 左辺がイテレータなら、位置ごとに規則を適用すれば済む——**左辺は展開しない**。
     // 無限ストリームからの部分列取得もこれで通る。
-    if (typeof r === "number") return iteratorAt(l, r);
+    if (typeof r === "number" || typeof r === "bigint") return iteratorAt(l, r);
     if (Array.isArray(r)) return collapseSlice(r.map((i) => iteratorAt(l, i)));
     return UNIT;
   }
@@ -2454,7 +2489,7 @@ function evaluate(node, env) {
       const itStep = evaluate(node.right, env);
       if (isUnit(itStep)) return UNIT;
       if (!isRangePoint(itStart, false) || !isRangePoint(itStep, false)) return UNIT;
-      return makeIterator(itStart, rangeStepFn(node.op, itStep), null);
+      return makeIterator(itStart, rangeStepFn(node.op, itStep), null, affineStepOf(node.op, itStep));
     }
     switch (node.name) {
       case "define": {
@@ -2612,7 +2647,7 @@ function evaluate(node, env) {
         if (isStepForm) {
           const op = node.left.op;
           // 等差だけ歩幅を残す——規則が一次なら `|.|` が割り算1回で答えられる。
-          const affine = op === "+" ? step : op === "-" ? -step : null;
+          const affine = affineStepOf(op, step);
           return makeIterator(start, rangeStepFn(op, step), end, affine);
         }
         // 文字の範囲だけは String になる（String ≅ List(0u)）。文字列は Sign では
@@ -2620,7 +2655,7 @@ function evaluate(node, env) {
         const charRange = buildCharRange(start, end);
         if (charRange !== null) return charRange;
         const delta = start <= end ? 1 : -1;
-        return makeIterator(start, (v) => v + delta, end, delta);
+        return makeIterator(start, (v) => addIntegers(v, delta), end, delta);
       }
       // 2項形式（`[start ~op step]`、5種いずれも）のケースはここには無い。
       // 名前の一覧は `RANGE_ARITHMETIC_NAMES` が既に持っており、switch の手前で
@@ -2669,8 +2704,14 @@ function evaluate(node, env) {
         //
 return items.filter((v) => !isUnit(v));
       }
-      case "get_prop":
-        return getPropValue(evaluate(node.left, env), node.right, env);
+      case "get_prop": {
+        const l = evaluate(node.left, env);
+        const v = getPropValue(l, node.right, env);
+        // **規則の n 番目は算術である**（`iteratorAt`）ので、要素の型の溢れ方が当たる——番地の規則なら
+        // 0 以上 2^64 未満、`Int` の規則なら回る。器の上を走る並び（`source`）は読むだけなので当てない。
+        // 機械は `start + n × step` を同じ規則で出す（pass4 の `emitAddressAffine`）。
+        return isIterator(l) && !l.source ? applyOverflowRule(node.atomType, v) : v;
+      }
       case "address":
         // 前置$。node.operandはまだ評価せず、その構文形（識別子/get_prop/その他）に
         // 応じてevalAddressが参照セルを組み立てる（evalUnaryOpの「先に評価済みの値を
