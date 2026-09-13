@@ -1220,6 +1220,26 @@ f 1`, "f") || [];
 	const subII = body("f : a b ? a - b\nf 1 2", "f") || [];
 	checkTrue("Int - Int は sub 1命令で、溢れを見ない", subII.includes("sub x9, x9, x10") && noCheck(subII), subII.join(" / "));
 
+	// 番地の乗算：上の語は `umulh`。符号ありの辺があれば、上の語から相手を引いてから見る
+	const mulPP = body("f : p q ? p * q\nf 0x1000 0x10", "f") || [];
+	checkTrue("Address * Address は umulh・mul・cmp・csel …, ne の並び", seq(mulPP, ["umulh x13, x9, x10", "mul x9, x9, x10", "cmp x13, #0", "csel x9, x12, x9, ne"]), mulPP.join(" / "));
+	const mulPn = body("f : p n ? p * n\nf 0x1000 3", "f") || [];
+	checkTrue("Address * Int は umulh・asr・and・subs・mul・csel …, ne の並び", seq(mulPn, ["umulh x13, x9, x10", "asr x14, x10, #63", "and x14, x14, x9", "subs x13, x13, x14", "mul x9, x9, x10", "csel x9, x12, x9, ne"]), mulPn.join(" / "));
+	const mulII = body("f : a b ? a * b\nf 1 2", "f") || [];
+	checkTrue("Int * Int は mul 1命令で、溢れを見ない", mulII.includes("mul x9, x9, x10") && !mulII.some((l) => /^(umulh|csel|asr) /.test(l)), mulII.join(" / "));
+
+	// 番地の除算：負になりうる数で割るときだけ、商が 0 かを見る
+	const divPn = body("f : p n ? p / n\nf 0x1000 4", "f") || [];
+	checkTrue("Address / Int は cmp・cneg・udiv・ccmp・csel …, ne の並び", seq(divPn, ["cmp x10, #0", "cneg x13, x10, lt", "udiv x9, x9, x13", "ccmp x9, #0, #4, lt", "csel x9, x12, x9, ne"]), divPn.join(" / "));
+	const divPP = body("f : p q ? p / q\nf 0x1000 0x10", "f") || [];
+	checkTrue("Address / Address は udiv 1命令（商は被除数を超えない）", divPP.includes("udiv x9, x9, x10") && !divPP.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPP.join(" / "));
+	const divPk = body("f : p ? p / 4\nf 0x1000", "f") || [];
+	checkTrue("Address / 非負のリテラル は udiv 1命令", divPk.includes("udiv x9, x9, x10") && !divPk.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPk.join(" / "));
+
+	// 2^64 を超える番地の字面は存在しない番地なので、niche を置く（下の 64 ビットを置かない）
+	const bigLit = body("0x10000000000000010", "_sign_main") || [];
+	checkTrue("2^64 を超える番地の字面は niche を置く", bigLit.includes("movz x9, #0x8000, lsl #48") && !bigLit.some((l) => /#0x10\b|#16\b/.test(l)), bigLit.join(" / "));
+
 	// **溢れうる番地は `__` になりうる。** 門を通った仮引数どうしの和でも、続く演算は左辺の
 	// `__` を見なければならない——見ないと niche を番地として足し、検査が無駄になる。見た後は
 	// `__` を吸収する（下の節）ので、選ぶ先は右辺ではなく niche である。

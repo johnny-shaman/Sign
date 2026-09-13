@@ -1310,8 +1310,12 @@ function evalArith(node, env) {
   // `Float` が絡む位置での四捨五入（`list ' 1.5`、`@1.5`）は §4.1 の別規則であり、
   // `roundHalfAwayFromZero` はそちらが使い続ける。丸めが「起きた」という診断も
   // 要らなくなった——起きないので。
+  //
+  // **落とした丈にも溢れの規則を当てる。** ここで返していたので、端数の出る除算だけが型の規則を
+  // 通らなかった——`0x1003 / -4` は丈 -1024 のまま番地として出ていた（割り切れる `0x1000 / -4`
+  // は `__`）。負の丈は番地ではない。
   if (typeof value === "number" && (node.atomType === "Int" || node.atomType === "Address") && !Number.isInteger(value)) {
-    return Math.trunc(value);
+    return applyOverflowRule(node.atomType, Math.trunc(value));
   }
   // **溢れ方は型が決める**（integer_overflow.md §1）。`Int` はラップアラウンド、`Address` は
   // `__` へ収束する——不正アドレスの伝播を止めるためである。JS の数値は f64 しか無いので、
