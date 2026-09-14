@@ -980,25 +980,27 @@ function emitDestructure(em, containerOff, headOffs, elemSize, signed, name) {
 	em.load(SCRATCH[0], containerOff, `${name} の先頭を取り出す`);
 	em.load("x11", containerOff + 8, "器の長さ");
 	// 要素の幅ぶんだけ読む。符号ありで 8 byte 未満なら符号拡張が要る。
-	const mnemonic =
-		elemSize === 8 ? `ldr ${SCRATCH[1]}, [${SCRATCH[0]}]`
-		: elemSize === 4 ? `ldr${signed ? "sw " + SCRATCH[1] : " w10"}, [${SCRATCH[0]}]`
-		: elemSize === 2 ? `ldr${signed ? "sh " + SCRATCH[1] : "h w10"}, [${SCRATCH[0]}]`
-		: `ldr${signed ? "sb " + SCRATCH[1] : "b w10"}, [${SCRATCH[0]}]`;
+	const mnemonic = (base) =>
+		elemSize === 8 ? `ldr ${SCRATCH[1]}, [${base}]`
+		: elemSize === 4 ? `ldr${signed ? "sw " + SCRATCH[1] : " w10"}, [${base}]`
+		: elemSize === 2 ? `ldr${signed ? "sh " + SCRATCH[1] : "h w10"}, [${base}]`
+		: `ldr${signed ? "sb " + SCRATCH[1] : "b w10"}, [${base}]`;
 	// **器より多くの頭は取れない。** 足りないスロットは `__` であって、器の外に在った値
 	// ではない。検査が無かったので `f : [a b c ~d] ? c` に `[7 8]` を渡すと `0` が、
 	// `d ' 0` に至っては RAM の番地がそのまま返っていた。
 	//
-	// 読んでから選ぶ。切り出し（`' i~`）の側が既にこの綴りなので合わせる——**同じ事実を
-	// 2通りに書かない**。範囲外を読むこと自体は、頭の数は静的に決まっていて器は少なくとも
-	// 1要素あるので（下の門番の話）、高々数要素ぶんの先読みにしかならない。
+	// **器の外は読まない**（`emitSafeReadAddress`）。以前は「高々数要素ぶんの先読みにしかならない」として
+	// 読んでから選んでいたが、layer 0 では器のすぐ後ろが MMIO のレジスタでありうる。
 	if (offs.length > 1) em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");
 	offs.forEach((headOff, i) => {
-		em.emit(mnemonic, `${elemSize} byte の要素1つ（${i + 1} 個目）`);
 		// **1個目は検査が要らない。** 入口の門番が `len = 0`（＝`__`）を弾いているので、
 		// ここへ来た時点で器は少なくとも1要素ある——門番が証明したことを本体で払い直さない。
-		if (i > 0) {
+		if (i === 0) {
+			em.emit(mnemonic(SCRATCH[0]), `${elemSize} byte の要素1つ（${i + 1} 個目）`);
+		} else {
 			em.emit(`cmp x11, #${i}`, `${i + 1} 個目は器の中か`);
+			emitSafeReadAddress(em, "x13", SCRATCH[0], "hi", "x14");
+			em.emit(mnemonic("x13"), `${elemSize} byte の要素1つ（${i + 1} 個目）`);
 			em.emit(`csel ${SCRATCH[1]}, ${SCRATCH[1]}, x12, hi`, "器の外なら __");
 		}
 		em.store(SCRATCH[1], headOff, offs.length === 1 ? "先頭" : `先頭から ${i + 1} 個目`);
@@ -5446,7 +5448,7 @@ function genIndex(node, env, em, scope) {
 		em.load(SCRATCH[0], co2 + 8, "len");
 		em.emit(`cmp ${SCRATCH[1]}, ${SCRATCH[0]}`, "範囲内か");
 		em.load(SCRATCH[0], co2, "ptr");
-		em.emit(loadElem("w14", SCRATCH[0], SCRATCH[1], em1.size), `${em1.size} byte の要素`);
+		emitGuardedElementLoad(em, "x14", SCRATCH[0], SCRATCH[1], em1.size);
 		em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");
 		em.emit(`csel ${SCRATCH[0]}, x14, x12, lo`);
 		em.pop(cw);
@@ -5746,6 +5748,7 @@ function genIndex(node, env, em, scope) {
 		em.emit(`cmp ${SCRATCH[1]}, x11`, "範囲内か");
 		em.load(SCRATCH[0], co, "ptr");
 		em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}, lsl #4`, "16 byte × 添字");
+		emitSafeReadAddress(em, SCRATCH[0], SCRATCH[0], "lo");
 		em.emit(`ldr x14, [${SCRATCH[0]}]`, "要素の ptr");
 		em.emit(`ldr x15, [${SCRATCH[0]}, #8]`, "その len");
 		em.emit("mov x12, #0", "範囲外は len = 0（器の __）");
@@ -5759,14 +5762,19 @@ function genIndex(node, env, em, scope) {
 		return 2;
 	}
 
-	// 要素1つ。範囲外は `__`（niche）。
+	// 要素1つ。範囲外は `__`（niche）で、器の外は読まない（`emitGuardedElementLoad`）。
 	em.load(SCRATCH[1], io, "添字");
 	em.load(SCRATCH[0], co + 8, "len");
 	em.emit(`cmp ${SCRATCH[1]}, ${SCRATCH[0]}`, "範囲内か");
 	em.load(SCRATCH[0], co, "ptr");
-	em.emit(loadElem("w14", SCRATCH[0], SCRATCH[1], w), `${w} byte の要素`);
-	em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");
-	em.emit(`csel ${SCRATCH[0]}, x14, x12, lo`);
+	emitGuardedElementLoad(em, "x14", SCRATCH[0], SCRATCH[1], w);
+	if (w === 8) {
+		// 8 byte なら置き場から読んだ値がそのまま niche である。
+		em.emit(`mov ${SCRATCH[0]}, x14`);
+	} else {
+		em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");
+		em.emit(`csel ${SCRATCH[0]}, x14, x12, lo`);
+	}
 	// 器（cw 本）と添字（1本）を返してから、要素1本を積む。
 	em.pop(cw + 1);
 	const off = em.push();
@@ -6513,6 +6521,34 @@ function emitImm(em, reg, value, comment) {
 	em.emit(`movz ${reg}, #0x${c0.toString(16)}${lsl(s0)}`, comment);
 	for (const [s, c] of zeros.slice(1)) em.emit(`movk ${reg}, #0x${c.toString(16)}${lsl(s)}`);
 }
+/**
+ * **範囲外の添字では、器の外を読まない**（2026-09-15）。
+ *
+ * 以前の範囲検査は「比べる → 無条件に読む → 範囲外なら値を `__` に替える」だった。値は正しくなるが、
+ * `ptr + i` は範囲外でも読まれていた——layer 0 で MMIO のレジスタに当たれば読むだけで副作用が起き、
+ * 「範囲外は記憶を読むから検査する」（integer_overflow.md §1 の物差し）という理由とも食い違う。
+ *
+ * 分岐は足さない。読む番地そのものを `csel` で選び、範囲外なら `.rodata` に置いた `__` の置き場を指させる。
+ * 置き場は `{niche, 0}` の 16 byte で、8 byte の要素なら読んだ値がそのまま `__`、参照で運ぶ要素なら
+ * ptr が niche・len が 0（器の `__`）になる。狭い幅は下の byte が 0 なので、呼ぶ側が niche に替える。
+ *
+ * 旗は呼ぶ前の比較のまま（`inCond` が範囲内）。`adrp`/`add` は旗を壊さない。`tmp` を壊す。
+ */
+function emitSafeReadAddress(em, out, addr, inCond, tmp = "x13") {
+	const cell = em.internAnonImage(["\t.quad 0x8000000000000000", "\t.quad 0"], 8);
+	em.emit(`adrp ${tmp}, ${cell}`, "範囲外なら読む先（.rodata に置いた __）");
+	em.emit(`add ${tmp}, ${tmp}, :lo12:${cell}`);
+	em.emit(`csel ${out}, ${addr}, ${tmp}, ${inCond}`, "範囲外は器の外を読まない");
+}
+
+// 添字で要素を読む。`base` を要素の番地へ進め、範囲外なら置き場へ差し替えてから読む（`emitSafeReadAddress`）。
+function emitGuardedElementLoad(em, dst, base, idx, size, inCond = "lo") {
+	const shift = size === 1 ? 0 : size === 2 ? 1 : size === 4 ? 2 : 3;
+	em.emit(`add ${base}, ${base}, ${idx}${shift ? `, lsl #${shift}` : ""}`, `${size} byte × 添字`);
+	emitSafeReadAddress(em, base, base, inCond);
+	em.emit(loadAt(dst, base, size), `${size} byte の要素`);
+}
+
 // 前置 `@` と中置 `#` そのもの（番地1つ、添字なし）。幅の欄を引くのは上の梯子と同じである。
 function loadAt(dst, base, size) {
 	const reg = memNarrow(size) ? dst.replace("x", "w") : dst;

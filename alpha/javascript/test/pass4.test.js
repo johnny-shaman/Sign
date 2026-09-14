@@ -597,7 +597,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 // 指したまま頭と長さをずらすだけである（`[h ~t]` の分解とまったく同じ機械）。
 {
 	const one = body("f : s ? s ' 0\nf `abc`", "f");
-	checkTrue("要素は位置つきで読む", one.some((l) => l === "ldrb w14, [x9, x10]"), one.join(" / "));
+	checkTrue("要素は位置つきで読む（ptr + i を範囲外なら置き場へ差し替えてから読む）", one.includes("add x9, x9, x10") && one.includes("ldrb w14, [x9]"), one.join(" / "));
 	checkTrue("範囲外は __", one.some((l) => l === "csel x9, x14, x12, lo"), one.join(" / "));
 	const rest = body("f : s ? s ' 1~\nf `abc`", "f");
 	checkTrue("部分列は ptr をずらす", rest.some((l) => l === "add x9, x9, x10"), rest.join(" / "));
@@ -983,7 +983,7 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	checkTrue("仮引数で受けても算術", has("f : c ? c ' 3\nf [0 ~+ 1]", "madd x9, x10, x11, x9"));
 	checkTrue("束縛を経ても算術", body("c : [0 ~+ 1]\nf : n ? c ' 3\nf 1", "f").includes("madd x9, x10, x11, x9"));
 	// **場所はロードのまま。** 型が同じ `List` でも、実体が違えば命令が違う。
-	checkTrue("場所はロード", has("f : s ? s ' 0\nf `abc`", "ldrb w14, [x9, x10]"));
+	checkTrue("場所はロード", has("f : s ? s ' 0\nf `abc`", "ldrb w14, [x9]"));
 	// **終端があるなら範囲を見る。向きは歩幅の符号が持つ。**
 	//
 	// `[5 ~ 1]` は 5,4,3,2,1 なので歩幅は −1 である。端点の並びから読み直すのでは足りない
@@ -1225,6 +1225,14 @@ f 1`, "f") || [];
 	checkTrue("Address * Address は niche を置き、mul も umulh も出さない", mulPP.includes("movz x9, #0x8000, lsl #48") && !mulPP.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPP.join(" / "));
 	const mulPn = body("f : p n ? p * n\nf 0x1000 3", "f") || [];
 	checkTrue("Address * Int は niche を置き、mul も umulh も出さない", mulPn.includes("movz x9, #0x8000, lsl #48") && !mulPn.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPn.join(" / "));
+	// 範囲外の添字では器の外を読まない（2026-09-15）：読む番地を csel で .rodata の __ の置き場へ差し替えてから読む。
+	// 以前は「比べる → 無条件に ptr + i を読む → 値を __ に替える」で、範囲外でも器の外を読んでいた。
+	const idxRead = body("f : l i ? l ' i\nf [10 20 30] 1", "f") || [];
+	const guardAt = idxRead.findIndex((l) => /^csel x9, x9, x13, lo$/.test(l));
+	const loadAtIdx = idxRead.findIndex((l) => /^ldr x14, \[x9\]$/.test(l));
+	checkTrue("添字の読みは、番地を置き場へ差し替えた後に [x9] から読む", guardAt >= 0 && loadAtIdx > guardAt && !idxRead.some((l) => /^ldr \w+, \[x9, x10/.test(l)), idxRead.join(" / "));
+	const headRead = body("f : [a b c ~d] ? c\nf [7 8 9]", "f") || [];
+	checkTrue("分解の2個目以降も、置き場へ差し替えた番地（x13）から読む", headRead.some((l) => /^csel x13, x9, x14, hi$/.test(l)) && headRead.some((l) => /^ldr x10, \[x13\]$/.test(l)), headRead.join(" / "));
 	// 番地と数は数学の値で比べる：数が負になり得るなら ccmp で繋ぎ、負になり得なければ符号なしで比べる（2026-09-15）
 	const cmpPn = body("f : p n ? p < n\nf 0x10 -1", "f") || [];
 	checkTrue("Address < Int は cmp・ccmp …, lo・csel …, ge の並び", seq(cmpPn, ["cmp x9, x10", "ccmp x10, #0, #8, lo"]) && cmpPn.some((l) => /^csel .*, ge$/.test(l)), cmpPn.join(" / "));
