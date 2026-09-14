@@ -1007,7 +1007,7 @@ function passingOf(node, conf) {
 }
 
 /**
- * **番地の域に射の無い演算か**（type_system.md §3.6、利用者の決定 2026-09-14）。左辺が番地の `*`・`^` と、
+ * **番地の域に射の無い演算か**（type_system.md §3.6、利用者の決定 2026-09-14・15）。左辺が番地の `*`・`^`・`<<` と、
  * 番地の後置 `!`（階乗）。型の段（pass3）はこれを `Unit` と型付けし、解釈器と機械はその型に従って `__` を返す
  * ——射が無いので零射を通る（原理4、`` `abc` + 1 `` と同じ）。
  *
@@ -1024,7 +1024,9 @@ function passingOf(node, conf) {
 const ADDRESS_PARTNERS = new Set(["Int", "Address", "Char", "Raw", "Unit"]);
 function addressWithoutArrow(name, leftType, rightType) {
   if (name === "factorial") return leftType === "Address";
-  if (name !== "mul" && name !== "pow") return false;
+  // **左シフトは `p * 2^k` そのもの**なので同じく射が無い（利用者の決定 2026-09-15）。右シフトは `p / 2^k`
+  // （枠の番号）なので射がある。
+  if (name !== "mul" && name !== "pow" && name !== "bit_shift_left") return false;
   const domain = leftType === "Unit" || leftType === "Raw" ? rightType : leftType;
   return domain === "Address" && ADDRESS_PARTNERS.has(rightType);
 }

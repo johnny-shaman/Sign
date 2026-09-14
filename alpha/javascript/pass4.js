@@ -203,11 +203,12 @@ function addressCheckOf(mn, n, em) {
 /**
  * **番地の域では、0 以下の数で割ると `__` へ落とす**（利用者の決定、2026-09-14）。
  *
- * 商は `udiv` そのままで、割る数を見て `csel` で niche を選ぶ——2命令。割る数が `Int` なら符号ありで
- * 0 以下（`le`）、番地なら 0（`eq`）を見る。`udiv` は負の数を大きな符号なしの数と読むので商は 0 に
- * なり、0 で割っても 0 を返す。どちらも黙って 0 番地を出す形であり、0 番地は layer 0 では読める記憶で
- * ある（integer_overflow.md §1 の物差し）。以前は負の数で割ったときだけ絶対値で割ってから商が 0 かを
- * 見ていた（`cneg`・`ccmp` の5命令）が、枠の番号として負の数に意味は無いので、まとめて `__` にする。
+ * 商は `udiv` そのままで、割る数を見て `csel` で niche を選ぶ——`udiv` の後に2命令。割る数が `Int` なら
+ * 符号ありで 0 以下（`le`）、番地なら 0（`eq`）を見る。`udiv` は負の数 `-n` を 2^64 − n と読むので商は
+ * 0 か 1（被除数が 2^64 − n 以上のときだけ 1）になり、0 で割れば 0 を返す。どれも意味の無い小さな番地を
+ * 黙って出す形であり、0 番地は layer 0 では読める記憶である（integer_overflow.md §1 の物差し）。以前は
+ * 負の数で割ったときだけ絶対値で割ってから商が 0 かを見ていた（`cneg`・`ccmp` を含む形）が、枠の番号として
+ * 負の数に意味は無いので、まとめて `__` にする。
  *
  * 呼ぶ側が `x12` に niche を置いておくこと。割る数のレジスタは `udiv` で書き換わらない。
  */
@@ -301,6 +302,37 @@ function emitAddressCarry(n, carry, dst, em) {
 	}
 	em.emit(`${carry.carryIn} x13, ${hL}, ${hR}`, "上の語");
 	em.emit(`csel ${dst}, x12, ${dst}, ne`, "上の語が 0 でなければ溢れた——__");
+}
+
+/**
+ * **番地と数の比較は、数学の値で比べる**（利用者の決定 2026-09-15）。番地は 0 以上 2^64 未満、`Int` は符号ありなので、
+ * 番地は負の数より常に大きい。以前は片方が符号ありなら符号ありで比べていて（`unsignedCompare`）、上半分の番地を
+ * 負の数と読んでいた——`0xFFFF800000000000 > -1` が解釈器では真、機械では偽。
+ *
+ * 数が負になり得なければ、符号なしで比べれば数学どおりである。負になり得るなら、符号なしの比較に「数が負なら
+ * 答えは決まっている」を `ccmp` 1命令で繋ぐ。負だと真になる向き（番地が左の `>` `>=` `!=`、数が左の `<` `<=` `!=`）
+ * は「符号なしで真 または 数が負」、それ以外は「符号なしで真 かつ 数が 0 以上」である。`ccmp` が比べないときに置く
+ * 旗 `#8`（N だけ立つ）は `lt` を真、`ge` を偽にする。
+ *
+ * 呼ぶ直前に `cmp x9, x10` を出しておくこと。番地と `Int` の組でなければ null（呼ぶ側の規則で出す）。
+ */
+const INVERSE_UNSIGNED_COND = { lo: "hs", hs: "lo", ls: "hi", hi: "ls", eq: "ne", ne: "eq" };
+function emitAddressIntCondition(n, em) {
+	const lt = n.left && n.left.atomType;
+	const rt = n.right && n.right.atomType;
+	const intLeft = lt === "Int" && rt === "Address";
+	if (!intLeft && !(lt === "Address" && rt === "Int")) return null;
+	const cu = asmOf(n.name).gpr.unsigned;
+	if (!INVERSE_UNSIGNED_COND[cu]) return null;
+	if (!mayBeNegative(intLeft ? n.left : n.right, em)) return cu;
+	const negTrue = intLeft ? ["less", "less_equal", "not_equal"].includes(n.name) : ["more", "more_equal", "not_equal"].includes(n.name);
+	const reg = intLeft ? SCRATCH[0] : SCRATCH[1];
+	if (negTrue) {
+		em.emit(`ccmp ${reg}, #0, #8, ${INVERSE_UNSIGNED_COND[cu]}`, "符号なしで偽なら、数が負か（番地は負の数より大きい）");
+		return "lt";
+	}
+	em.emit(`ccmp ${reg}, #0, #8, ${cu}`, "符号なしで真なら、数が 0 以上か");
+	return "ge";
 }
 
 // その比較を符号なしで出すか。オペランドの型が決める（結果の型ではない——結果は真偽である）。
@@ -1552,7 +1584,7 @@ function genExpr(node, env, em, scope, tail = false) {
 	// pass3 はこれを `Unit` と型付けする。射が無いので零射を通る（原理4）——`__` を置くだけで、命令表の
 	// どの形も要らない。辺は評価してから捨てる（解釈器と同じく両辺を評価する道）。層の門より前に置くのは、
 	// 結果が `__` なので番地を捏造する道にも、置き場所を漏らす道にもならないからである。
-	if (n.type === "operation" && n.atomType === "Unit" && (n.name === "mul" || n.name === "pow" || n.name === "factorial")) {
+	if (n.type === "operation" && n.atomType === "Unit" && (n.name === "mul" || n.name === "pow" || n.name === "bit_shift_left" || n.name === "factorial")) {
 		const operands = n.name === "factorial" ? [n.operand] : [n.left, n.right];
 		if (addressWithoutArrow(n.name, operands[0] && operands[0].atomType, operands[1] && operands[1].atomType)) {
 			const why = "番地の域に射の無い演算の辺";
@@ -1850,7 +1882,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		// `movz` 1命令で作れる（0x8000 << 48）。
 		em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 		em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
-		const cond = asmOf(n.name).gpr[unsignedCompare(n, em.conf, env) ? "unsigned" : "signed"];
+		const cond = emitAddressIntCondition(n, em) || asmOf(n.name).gpr[unsignedCompare(n, em.conf, env) ? "unsigned" : "signed"];
 		em.emit(`csel ${SCRATCH[0]}, ${eqOnly ? SCRATCH[0] : "x11"}, x12, ${cond}`, "真なら値、偽なら __");
 		em.pop(1);
 		em.store(SCRATCH[0], lo);

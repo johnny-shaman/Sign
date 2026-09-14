@@ -1225,6 +1225,11 @@ f 1`, "f") || [];
 	checkTrue("Address * Address は niche を置き、mul も umulh も出さない", mulPP.includes("movz x9, #0x8000, lsl #48") && !mulPP.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPP.join(" / "));
 	const mulPn = body("f : p n ? p * n\nf 0x1000 3", "f") || [];
 	checkTrue("Address * Int は niche を置き、mul も umulh も出さない", mulPn.includes("movz x9, #0x8000, lsl #48") && !mulPn.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPn.join(" / "));
+	// 番地と数は数学の値で比べる：数が負になり得るなら ccmp で繋ぎ、負になり得なければ符号なしで比べる（2026-09-15）
+	const cmpPn = body("f : p n ? p < n\nf 0x10 -1", "f") || [];
+	checkTrue("Address < Int は cmp・ccmp …, lo・csel …, ge の並び", seq(cmpPn, ["cmp x9, x10", "ccmp x10, #0, #8, lo"]) && cmpPn.some((l) => /^csel .*, ge$/.test(l)), cmpPn.join(" / "));
+	const cmpPk = body("f : p ? p > 16\nf 0x1000", "f") || [];
+	checkTrue("Address > 正の字面は符号なし（csel …, hi、ccmp を出さない）", cmpPk.some((l) => /^csel .*, hi$/.test(l)) && !cmpPk.some((l) => l.startsWith("ccmp x10")), cmpPk.join(" / "));
 	// 左辺が数なら `Int` の域なので（左辺優先）、ふつうの掛け算のまま
 	const mulNP = body("f : n p ? n * p\nf 3 0x1000", "f") || [];
 	checkTrue("Int * Address は mul 1命令のまま", mulNP.includes("mul x9, x9, x10"), mulNP.join(" / "));

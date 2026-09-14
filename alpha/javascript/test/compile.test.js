@@ -131,6 +131,9 @@ checkReasons("base + p（base は字面を束ねた名前）→ 診断なし", "
 checkReasons("p - q → 診断なし（距離）", "f : p q ? p - q\nf 0x30 0x10", []);
 checkReasons("dst + (e - src) → 診断なし（片方が式ならずらし量）", "f : dst e src ? dst + (e - src)\nf 0x2000 0x1010 0x1000", []);
 checkReasons("[p ~* 2] → 番地の等比の規則も射が無い", "f : p i ? [p ~* 2] ' i\nf 0x10 1", ["address-without-arrow"]);
+checkReasons("p << 4 → 番地の左シフトも射が無い", "f : p ? p << 4\nf 0x10", ["address-without-arrow"]);
+checkReasons("p > -1 → 番地と負の定数の比較は答えが決まっている", "f : p ? p > -1\nf 0x10", ["address-compare-negative"]);
+checkReasons("p > n（実行時の数）→ 診断なし", "f : p n ? p > n\nf 0x10 -1", []);
 // **`0r` / `0b` は16進・2進で書けるレジスタの即値で、数である**（§3.6 の記法の表）。最初の文法から `Address` と
 // 型付けしていて、値は同じなので一致の検査では見えなかった。
 check("0r の字面は Int", lastType("0r18"), "Int");

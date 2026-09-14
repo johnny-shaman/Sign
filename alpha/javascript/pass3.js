@@ -1936,6 +1936,8 @@ function computeAtomType(node, env) {
       if (node.name === "get_prop") return getPropResultType(node, env);
       const leftType = inferAtomType(node.left, env);
       if (ARITHMETIC_OPS.has(node.name)) return arithmeticResultType(node, leftType, env);
+      // 番地の左シフトは番地の積なので射が無い（layout.js の `addressWithoutArrow`）。
+      if (node.name === "bit_shift_left" && addressWithoutArrow(node.name, leftType, inferAtomType(node.right, env))) return "Unit";
       return leftType; // 左辺が規則を選ぶ（§3.2）。比較・構造比較族は左辺の型が結果型
     }
     if (node.operand) {
@@ -3679,6 +3681,7 @@ function annotateTypes(node, env, diagnostics) {
   if (diagnostics) collectUnitReason(node, env, diagnostics);
   if (diagnostics) collectAddressFactorial(node, env, diagnostics);
   if (diagnostics) collectAddressPlusAddress(node, env, diagnostics);
+  if (diagnostics) collectAddressCompareNegative(node, env, diagnostics);
   if (diagnostics) collectExportMisuse(node, diagnostics);
   if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
   if (diagnostics) collectRemovedOperator(node, diagnostics);
@@ -3993,6 +3996,46 @@ function collectAddressPlusAddress(node, env, diagnostics) {
   });
 }
 
+const ORDER_COMPARE_NAMES = new Set(["less", "less_equal", "more", "more_equal", "assign_equal", "not_equal"]);
+
+/**
+ * **番地と負の数を比べても、答えは決まっている**（利用者の決定 2026-09-15）。番地は負の数より常に大きい。
+ * 値は数学どおりに比べる（pass4 の `emitAddressIntCondition`、解釈器は元から数学の値）ので、ここは書いた形が
+ * 負の定数のときだけ警告する。実行時の `Int` は負かどうか分からないので警告しない。
+ */
+function collectAddressCompareNegative(node, env, diagnostics) {
+  if (!node || node.type !== "operation" || node.position !== "infix" || !ORDER_COMPARE_NAMES.has(node.name)) return;
+  const lt = inferAtomType(node.left, env);
+  const rt = inferAtomType(node.right, env);
+  const intSide = lt === "Address" && rt === "Int" ? node.right : lt === "Int" && rt === "Address" ? node.left : null;
+  if (!intSide || !isNegativeConstant(intSide, env)) return;
+  diagnostics.push({
+    level: "warning",
+    reason: "address-compare-negative",
+    spec: "type_system.md §3.6",
+    message: `番地と負の数の '${node.op}' は答えが決まっています（番地は負の数より常に大きい）`,
+  });
+}
+
+// 負の十進の字面、または それを束ねた名前。
+function isNegativeConstant(node, env) {
+  const seen = new Set();
+  let n = unparen(node);
+  while (isIdentifierNode(n) && env && !seen.has(n.value)) {
+    seen.add(n.value);
+    const b = envLookup(env, n.value);
+    const next = b && (b.valueNode || b.rhsNode);
+    if (!next) return false;
+    n = unparen(next);
+  }
+  if (!n || n.type !== "atom" || n.kind !== "number" || String(n.value).includes(".")) return false;
+  try {
+    return BigInt.asIntN(64, BigInt(n.value)) < 0n;
+  } catch {
+    return false;
+  }
+}
+
 // 字面、または字面を束ねた名前（`base : 0x09000000`）。括弧と名前を辿って確かめる。
 function isFixedValue(node, env) {
   const seen = new Set();
@@ -4029,6 +4072,11 @@ function collectUnitReason(node, env, diagnostics) {
     return;
   }
 
+  if (node.name === "bit_shift_left") {
+    const lt = inferAtomType(node.left, env);
+    if (lt !== "Unit" && addressWithoutArrow(node.name, lt, inferAtomType(node.right, env))) diagnostics.push(addressWithoutArrowDiagnostic(node.op));
+    return;
+  }
   if (!ARITHMETIC_OPS.has(node.name)) return;
 
   const leftType = inferAtomType(node.left, env);

@@ -1259,6 +1259,8 @@ function evalBit(node, env) {
   // 当てておらず（算術は `arithmeticResultType` が当てる）、`__ << p` の型を左辺の `Unit` の
   // まま返す——値は `p` なのに型は `Unit` で、ここは爆発律で `p` を返す。機械はビット演算を
   // まだ出さないので、答えが割れる相手は居ない。
+  // 番地の左シフトは番地の積なので射が無い（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
+  if (node.atomType === "Unit" && addressWithoutArrow(node.name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
   if (absorbsUnit(node.atomType, l, r)) return UNIT;
   if (isUnit(l)) return r;
   if (isUnit(r)) return l;
