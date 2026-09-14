@@ -1006,6 +1006,29 @@ function passingOf(node, conf) {
   return null;
 }
 
+/**
+ * **番地の域に射の無い演算か**（type_system.md §3.6、利用者の決定 2026-09-14）。左辺が番地の `*`・`^` と、
+ * 番地の後置 `!`（階乗）。型の段（pass3）はこれを `Unit` と型付けし、解釈器と機械はその型に従って `__` を返す
+ * ——射が無いので零射を通る（原理4、`` `abc` + 1 `` と同じ）。
+ *
+ * 番地の域で意味を持つのは、ずらす（`p ± n`）・距離（`p - q`）・枠（`p / a`・`p % a`）・マスク（`p && m`）で、
+ * どれも「起点の番地を先に決めてから数を当てる」射である。番地の積の構造は無い——規則の n 番目 `[p ~+ k] ' i`
+ * も、添字と歩幅という数どうしの積を番地に足す合成であって、番地を掛けてはいない。冪は掛け算の高階で、指数が
+ * 負なら番地で割ることになるので、なおさら無い。C でもポインタは `*` `/` `%` の被演算子になれない（C17 6.5.5）。
+ *
+ * 左辺が `__` か型の無い生の値（`Raw`）なら相手の域で見る（`Unit ⊕ T → T`、`Raw` は最弱——pass3 の
+ * `arithmeticResultType` と同じ読み方で、ここを書かれた型のまま訊くと型・診断・解釈器・機械の答えが割れる）。
+ * 相手の型が決まっていない・族・`Float`/`Vector` なら答えない——昇格すれば番地の域ではなくなるので、
+ * 分かっていないことを分かったことにしない（原理4）。`8 * p` は左辺優先で `Int` の域なので、ここでは見ない。
+ */
+const ADDRESS_PARTNERS = new Set(["Int", "Address", "Char", "Raw", "Unit"]);
+function addressWithoutArrow(name, leftType, rightType) {
+  if (name === "factorial") return leftType === "Address";
+  if (name !== "mul" && name !== "pow") return false;
+  const domain = leftType === "Unit" || leftType === "Raw" ? rightType : leftType;
+  return domain === "Address" && ADDRESS_PARTNERS.has(rightType);
+}
+
 export {
   measure,
   layoutOfStruct,
@@ -1030,5 +1053,5 @@ export {
   isIdentifierNode,
   bareName,
   unparen,
-
+  addressWithoutArrow,
 };

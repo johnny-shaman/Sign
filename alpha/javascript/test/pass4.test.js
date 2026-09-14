@@ -1220,19 +1220,22 @@ f 1`, "f") || [];
 	const subII = body("f : a b ? a - b\nf 1 2", "f") || [];
 	checkTrue("Int - Int は sub 1命令で、溢れを見ない", subII.includes("sub x9, x9, x10") && noCheck(subII), subII.join(" / "));
 
-	// 番地の乗算：上の語は `umulh`。符号ありの辺があれば、上の語から相手を引いてから見る
+	// 番地の域に掛け算の射は無い（利用者の決定 2026-09-14）：`__` を置くだけで、掛け算の命令を出さない
 	const mulPP = body("f : p q ? p * q\nf 0x1000 0x10", "f") || [];
-	checkTrue("Address * Address は umulh・mul・cmp・csel …, ne の並び", seq(mulPP, ["umulh x13, x9, x10", "mul x9, x9, x10", "cmp x13, #0", "csel x9, x12, x9, ne"]), mulPP.join(" / "));
+	checkTrue("Address * Address は niche を置き、mul も umulh も出さない", mulPP.includes("movz x9, #0x8000, lsl #48") && !mulPP.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPP.join(" / "));
 	const mulPn = body("f : p n ? p * n\nf 0x1000 3", "f") || [];
-	checkTrue("Address * Int は umulh・asr・and・subs・mul・csel …, ne の並び", seq(mulPn, ["umulh x13, x9, x10", "asr x14, x10, #63", "and x14, x14, x9", "subs x13, x13, x14", "mul x9, x9, x10", "csel x9, x12, x9, ne"]), mulPn.join(" / "));
+	checkTrue("Address * Int は niche を置き、mul も umulh も出さない", mulPn.includes("movz x9, #0x8000, lsl #48") && !mulPn.some((l) => /^(mul|umulh|smulh) /.test(l)), mulPn.join(" / "));
+	// 左辺が数なら `Int` の域なので（左辺優先）、ふつうの掛け算のまま
+	const mulNP = body("f : n p ? n * p\nf 3 0x1000", "f") || [];
+	checkTrue("Int * Address は mul 1命令のまま", mulNP.includes("mul x9, x9, x10"), mulNP.join(" / "));
 	const mulII = body("f : a b ? a * b\nf 1 2", "f") || [];
 	checkTrue("Int * Int は mul 1命令で、溢れを見ない", mulII.includes("mul x9, x9, x10") && !mulII.some((l) => /^(umulh|csel|asr) /.test(l)), mulII.join(" / "));
 
-	// 番地の除算：負になりうる数で割るときだけ、商が 0 かを見る
+	// 番地の除算：割る数が 0 以下になりうるときだけ、udiv の後に2命令で見る（利用者の決定 2026-09-14）
 	const divPn = body("f : p n ? p / n\nf 0x1000 4", "f") || [];
-	checkTrue("Address / Int は cmp・cneg・udiv・ccmp・csel …, ne の並び", seq(divPn, ["cmp x10, #0", "cneg x13, x10, lt", "udiv x9, x9, x13", "ccmp x9, #0, #4, lt", "csel x9, x12, x9, ne"]), divPn.join(" / "));
+	checkTrue("Address / Int は udiv・cmp・csel …, le の並び（絶対値で割らない）", seq(divPn, ["udiv x9, x9, x10", "cmp x10, #0", "csel x9, x12, x9, le"]) && !divPn.some((l) => /^(cneg|ccmp) /.test(l)), divPn.join(" / "));
 	const divPP = body("f : p q ? p / q\nf 0x1000 0x10", "f") || [];
-	checkTrue("Address / Address は udiv の後に 0 で割ったかだけ見る（商は被除数を超えない）", seq(divPP, ["udiv x9, x9, x10", "cmp x10, #0", "csel x9, x12, x9, eq"]) && !divPP.some((l) => /^(cneg|ccmp) /.test(l)), divPP.join(" / "));
+	checkTrue("Address / Address は udiv の後に 0 で割ったかだけ見る（番地は負にならない）", seq(divPP, ["udiv x9, x9, x10", "cmp x10, #0", "csel x9, x12, x9, eq"]) && !divPP.some((l) => /^(cneg|ccmp) /.test(l)), divPP.join(" / "));
 	// `Int` を 0 で割ると 0（`sdiv` がそう答える）——命令を足さない
 	const divII = body("f : a b ? a / b\nf 7 0", "f") || [];
 	checkTrue("Int / Int は sdiv 1命令で、0 で割っても命令を足さない", divII.includes("sdiv x9, x9, x10") && !divII.some((l) => /^(csel|cneg|ccmp) /.test(l)), divII.join(" / "));

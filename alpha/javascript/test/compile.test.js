@@ -116,6 +116,27 @@ checkReasons("`abc` + 1 → 同上（両方向とも）", "`abc` + 1", ["arithme
 checkReasons("識別子経由でも追える（x : `abc` / x * 2）", "x : `abc`\nx * 2", ["arithmetic-type-mismatch"]);
 checkReasons("[1 2] + [3 4] → List左辺の算術が未定義", "[1 2] + [3 4]", ["list-arithmetic-undefined"]);
 checkReasons("5 + 2 → 診断なし", "5 + 2", []);
+// **番地の域に掛け算・冪・階乗の射は無い**（type_system.md §3.6、利用者の決定 2026-09-14）。零射なので `__` へ
+// 収束し、理由を残す。左辺が数なら `Int` の域なので記録しない。`__` を左に置いた形は意図された伝播。
+checkReasons("0x10 * 2 → 番地の積は射が無い", "0x10 * 2", ["address-without-arrow"]);
+checkReasons("0x10 ^ 2 → 番地の冪も", "0x10 ^ 2", ["address-without-arrow"]);
+checkReasons("0x5! → 番地の階乗も", "0x5!", ["address-without-arrow"]);
+checkReasons("2 * 0x10 → 診断なし（Int の域）", "2 * 0x10", []);
+checkReasons("__ * 0x10 → 診断なし（意図された伝播）", "__ * 0x10", []);
+// **実行時に決まる番地どうしの和は意味が無い**ので警告する。片方が字面（か字面を束ねた名前）なら、番地を
+// 16進の数でずらす普通の形である。差は距離なので警告しない。
+checkReasons("p + q（どちらも仮引数の番地）→ 警告", "f : p q ? p + q\nf 0x10 0x20", ["address-plus-address"]);
+checkReasons("p + 0x18 → 診断なし（字面でずらす）", "f : p ? p + 0x18\nf 0x10", []);
+checkReasons("base + p（base は字面を束ねた名前）→ 診断なし", "base : 0x1000\nf : p ? base + p\nf 0x18", []);
+checkReasons("p - q → 診断なし（距離）", "f : p q ? p - q\nf 0x30 0x10", []);
+checkReasons("dst + (e - src) → 診断なし（片方が式ならずらし量）", "f : dst e src ? dst + (e - src)\nf 0x2000 0x1010 0x1000", []);
+checkReasons("[p ~* 2] → 番地の等比の規則も射が無い", "f : p i ? [p ~* 2] ' i\nf 0x10 1", ["address-without-arrow"]);
+// **`0r` / `0b` は16進・2進で書けるレジスタの即値で、数である**（§3.6 の記法の表）。最初の文法から `Address` と
+// 型付けしていて、値は同じなので一致の検査では見えなかった。
+check("0r の字面は Int", lastType("0r18"), "Int");
+check("0b の字面は Int", lastType("0b1010"), "Int");
+check("番地 + 0r は番地（数でずらす）", lastType("0x1000 + 0r18"), "Address");
+check("0r + 番地は Int（左辺優先）", lastType("0r18 + 0x1000"), "Int");
 // 範囲族（§4）: 端点が「点」でないとき。停止させず `__` へ落とし、理由を帳簿に残す
 // ——型が合わないことは「射が無い」ことであり、零対象を経由する射（零射）が常に
 // 存在する以上、結果は `__` である。停止するのは構文が壊れているときだけ。

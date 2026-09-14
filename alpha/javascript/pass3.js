@@ -36,7 +36,7 @@ import { OperationError } from "./errors.js";
 // ノードの形を見るだけの述語・名前の綴りを剥ぐ規則・族で割る規則は、layout.js が唯一の
 // 置き場である（理由はそこの `isDefineNode` のコメント）。このファイルでの呼び名
 // （`isSpreadNode` / `bareKey` / `slotsByFamily`）は別名で受ける——写しを持たない。
-import { stringLength, layoutOfStruct , elementShapeOfList, itemShapeOfListAt, commonSlotShape, isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isSpreadNode, bareName as bareKey, flattenByFamily as slotsByFamily } from "./layout.js";
+import { stringLength, layoutOfStruct , elementShapeOfList, itemShapeOfListAt, commonSlotShape, isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isSpreadNode, bareName as bareKey, flattenByFamily as slotsByFamily, addressWithoutArrow, unparen } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 const ARITHMETIC_OPS = new Set(["add", "sub", "mul", "div", "mod", "pow"]);
@@ -164,8 +164,18 @@ function rangeElementType(startType, endType) {
   return joinElementTypes(startType, endType);
 }
 
+// **番地を起点にした等比・冪の規則は、番地の積を並べる**（`[p ~* 2]` は p, 2p, 4p…、`[p ~^ 2]` は冪）ので、
+// 番地の域に射が無い（layout.js の `addressWithoutArrow`、type_system.md §3.6）。`[p ~/ 2]` は割るので射がある。
+// 3項形式（`[p ~* 2 ~ e]`）は左の規則の節点に訊く。
+function addressRuleWithoutArrow(node, env) {
+  const rule = RANGE_STEP_OPS.has(node.name) ? node : node.left && node.left.type === "operation" && RANGE_STEP_OPS.has(node.left.name) ? node.left : null;
+  if (!rule || (rule.name !== "range_geometric" && rule.name !== "range_power")) return false;
+  return addressWithoutArrow(rule.name === "range_power" ? "pow" : "mul", inferAtomType(rule.left, env), inferAtomType(rule.right, env));
+}
+
 function rangeResultType(node, env) {
   if (badRangeEndpoint(node, env)) return "Unit";
+  if (addressRuleWithoutArrow(node, env)) return "Unit";
   const [startNode, endNode] = rangeEndpoints(node, env);
   const startType = startNode ? inferAtomType(startNode, env) : null;
   const endType = endNode ? inferAtomType(endNode, env) : null;
@@ -418,6 +428,9 @@ function arithmeticResultType(node, leftType, env) {
   const rightType = inferAtomType(node.right, env);
   // §3.2: Stringは左右どちらに来ても算術の型エラー（両方向とも __ 消去）
   if (leftType === "String" || rightType === "String") return "Unit";
+  // **番地の域に、掛け算と冪の射は無い**（type_system.md §3.6、利用者の決定 2026-09-14）。
+  // 射が無いので零射を通る（原理4）——`` `abc` + 1 `` と同じく `__` へ収束する。
+  if (addressWithoutArrow(node.name, leftType, rightType)) return "Unit";
   // **`__` は強さの底である**（爆発律）。
   //
   // 算術は `A × A → A`——積を食って同じ対象を返すので、片方が始対象なら返せる値は
@@ -1404,7 +1417,10 @@ function literalAtomTypeFromKind(node) {
     case "string": return "String";
     case "char": return "Char";
     case "address": return "Address";
-    case "register": return "Address";
+    // **`0r` / `0b` は16進・2進で書けるレジスタの即値であり、数である**（§3.6 の表、
+    // integer_overflow.md §1）。番地にはならない——`0x1000 + 0r18` は番地を数でずらす形である。
+    // 以前は最初の文法から `Address` と型付けしていて、仕様（`Int`、回る）と食い違っていた。
+    case "register": return "Int";
     // U+0000 は Char の値域から除外された niche なので Unit（value_representation.md §3）。
     case "unicode": return parseInt(literalDigits(node.value), 16) === 0 ? "Unit" : "Char";
     case "unit": return "Unit";
@@ -2038,6 +2054,11 @@ function computeAtomType(node, env) {
         if (t === "Unit") return IDENTITY;
         return t ? "Unit" : null;
       }
+      // **番地の階乗は番地の積である**ので、番地の域に射が無い（`addressWithoutArrow`）。
+      if (node.position === "postfix" && node.name === "factorial") {
+        const t = inferAtomType(node.operand, env);
+        return addressWithoutArrow("factorial", t) ? "Unit" : t;
+      }
       // それ以外の前置/後置演算子は§4に個別の型シグネチャがあるが、今回は簡略化して
       // オペランドの型をそのまま通す（要精査、既知の制限）。
       return inferAtomType(node.operand, env);
@@ -2327,6 +2348,15 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
           // 書くと `Int` のままだったので、同じ式の型が括弧で変わってもいた。
           // 左に置いた仮引数（`p + 0x0`）は域を決める側なので、型注釈の書き方として残す。
           if (fromOther === "Address" && side === node.right && SCALAR_ARITHMETIC_OPS.has(node.name)) {
+            refine(side.value, "Scalar");
+            continue;
+          }
+          // **掛け算と冪の相手が番地でも、仮引数は番地だとは言われていない。** 型注釈の書き方は値を
+          // 変えない演算（`p + 0x0`）の話であり、番地の域には掛け算の射が無い（layout.js の
+          // `addressWithoutArrow`）。ここで番地と決めると射の無い域を自分で選ぶことになり、
+          // `f : k ? k * 0x10` を `f 3` と数で呼んでも必ず `__` になっていた（以前は番地の積として 48）。
+          // 呼び出しサイトの型か、既定の `Int` が決める。
+          if (fromOther === "Address" && (node.name === "mul" || node.name === "pow")) {
             refine(side.value, "Scalar");
             continue;
           }
@@ -3647,6 +3677,8 @@ function annotateTypes(node, env, diagnostics) {
   if (!node || typeof node !== "object") return node;
   inferAtomType(node, env);
   if (diagnostics) collectUnitReason(node, env, diagnostics);
+  if (diagnostics) collectAddressFactorial(node, env, diagnostics);
+  if (diagnostics) collectAddressPlusAddress(node, env, diagnostics);
   if (diagnostics) collectExportMisuse(node, diagnostics);
   if (diagnostics) collectScalarCompareOnContainer(node, env, diagnostics);
   if (diagnostics) collectRemovedOperator(node, diagnostics);
@@ -3916,6 +3948,65 @@ function collectExportMisuse(node, diagnostics) {
   });
 }
 
+function addressWithoutArrowDiagnostic(op) {
+  return {
+    level: "warning",
+    reason: "address-without-arrow",
+    spec: "type_system.md §3.6",
+    message:
+      `番地の '${op}' は __ に収束します。番地の域には掛け算・冪・階乗の射がありません——番地でできるのは、` +
+      `ずらす（p + n）・距離（p - q）・枠（p / a, p % a）・マスク（p && m）です。数として掛けたいなら、` +
+      `先に数の域へ移してください（(0 + p) * k）`,
+  };
+}
+
+// **番地の階乗**も番地の積なので、同じ理由を記録する（後置は `collectUnitReason` の中置の道を通らない）。
+function collectAddressFactorial(node, env, diagnostics) {
+  if (!node || node.type !== "operation" || node.position !== "postfix" || node.name !== "factorial") return;
+  if (!addressWithoutArrow("factorial", inferAtomType(node.operand, env))) return;
+  diagnostics.push(addressWithoutArrowDiagnostic(node.op));
+}
+
+/**
+ * **実行時に決まる番地どうしを足しても、どの記憶も指さない**（type_system.md §3.6、利用者の決定 2026-09-14）。
+ * 値は左辺優先で番地のまま計算する（溢れたら `__`）ので、ここは警告だけを出す。
+ *
+ * 意味が無いのは**識別子どうし**で、どちらも固定値でないときである（利用者の言葉）。`uart + 0x18` のように片方が
+ * 字面（か字面を束ねた名前）なら、番地を16進の数でずらす普通の形であり、番地と数の強さが同じなので左辺優先で
+ * 番地になる。片方が式なら、それは作ったずらし量である——距離 `dst + (e - src)`・枠の中の位置 `base + (va % 4096)`・
+ * マスク `base + (va && 0xFFF)` はどれも番地の域で作った数なので、型だけでは実行時の番地と区別できない（左辺優先で
+ * 番地のまま）。だから名前どうしの和だけを見る。C でもポインタどうしの和は制約違反である（C17 6.5.6）。差 `p - q`
+ * は距離なので警告しない。
+ */
+function collectAddressPlusAddress(node, env, diagnostics) {
+  if (!node || node.type !== "operation" || node.position !== "infix" || node.name !== "add") return;
+  if (!isIdentifierNode(unparen(node.left)) || !isIdentifierNode(unparen(node.right))) return;
+  if (inferAtomType(node.left, env) !== "Address" || inferAtomType(node.right, env) !== "Address") return;
+  if (isFixedValue(node.left, env) || isFixedValue(node.right, env)) return;
+  diagnostics.push({
+    level: "warning",
+    reason: "address-plus-address",
+    spec: "type_system.md §3.6",
+    message:
+      `番地どうしの '${node.op}' は、どちらも実行時に決まる番地なので意味がありません（値は番地のまま計算します）。` +
+      `ずらすなら片方を数（Int）にし、距離なら '-' を使ってください`,
+  });
+}
+
+// 字面、または字面を束ねた名前（`base : 0x09000000`）。括弧と名前を辿って確かめる。
+function isFixedValue(node, env) {
+  const seen = new Set();
+  let n = unparen(node);
+  while (isIdentifierNode(n) && env && !seen.has(n.value)) {
+    seen.add(n.value);
+    const b = envLookup(env, n.value);
+    const next = b && (b.valueNode || b.rhsNode);
+    if (!next) return false;
+    n = unparen(next);
+  }
+  return !!n && n.type === "atom" && (n.kind === "address" || n.kind === "number" || n.kind === "register");
+}
+
 function collectUnitReason(node, env, diagnostics) {
   if (!node || node.type !== "operation" || node.position !== "infix") return;
   if (node.atomType !== "Unit") return;
@@ -3931,6 +4022,9 @@ function collectUnitReason(node, env, diagnostics) {
         spec: "type_system.md §4",
         message: `範囲演算子 '${node.op}' の${bad.label}が ${bad.type} であり、範囲の端点になれないため __ に収束します（端点になれるのは数値と1文字だけです）`,
       });
+    } else if (RANGE_STEP_OPS.has(node.name) && addressRuleWithoutArrow(node, env)) {
+      // 3項形式の外側の `~` も `Unit` になるが、理由は規則の節点で1回だけ記録する。
+      diagnostics.push(addressWithoutArrowDiagnostic(node.op));
     }
     return;
   }
@@ -3939,6 +4033,14 @@ function collectUnitReason(node, env, diagnostics) {
 
   const leftType = inferAtomType(node.left, env);
   const rightType = inferAtomType(node.right, env);
+  // **番地の掛け算・冪は射が無い**（`addressWithoutArrow`）。型が合わない収束はふつう information だが、
+  // これは致命的な型（番地）の取り違えなので warning で見せる（integer_overflow.md §1 の物差し）。
+  // 左辺が字面の `__` の形（`__ * p`）は下の吸収則と同じく意図された伝播なので記録しない。生の値（`@m * p`）は
+  // 相手の域で見るので記録する（`addressWithoutArrow`）。
+  if (leftType !== "Unit" && addressWithoutArrow(node.name, leftType, rightType)) {
+    diagnostics.push(addressWithoutArrowDiagnostic(node.op));
+    return;
+  }
   // 左辺Unitは§3.3の吸収則（`__ + x = __`）であり、型の不一致ではない——
   // 意図された伝播なので診断しない。
   if (leftType === "Unit" || rightType === "Unit") return;

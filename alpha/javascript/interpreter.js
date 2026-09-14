@@ -5,7 +5,7 @@ import { literalDigits, literalParts } from "./target_info.js";
 // 後置 `~` の判定は、ここでは `isStructSpreadLine` という名前で受ける（マージが
 // 「双方に `~`」を条件にしているので、値ではなく**書かれ方**を見る：list_model.md §5.3）。
 // `isSpreadNode` という2つ目の名前も同居していたが、同じ規則の別名で誰も呼んでいない。
-import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine } from "./layout.js";
+import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine, addressWithoutArrow } from "./layout.js";
 
 /**
  * 最小インタプリタ（評価器）。Pass2/Pass1b が構築した二分木 AST を評価して値を出す。
@@ -167,7 +167,10 @@ function evalLiteral(node) {
       return cp === 0 ? UNIT : String.fromCodePoint(cp);
     }
     case "register":
-      return parseInt(literalDigits(node.value), literalParts(node.value)?.radix ?? 16);
+      // **`0r` / `0b` は16進・2進で書けるレジスタの即値で、`Int` である**（§3.6）。十進の字面と同じく
+      // 64 ビットで回し、niche に落ちたら `__`（integer_overflow.md §1.2）。以前は倍精度で読んでいたので、
+      // `0rFFFFFFFFFFFFFFFF` のような語は下の桁が丸まっていた。
+      return wrapInt(BigInt((literalParts(node.value)?.radix === 2 ? "0b" : "0x") + literalDigits(node.value)));
     case "unit":
       return UNIT;
     default:
@@ -995,17 +998,28 @@ const BIT_OPS = {
 // ビット演算は幅の中で閉じる。`<<` が幅の外へ出た分は捨てられる——ビット列はラップが
 // 前提であり（integer_overflow.md §1「bit演算はラップが前提（暗号・ハッシュ等）」）、
 // そこが桁あふれとして `__` になっては困る。
-function bitOnValues(name, l, r) {
+//
+// **番地の域では、語を符号なしで見る**（type_system.md §3.6「番地の域の射」——マスク・タグは番地のまま）。
+// `Int` として回すと、上半分の番地をマスクした値が負の数になり、次の番地の算術で `__` へ落ちていた
+// （実測で `(0xFFFF800000001234 && !!0xFFF) + 8` が `__`、マスクしない番地なら両エンジンとも正しい）。
+// `>>` も番地では論理シフトである。`<<` が番地の域でどうなるかはまだ決めていないので、ここでは触らない。
+function bitOnValues(name, l, r, resultType) {
   const a = toBig(l);
   const b = toBig(r);
   if (a === null || b === null) return UNIT;
+  if (resultType === "Address" && name !== "bit_shift_left") {
+    const u = BigInt.asUintN(DEFAULT_GPR_BITS, a);
+    const v = name === "bit_shift_right" ? u >> b : BIT_OPS[name](u, BigInt.asUintN(DEFAULT_GPR_BITS, b));
+    return clampAddress(BigInt.asUintN(DEFAULT_GPR_BITS, v));
+  }
   return wrapInt(BIT_OPS[name](a, b));
 }
 
-// `!!` は幅の中での補数。幅が無ければ「全ビット反転」が定義できない。
-function bitNot(v) {
+// `!!` は幅の中での補数。幅が無ければ「全ビット反転」が定義できない。番地の補数は符号なしの語のまま。
+function bitNot(v, resultType) {
   const a = toBig(v);
-  return a === null ? UNIT : wrapInt(~a);
+  if (a === null) return UNIT;
+  return resultType === "Address" ? clampAddress(BigInt.asUintN(DEFAULT_GPR_BITS, ~a)) : wrapInt(~a);
 }
 
 
@@ -1103,6 +1117,11 @@ function roundHalfAwayFromZero(x) {
  * ここへ訊く。同じ族の同じ規則なので、決める場所は1つである。機械の側は pass4 の算術の
  * `csel` が同じ事実を持つ。
  */
+// 算術の値として扱える1語か（数・BigInt・1文字）。`__` や器・文字列は含まない。
+function isScalarValue(x) {
+  return typeof x === "number" || typeof x === "bigint" || (typeof x === "string" && [...x].length === 1);
+}
+
 function absorbsUnit(resultType, l, r) {
   return resultType === "Address" && (isUnit(l) || isUnit(r));
 }
@@ -1143,15 +1162,21 @@ function arithOnValues(name, l, r, resultType) {
   // 足さない形であり、除法の等式 `a = (a/b)*b + a%b` が `b = 0` でも崩れない（等式で書き換える最適化が
   // 除数を確かめずに効く）。`0⁻¹ = 0` と置く草原（meadow）と同じ形でもある。
   //
-  // **番地の商だけは `__` である。** 0 番地は layer 0 では読める記憶なので、黙って 0 を返すと致命的に
-  // なる（integer_overflow.md §1 の物差し）。剰余は被除数の番地そのものなので、そのまま返す。
+  // **番地の域では、0 以下の数で割ると `__` である**（利用者の決定、2026-09-14）。商も剰余も番地の域に
+  // 残るので（左辺優先）、剰余が被除数のままだと揃えの形 `p - (p % a)` が `a = 0` で黙って 0 番地を出す——
+  // 0 番地は layer 0 では読める記憶である（integer_overflow.md §1 の物差し）。負の数で割るのも、枠の番号・
+  // 枠の中の位置として意味が無いうえ、機械の `udiv` は負の数を大きな数と読むので同じ 0 番地へ落ちる。
   //
   // 以前は JS の `Infinity`/`NaN` が漏れていた（機械は 0）。`Float` は IEEE 754 のまま（ここへ来ない）。
-  if ((name === "div" || name === "mod") && (resultType === "Int" || resultType === "Address" || resultType === "Char")) {
+  if ((name === "div" || name === "mod") && resultType === "Address" && isScalarValue(r)) {
+    const d = typeof r === "string" ? r.codePointAt(0) : r;
+    if (d <= 0) return UNIT;
+  }
+  if ((name === "div" || name === "mod") && (resultType === "Int" || resultType === "Char")) {
     const d = typeof r === "string" && [...r].length === 1 ? r.codePointAt(0) : r;
     if (d === 0 || d === 0n) {
       if (name === "mod") return l;
-      return resultType === "Address" ? UNIT : 0;
+      return 0;
     }
   }
   // **1文字は符号位置そのものである**（`[x] ≅ x` なので長さ1の文字列は `Char`）。
@@ -1237,7 +1262,7 @@ function evalBit(node, env) {
   if (absorbsUnit(node.atomType, l, r)) return UNIT;
   if (isUnit(l)) return r;
   if (isUnit(r)) return l;
-  return bitOnValues(node.name, l, r);
+  return bitOnValues(node.name, l, r, node.atomType);
 }
 
 /**
@@ -1271,6 +1296,10 @@ function evalArith(node, env) {
   // の継続の規則）。決まるまでは `Int` と同じ道を通し、機械（両辺を積んでから `csel`）と揃える。
   if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined, node.atomType);
   const r = unspreadScalar(evaluate(node.right, env));
+  // **番地の域に、掛け算と冪の射は無い**（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
+  // 射が無いので零射を通る（原理4）。値では番地と数の区別が付かないので、辺の型で見る——`Unit` と型付け
+  // される掛け算には `__ * x`（x の型が決まっていない）もあり、そちらは爆発律で x を返す。
+  if (node.atomType === "Unit" && addressWithoutArrow(name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
   // **対象を置けば値が返り、射を置けば射が返る。**
   //
   // `__` は零対象で、初対象と終対象が一致している。演算子の片側に置いたとき、その
@@ -2523,6 +2552,9 @@ function evaluate(node, env) {
       const itStep = evaluate(node.right, env);
       if (isUnit(itStep)) return UNIT;
       if (!isRangePoint(itStart, false) || !isRangePoint(itStep, false)) return UNIT;
+      // 番地を起点にした等比・冪の規則は射が無い（pass3 の `addressRuleWithoutArrow` が `Unit` と型付けする）。
+      // 範囲の節点が `Unit` になるのは他に端点が点でないときだけで、そちらは上で `__` を返している。
+      if (node.atomType === "Unit") return UNIT;
       return makeIterator(itStart, rangeStepFn(node.op, itStep), null, affineStepOf(node.op, itStep));
     }
     switch (node.name) {
@@ -2674,6 +2706,8 @@ function evaluate(node, env) {
         // step 形式は数値のみ（文字への等差・等比は意味が決まっていない）。
         // 単純形式は数値または1文字。点でなければ射が無い＝零射なので `__`。
         if (!isRangePoint(start, !isStepForm) || !isRangePoint(end, !isStepForm)) return UNIT;
+        // 番地を起点にした等比・冪の規則は射が無い（上の2項形式と同じ）。
+        if (node.atomType === "Unit") return UNIT;
         // **終端があってもイテレータである**（list_model.md §2.3 の IMPORTANT）。
         // 3項形式が宣言しているのは「いつ消費するか」であって「並べて置け」ではない。
         // 消費（走査）は O(1) メモリで済み、展開が要るのは同時アクセスを宣言した
@@ -2805,7 +2839,12 @@ return items.filter((v) => !isUnit(v));
       return evalCompare(node, env);
 
     if (node.position === "prefix" || node.position === "postfix") {
-      return evalUnaryOp(node.name, evaluate(node.operand, env));
+      const v = evaluate(node.operand, env);
+      // **番地の階乗は射が無い**（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
+      // 被演算子は評価してから捨てる——算術と同じく両辺を評価する道（finally の読み）に揃える。
+      if (node.name === "factorial" && node.atomType === "Unit" && addressWithoutArrow("factorial", node.operand && node.operand.atomType)) return UNIT;
+      if (node.name === "bit_not" && node.atomType === "Address") return bitNot(v, "Address");
+      return evalUnaryOp(node.name, v);
     }
 
     // 未対応の演算。$（address）・@（input）・#（output）は実装済みなので、実際に
