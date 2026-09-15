@@ -43,10 +43,12 @@ strict : t ?
 
 `--- 1. 中置演算子の両側へ空白を入れる ---`
 `文字リテラル・文字列・コメントの中身は保護する`
+`!! は1つの記号（前置の bitNOT）。この言語に二重否定は要らないので ! 2つには読まない——後ろの = と組んで != にしない`
 
 sep : [c ~rest] ?
 	c = escape : c (rest ' 0) (sep (rest ' 1~))
 	c = quote : c (in_quote rest)
+	(c = bang) & ((rest ' 0) = bang) : c (rest ' 0) (sep (rest ' 1~))
 	strict (c (rest ' 0) (rest ' 1)) : space (c (rest ' 0) (rest ' 1)) space (sep (rest ' 2~))
 	strict (c (rest ' 0)) : space (c (rest ' 0)) space (sep (rest ' 1~))
 	strict c : space c space (sep rest)
