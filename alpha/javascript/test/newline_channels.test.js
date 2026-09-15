@@ -140,5 +140,23 @@ check("括弧の中の演算子で始まる行", run("(1\n+ 1)"), "2");
 check("括弧の中の , で始まる行", run("xs : [1\n, 2\n, 3]\nxs"), JSON.stringify([1, 2, 3]));
 check("括弧の中の TAB で揃えた行は別の要素のまま", run("m : [\n\t1 2 3\n\t4 5 6\n]\nm ' 1"), JSON.stringify([4, 5, 6]));
 
+// ---- 内部の符号を見ずに、値で守る ----
+// 区切りの符号が CR なので、変換し損ねた裸の CR は区切りと同じ符号になり、値のテストをすり抜けていた
+// （JS が裸の CR を改行と認めない変異、preprocess.sn の skip_lf を外す変異は、どちらも既存のテストが0件で
+// 通った）。`\` の直後と、空白で始まらない次の行が、その穴を値に出す。
+check("\\ + CRLF の次の0列目の文字列は黙って消えない", run("t : `L1` " + BS + "\r\n`L2`\r\nt").startsWith("止:"), true);
+check("\\ + CRLF の次の + 1 は LF のときと同じ", run("a : " + BS + "\r\n+ 1\r\na"), run("a : " + BS + "\n+ 1\na"));
+check("\\ + 裸の CR は文字の改行", run("c : " + BS + "\r\rc"), JSON.stringify("\n"));
+check("裸の CR だけで区切ったブロック", run("f : x ?\r\tx = 1 : 10\r\t20\rf 2"), "20");
+// ブロックの最後の行が `\` + 改行でも、ブロックを閉じる印を文字リテラルが食わない。
+check("ブロックの最後の行が \\ + 改行", run("f : x ?\n\tx = 1 : 10\n\t" + BS + "\n\nf 2"), JSON.stringify("\n"));
+check("ブロックの最後の行が \\ + CRLF", run("f : x ?\r\n\tx = 1 : 10\r\n\t" + BS + "\r\n\r\nf 2"), JSON.stringify("\n"));
+// `\` は直後の1文字を取るので、`\\` の後の改行は区切りである（文字列の中の `\` はただの文字）。
+check("\\\\ の後の改行は区切り", run("c : " + BS + BS + "\nc"), JSON.stringify(BS));
+check("文字列の末尾の \\ の後の改行は区切り", run("s : `a" + BS + "`\ns"), JSON.stringify("a" + BS));
+check("文字列の末尾の \\ の後の \\ + 改行", run("s : `a" + BS + "` " + BS + "\n `b`\ns"), JSON.stringify("a" + BS + "\nb"));
+check("文字列に密着した \\ + 改行は構文エラー", run("s : `a" + BS + "`" + BS + "\n `b`\ns").startsWith("止:"), true);
+check("0u000D は CR", run("c : 0u000D\nc"), JSON.stringify("\r"));
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
