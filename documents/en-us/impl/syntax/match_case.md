@@ -22,7 +22,7 @@ function_def ?
 \tdefault_result
 ```
 
-- Blocks indented with tabs immediately following `?` represent `match_case` expressions.
+- Blocks indented with tabs immediately following `?` represent `match_case` expressions. The arms sit one TAB deeper than the line with `?`; a line two TABs deeper at once is inside a nested block, which stands in for a bracket, so it is not an arm ([`preprocessor.md`](../build/preprocessor.md) section 0).
 - Each arm takes the form `condition : result`.
 - **The final line contains an unconditioned `result` expression** representing the default fallback.
 

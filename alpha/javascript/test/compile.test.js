@@ -389,6 +389,10 @@ check("別名越しでも実引数まで狭まる", lastType("add : [+]\nadd 1 2
 	check("値の位置の字下げブロック", refusal("p :\n\t1 > 0 : 42\np"), LEFT);
 	// 枝の値を字下げすれば、その行はまた枝である（入れ子の match）。両方のエンジンで動く。
 	check("入れ子の枝は通る", refusal("f : x y ?\n\tx < 0 :\n\t\ty > 0 : 1\n\t\t2\n\t3\nf -1 1"), null);
+	// **TAB 1つが1段である**（利用者の決定 2026-09-15）。2段深い行は入れ子のブロック（括弧の代わり）の中に居るので、
+	// 枝ではない——括った枝と同じに止まる。旧版は2段を1段に数えて黙って枝と読んでいた（`f 0` が 1、`f 7` が 2）。
+	check("`?` の行より2段深い枝", refusal("f : x ?\n\t\tx = 0 : 1\n\t\tx\nf 0"), LEFT);
+	check("枝の値の match を2段深く", refusal("f : x ?\n\tx > 0 :\n\t\t\tx > 5 : 2\n\t\t\t1\n\t0\nf 7"), LEFT);
 	check("構造体を返す関数は通る", refusal("f : x ? [\n\tfoo : x\n\tbar : x + 1\n]\n(f 3) ' bar"), null);
 	check("1スロットの構造体は1行でもよい", refusal("k : n ? [a : 42]\nk 1"), null);
 	check("撒いた鍵の行は通る", refusal("p :\n\tbar : 1\n\tbaz~ : 2\np ' bar"), null);

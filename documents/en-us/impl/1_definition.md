@@ -22,8 +22,9 @@
 3. Expression boundaries are defined by newlines, except that a line starting with a space or one of the infix operators listed in section 0 continues the previous one ([`preprocessor.md`](build/preprocessor.md) section 0).
 4. Groupings of expressions form **Blocks**:
    1. The start of a block is delimited by increasing the indentation level.
-   2. All expressions within a block must share identical indentation depth.
+   2. All expressions within a block must share identical indentation depth (a line indented two or more levels deeper at once is a nested block, and that nested block is one of the expressions of the outer block).
    3. The end of a block is delimited by decreasing the indentation level.
+   4. Indentation depth is counted one level per tab. Indenting n tabs deeper opens n nested blocks (a block one level deeper stands in for a bracket block); dedenting n tabs closes n blocks. A block therefore never ends at a depth that was never opened ([`preprocessor.md`](build/preprocessor.md) section 0).
 5. Operators are formally defined in the Operator Table:
    1. Operators are classified as Prefix, Infix, or Postfix.
    2. Infix operators must be placed between operands and delimited by whitespace.

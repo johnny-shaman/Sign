@@ -100,6 +100,19 @@ same("2段深くなる", "a\n\t\tb\nc");
 same("末尾のインデントを閉じる", "f : x ?\n\tx + 1");
 same("空行は深さに影響しない", "a\n\nb");
 same("空行を挟んでも DEDENT は直前の内容行に付く", "a\n\tb\n\nc");
+// **TAB 1つが1段である**（利用者の決定 2026-09-15）。跳んだ途中の深さへ戻るのは、閉じて開き直すのでも閉じて
+// 改行するのでもなく、1段だけ閉じる（`a→→b←⏎c←`）。かつて両方の前処理はスタックを積んでいて、ここで割れていた。
+same("2段深くなって1段戻る", "a\n\t\tb\n\tc\nd");
+same("3段目から2段目へ戻る", "a\n\tb\n\t\t\tc\n\t\td\ne");
+same("2段の仮引数と1段の ?（デフォルト引数）", "go :\n\t\tacc : 0\n\t\trest : __\n\t?\n\t\t(rest) : go (acc + (rest ' 0)) (rest ' 1~)\n\t\tacc\n");
+same("2段浅い続きの行は先に2段閉じる", "f : x ?\n\t\tx\n * 2");
+same("深い TAB の続きの行は段を増やさない", "v :\n\t1\n\t\t\t+ 1\n\t5");
+// 木の比較は両方が同じように戻っても通るので、印の列そのものも両方で見る。
+{
+	const input = "a\n\t\tb\n\tc\nd";
+	const want = "a\x02\x02b\x03\rc\x03\rd";
+	check(`段の数だけ INDENT / DEDENT を並べる: ${show(input)}`, runSn(input) === want && preprocess(input) === want, `     sn: ${show(runSn(input))}\n     js: ${show(preprocess(input))}`);
+}
 
 // ---- 括弧の中ではインデントを無効化する ----
 //

@@ -160,14 +160,16 @@ delta : [c ~rest] ?
 
 `--- 2. 行頭のタブ深さから INDENT / DEDENT を作る ---`
 
-`インデント幅のスタック。深さの列として積む。底の 0 は要素として常に残るので`
-`スタックは空にならない——unwind は (top st) > d で止まり、0 > d は偽である`
-
-push : [~st] d ? d st~
-
-top : [~st] ? st ' 0
-
-pop : [~st] ? st ' 1~
+`TAB 1つが1段である（利用者の決定 2026-09-15）。深さの変化は段の数だけ INDENT / DEDENT になる——`
+`2段深くなれば INDENT INDENT（1段深いブロックが括弧のブロックの代わりになる、つまり入れ子のブロック）、`
+`2段戻れば DEDENT DEDENT。だから持ち回るのは今の深さだけでよく、スタックは要らない`
+``
+`かつては実際に深くなった深さをスタックに積んでいたので、何段跳んでも INDENT は1つで、跳んだ途中の`
+`深さへ戻ると閉じて改行していた（0→2→1 が a→b←⏎c。JS 側は a→b←→c← で、2つの前処理はそこで割れていた）`
+``
+`深さは数ではなく、その深さを決めた行の入力の位置（ks）で持つ。深さはその行頭の TAB の数である。`
+`数で持つと、並べる DEDENT の個数が器の長さで抑えられず、返す器の上界が書けないので機械語にならない`
+`——TAB の並びそのものを持てば、その長さが上界になる。位置は入力の切り出しなので、作り直さずに持ち回れる`
 
 `行頭のタブ数と、タブを落とした本文`
 
@@ -196,30 +198,26 @@ blank : [c ~rest] ?
 	c = space : blank rest
 	c rest
 
-`深さ d より深い段を閉じる。閉じた後のスタックと、その段数ぶんの DEDENT`
+`行頭の TAB のうち、先頭の n 個より後ろにある TAB の数だけ m を並べる。TAB が n 個に満たなければ何も並べない`
+`深さ k の位置から深さ d へ戻るなら DEDENT を k - d 個、深さ k から d の行へ深くなるなら INDENT を d - k 個並べる`
 
-unwind : [~st] d ?
-	(top st) > d : unwind (pop st) d
-	st
+beyond : [c ~rest] n m ?
+	!(c = tab) : __
+	n > 0 : beyond rest (n - 1) m
+	m (beyond rest 0 m)
 
-closers : [~st] d ?
-	(top st) > d : dedent (closers (pop st) d)
-	__
+`続きの行を読んだ後の深さの位置。浅くなったぶんは閉じるが、深い TAB は揃えなので段を増やさない`
 
-close_all : [~st] ?
-	(top st) > 0 : dedent (close_all (pop st))
-	__
+unwind : ks s k d ?
+	k > d : s
+	ks
 
-`この行の直前に置く区切りと、この行を読んだ後のスタック`
-`深くなれば INDENT で前の行に直結し、浅くなれば DEDENT を並べてから改行する`
+`この行の直前に置く区切り。深くなれば INDENT を並べて前の行に直結し、浅くなれば DEDENT を並べてから改行する`
+`この行を読んだ後の深さの位置は、この行そのものである`
 
-gap : [~st] d ?
-	d > (top st) : indent
-	(closers st d) cr
-
-next_st : [~st] d ?
-	d > (top st) : push st d
-	unwind st d
+gap : ks s k d ?
+	d > k : beyond s k indent
+	(beyond ks d dedent) cr
 
 `1行ずつ処理する。空行は落とす——深さ計算に関わらず、パース結果も変わらない`
 `（DEDENT は直前の内容行に付く必要があり、空行を残すと間に挟まって構文が壊れる）`
@@ -240,18 +238,19 @@ next_st : [~st] d ?
 
 walk :
 		s
-		st
+		ks
 		bd
 		line : head_line s
 		rest : tail_line s
 		d : depth_of line
+		k : depth_of ks
 		b : body_of line
 		nd : bd + (delta b)
 	?
-		!(blank b) : (walk rest st bd) | (close_all st)
-		bd > 0 : (bracket_gap b) b ((walk rest st nd) | (close_all st))
-		continues b : (closers st d) space b ((walk rest (unwind st d) nd) | (close_all (unwind st d)))
-		(gap st d) b ((walk rest (next_st st d) nd) | (close_all (next_st st d)))
+		!(blank b) : (walk rest ks bd) | (beyond ks 0 dedent)
+		bd > 0 : (bracket_gap b) b ((walk rest ks nd) | (beyond ks 0 dedent))
+		continues b : (beyond ks d dedent) space b ((walk rest (unwind ks s k d) nd) | (beyond (unwind ks s k d) 0 dedent))
+		(gap ks s k d) b ((walk rest s nd) | (beyond s 0 dedent))
 
 `walk は各行の前に区切りを置くため、先頭行のぶんだけ余分な改行が付く`
 `先頭行がインデントされている場合は区切りが INDENT になるので、その時は取らない`
@@ -340,9 +339,9 @@ dstr_cls : [c ~rest] bd ?
 
 `--- 前処理の全体 ---`
 `改行の役割を先に分け、インデントを確定させてから、演算子の空白を入れる`
-`スタックの底の 0 はここで積む——空にならないので unwind が必ず止まる`
+`深さは 0 から始める——TAB の無い位置なら何でもよいので、区切りの CR を置く`
 
-preprocess : s ? sep (strip_head (walk (at_line s 0) 0 0))
+preprocess : s ? sep (strip_head (walk (at_line s 0) cr 0))
 
 `実行例`
 

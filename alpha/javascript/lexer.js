@@ -160,9 +160,15 @@ function bracketDelta(content) {
 
 // Indent・Dedentのマーキング関数。**入力は `classifyNewlines` を通したもの**で、処理行は CR で切る。
 // 行の中の LF は `\` と組んだ文字の改行であり、行の区切りではない（preprocessor.md §0）。
+//
+// **TAB 1つが1段である**（利用者の決定 2026-09-15）。深さの変化は段の数だけ INDENT / DEDENT になる——
+// 2段深くなれば INDENT INDENT（1段深いブロックが括弧のブロックの代わりになる、つまり入れ子のブロック）、
+// 2段戻れば DEDENT DEDENT。だから覚えるのは今の TAB の数だけでよい。
+// かつては Python のように「実際に深くなった TAB の数」を積んでいたので、何段跳んでも INDENT は1つで、
+// 跳んだ途中の深さへ戻ると、閉じてから開き直した別のブロックになっていた（0→2→1 が `a→b←→c←`）。
 function markBlock(input) {
   const lines = input.split('\r');
-  const indentStack = [0];
+  let depth = 0; // 今のブロックの深さ（TAB の数）
   let result = [];
   let lastContentLineIdx = -1;
   // ブラケットが未クローズの間（>0）は、タブ深さの変化をINDENT/DEDENTとして扱わない。
@@ -228,16 +234,16 @@ function markBlock(input) {
 
     const currentIndent = leadingWs.length; // タブの数をインデントレベルとする
 
-    // インデントが浅くなった場合、スタックをポップしてDEDENTマーカーを出力
-    while (indentStack.length > 1 && currentIndent < indentStack[indentStack.length - 1]) {
-      indentStack.pop();
+    // インデントが浅くなった場合、戻った段の数だけ DEDENT マーカーを出力
+    if (currentIndent < depth) {
       if (lastContentLineIdx !== -1) {
-        result[lastContentLineIdx] += '\x03'; // DEDENTマーカー
+        result[lastContentLineIdx] += '\x03'.repeat(depth - currentIndent); // DEDENTマーカー
       }
+      depth = currentIndent;
     }
 
     // 続きの行は、浅くなったぶんのブロックを閉じてから（上の DEDENT）前の行へつなぐ。だからブロックの後の
-    // 0列目の ` * 2` はブロック全体に掛かり、`\t * 2` は最後の行に掛かる。
+    // 0列目の ` * 2` はブロック全体に掛かり、`\t * 2` は最後の行に掛かる。深い TAB は揃えなので段を増やさない。
     if (isContinuation) {
       if (lastContentLineIdx !== -1) {
         result[lastContentLineIdx] += ' ' + content;
@@ -245,13 +251,14 @@ function markBlock(input) {
         result.push(content);
         lastContentLineIdx = result.length - 1;
       }
-    } else if (currentIndent > indentStack[indentStack.length - 1]) {
-      // インデントが深くなった場合
-      indentStack.push(currentIndent);
+    } else if (currentIndent > depth) {
+      // インデントが深くなった場合、深くなった段の数だけ INDENT マーカーを出力
+      const indents = '\x02'.repeat(currentIndent - depth); // INDENTマーカー
+      depth = currentIndent;
       if (lastContentLineIdx !== -1) {
-        result[lastContentLineIdx] += '\x02' + content; // INDENTマーカー
+        result[lastContentLineIdx] += indents + content;
       } else {
-        result.push('\x02' + content);
+        result.push(indents + content);
         lastContentLineIdx = result.length - 1;
       }
     } else {
@@ -263,12 +270,9 @@ function markBlock(input) {
     bracketDepth += bracketDelta(content);
   }
 
-  // ファイル末尾に達した場合、残っているインデントをすべて閉じる
-  while (indentStack.length > 1) {
-    indentStack.pop();
-    if (lastContentLineIdx !== -1) {
-      result[lastContentLineIdx] += '\x03';
-    }
+  // ファイル末尾に達した場合、残っているインデントをすべて（段の数だけ）閉じる
+  if (depth > 0 && lastContentLineIdx !== -1) {
+    result[lastContentLineIdx] += '\x03'.repeat(depth);
   }
 
   return result.join('\r');

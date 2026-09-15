@@ -168,6 +168,43 @@ function definedNameOf(line) {
   return line[at + 1] === ":" ? { name: id, exported: at > 0 } : null;
 }
 
+/**
+ * **定義の右辺が1行だけの字下げブロックで、その行がラムダなら、その行が右辺である。**
+ *
+ * TAB 1つが1段なので（preprocessor.md §0）、`go :` の次の行が2段深ければ、間の1段は
+ * ブロックであり、2段目のブロックはその最初の項になる——1段深いブロックが括弧のブロックの
+ * 代わりをする（利用者の決定 2026-09-15）。だから function_guide.md のデフォルト引数の形
+ *
+ *   go :
+ *   		acc : 0
+ *   		rest : __
+ *   	?
+ *   		…
+ *
+ * は `go :` の右辺が「`[仮引数] ? 本体` の1行を持つブロック」になる。束縛表（pass1）も縮約（pass2）も
+ * 右辺のトップレベルの `?` を見て関数と決めるので、ブロックのままだと `go` は値になり、`go 6 [4]` が
+ * 黙って `[6 4]` を返す。括りなら1行の `(x ? x + 1)` は中身へ剥がされるが、字下げブロックは剥がさない
+ * （本体の枝・構造体と区別するため）ので、ここで字句の段で1度だけ剥がす。
+ *
+ * **入れ子の段ぶん剥がす。** 同じ形を1段深く書くと（仮引数を3段、`?` を2段）右辺は「ブロック1つだけの行を
+ * 持つブロック」になる。1段だけ剥がすと `f` は値のままで、`f :` の下に `x y` を3段・`? x * y` を2段に書いた
+ * `f 4 5` が黙って 5 を返した（旧版は 20）。
+ *
+ * 行が `名前 : …` なら剥がさない——それは1エントリの構造体（`obj :` の次の `m : x ? x + 1`）である。
+ */
+function inlineSoloLambdaBlocks(x) {
+  if (!Array.isArray(x)) return x;
+  const line = x.map(inlineSoloLambdaBlocks);
+  const d = definedNameOf(line);
+  if (!d || line.length !== (d.exported ? 4 : 3)) return line;
+  // 1行だけの字下げブロックの、その1行
+  const soloLine = (b) => (Array.isArray(b) && b[0] === '"INDENT_"' && b[1].length === 1 && Array.isArray(b[1][0]) ? b[1][0] : null);
+  let only = soloLine(line[line.length - 1]);
+  while (only && only.length === 1 && soloLine(only[0])) only = soloLine(only[0]);
+  if (only && only.includes("?") && !definedNameOf(only)) return [...line.slice(0, line.length - 1), ...only];
+  return line;
+}
+
 function dirOf(path) {
   const n = normPath(path);
   const i = n.lastIndexOf("/");
@@ -1055,7 +1092,8 @@ function checkDefineLeftSides(nodes) {
     throw new OperationError(
       `\`名前 : 値\` の左辺は名前でなければなりません（${how}）——構造体は1エントリでもブロックで書きます。` +
         "一行に並べた `名前 : 値 , 名前 : 値` は `:` の方が緩いので `x : ((1 , y) : 2)` と読まれ、二要素にはなりません。" +
-        "`条件 : 値`（match の枝）を書けるのは `?` 直後の字下げブロックの行だけで、1行・`(…)`・`[…]`・構造体ブロックには書けません",
+        "`条件 : 値`（match の枝）を書けるのは `?` 直後の字下げブロックの行だけで、1行・`(…)`・`[…]`・構造体ブロック・" +
+        "一度に2段深い字下げ（入れ子のブロックは括弧の代わり）には書けません",
       { spec: "match_case.md §概要 / 0_design_principles.md 原理4", reason: "define-left-not-a-name" }
     );
   };
@@ -1114,7 +1152,7 @@ function compile(source, options = {}) {
     parseFn,
     options.importBase !== undefined ? options.importBase : selfPath ? dirOf(selfPath) : "",
     { done: new Set(selfPath ? [selfPath] : []) }
-  );
+  ).map(inlineSoloLambdaBlocks);
   const env = buildEnv(lines);
   // 中身の見える器に並べた関数は、撒けば・取り出せば呼べる（字句の段でスロットへ置き換える）
   const pastedAway = pasteVisiblePipelines(lines, env);

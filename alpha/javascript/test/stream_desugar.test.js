@@ -195,14 +195,18 @@ check("器が並ぶ形は均さない", streams("f : [c ~rest] ?\n\tc = `;` : c 
 	// 次の状態の形がそろい（行頭の判別 `at_line` へも自分たちへも2つ）、`body_cls` / `str_cls` / `dstr_cls` /
 	// `esc_cls` / `drop_line` はストリームになる。ただし枝がストリームでない `at_line` へ移るので群は閉じない。
 	// （`\` + 改行の後の TAB を落とす `skip_tabs` は、並べる要素の無い末尾呼び出しなので列ではない。）
-	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["body_cls", "close_all", "closers", "delta", "drop_line", "dstr_cls", "esc_cls", "head_line", "in_quote", "sep", "str_cls", "unwind"]);
+	// **TAB 1つが1段になって（利用者の決定 2026-09-15）スタックが無くなった。** 深さはそれを決めた行の位置で持ち、
+	// DEDENT / INDENT は `beyond`（行頭の TAB のうち n 個より後ろのぶんだけ並べる）1つが出す。`gap` は枝が `beyond` へ
+	// 移るので同じ群に入る。かつて1状態で均せた `close_all` は `beyond ks 0 dedent` になり、状態が3つなので均さない。
+	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["beyond", "body_cls", "delta", "drop_line", "dstr_cls", "esc_cls", "gap", "head_line", "in_quote", "sep", "str_cls"]);
 	check("in_quote の枝の本数", found.find((f) => f.name === "in_quote").arms.map((a) => a.prefix.length), [1, 1, 1]);
 	const groups = groupStreamFunctions(found);
-	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["unwind"], ["closers"], ["close_all"]]);
+	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["beyond", "gap"]]);
 	// 実際に均せるのは、状態が1つで、式に再帰が埋まっていないものだけ。
 	const gen = (nm) => generatePullers(groups.find((g) => g[0].name === nm)) !== null;
-	check("均せる群", groups.map((g) => g[0].name).filter(gen), ["sep", "head_line", "close_all"]);
-	checkTrue("状態が2つならまだ均さない", !gen("unwind") && !gen("closers"));
+	check("均せる群", groups.map((g) => g[0].name).filter(gen), ["sep", "head_line"]);
+	// 名前が群に在ることも見る——在らない名前を渡すと `generatePullers(undefined)` が null で、黙って通る。
+	checkTrue("状態が2つ以上ならまだ均さない", groups.some((g) => g[0].name === "beyond") && !gen("beyond"));
 	checkTrue("式に再帰が埋まっていたら均さない", !gen("delta"));
 	// 状態が1つの器で表せない形（`walk`）はまだ均さない——カーソルが太る。
 	checkTrue("walk は含まれない", !found.some((f) => f.name === "walk"));
