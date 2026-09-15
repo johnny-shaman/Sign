@@ -159,5 +159,17 @@ check("parser.sn: 単項（7 のみ）", sexpr("expr " + "[`7`]"), "7");
 	// コメントを落とした版も同じ答えを出す（コメントは命令を出さない）。
 	check("コメント除去版も同じ解", runFile("n_queens.nocomment.sn"), [4, 2, 7, 3, 6, 8, 5, 1]);
 }
+
+// ---- Pass 3 の型の不動点は上限まで回らない ----
+//
+// 旗（「この周で書き換えた」）で回していた頃は、状態が数周で止まった後も2つの集め方が同じ欄を
+// 書き換え合って旗が立ち続け、3本とも毎回上限（定義の数 + 2）まで回っていた。値は変わらないので
+// 他の検査では見えず、ビルドの時間だけが入力に対して急に伸びる（自己ホストの規模では終わらない）。
+// parser.sn の3回目は2周期（`end_of` / `end_at`）で、位相をそろえて止まることを見る。
+for (const name of ["lexer.sn", "parser.sn", "preprocess.sn"]) {
+	const fixpointStats = [];
+	compile(fs.readFileSync(path.join(signDir, name), "utf8"), { parse: parser.parse, readImport, fixpointStats });
+	check(`${name}: 型の不動点はどの回も上限の前で止まる`, fixpointStats.length > 0 && fixpointStats.every((s) => s.rounds < s.limit), true);
+}
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

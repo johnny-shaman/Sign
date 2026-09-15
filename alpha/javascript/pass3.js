@@ -4244,6 +4244,38 @@ function childrenOf(n) {
 }
 
 // 不動点計算のために、前回付けた型注釈を消す。
+// 不動点の1周が読み書きする状態（ノードと束縛の表）を、比べられる文字列にする。次の周が読むのは
+// これだけなので（周の間に持ち越す状態はモジュールの外に置いていない）、文字列が前の周と同じなら
+// 次の周の結果も同じである。オブジェクトは初めて出会った順の番号で指し、`parent` はスコープの鎖を
+// 下から辿り直さないために飛ばす（根から全部歩くので落ちない）。欄の並びは名前順にそろえる——
+// 周の中で消して付け直した欄は挿入の順が変わるが、値は同じだからである。
+function fixpointState(nodes, env) {
+  const ids = new Map();
+  const out = [];
+  const walk = (v) => {
+    if (v === null || v === undefined) { out.push(String(v)); return; }
+    const t = typeof v;
+    if (t === "string") { out.push(JSON.stringify(v)); return; }
+    if (t !== "object") { out.push(t === "function" ? "fn" : String(v)); return; }
+    if (ids.has(v)) { out.push("@" + ids.get(v)); return; }
+    ids.set(v, ids.size);
+    if (v instanceof Map) { out.push("M{"); for (const [k, x] of v) { walk(k); out.push("="); walk(x); out.push(","); } out.push("}"); return; }
+    if (v instanceof Set) { out.push("S{"); for (const x of v) { walk(x); out.push(","); } out.push("}"); return; }
+    if (Array.isArray(v)) { out.push("["); for (const x of v) { walk(x); out.push(","); } out.push("]"); return; }
+    out.push("{");
+    for (const k of Object.keys(v).sort()) {
+      if (k === "parent") continue;
+      out.push(k, ":");
+      walk(v[k]);
+      out.push(",");
+    }
+    out.push("}");
+  };
+  walk(env);
+  walk(nodes);
+  return out.join("");
+}
+
 function clearTypeAnnotations(node) {
   if (!node || typeof node !== "object") return;
   delete node.atomType;
@@ -4414,7 +4446,8 @@ function bareIdent(n) {
  *
  * 型変数も制約ソルビングも使っていない（§1）——束を単調に上がるだけである。
  */
-function annotateAll(nodes, env, diagnostics) {
+// `fixpointStats` を渡すと、不動点を1回回すごとに `{ rounds, limit }` を積む（上限まで回っていないかを検査が見る）。
+function annotateAll(nodes, env, diagnostics, fixpointStats) {
   for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
@@ -4460,7 +4493,11 @@ function annotateAll(nodes, env, diagnostics) {
   // 1相目で仮引数の型を確定させ、返値を底へ戻して2相目を回す。2相目は最初から
   // 正しい仮引数の型で始まるので、基底ケースが決めた型がそのまま残る。
   const runFixpoint = () => {
+  let previousState = null;
+  let twoRoundsAgo = null;
+  let rounds = 0;
   for (let i = 0; i < limit; i++) {
+    rounds = i + 1;
     for (const node of nodes) clearTypeAnnotations(node);
     for (const node of nodes) annotateTypes(node, env, null);
     // 返値型と仮引数型は互いに依存する（呼び先の要求が実引数の型を決め、その型が返値を
@@ -4474,7 +4511,24 @@ function annotateAll(nodes, env, diagnostics) {
     // 型を決めているのはカーソルの側なので、同じ不動点で種を撒く。
     const d = seedCursorPullers(nodes, env);
     if (!a && !b && !c && !d) break;
+    // **旗ではなく、周の終わりの状態で止める。** 旗は「この周で書き換えた」であって「前の周と
+    // 違う」ではない。`collectParamTypes` と `collectCallsiteParamTypes` は同じ束縛の欄を
+    // 周の中で書き換え合い、元の値に戻して終わるのに、どちらも「変わった」と答える——同じ事実を
+    // 2か所で決めている形である。実測では状態が数周で止まった後も旗が立ち続け、3本の .sn の
+    // 不動点が毎回上限（定義の数 + 2）まで回っていた（preprocess.sn の2倍・3倍の入力でビルドが
+    // 28 秒・91 秒）。周の終わりの状態が前の周と同じなら、次の周も同じなのでここで止める。
+    //
+    // **2周期も見分ける。** 相互再帰の輪で、どちらの枝も自分の要素型を持たないと、互いの前の周の
+    // 値を写し合って2つの状態を行き来し続ける（parser.sn の `end_of` / `end_at` の返値の要素型が
+    // Int と Unit を入れ替える）。旗だけで回していた時は上限の周の位相で終わっていたので、同じ位相に
+    // なる周で止める——上限まで回した場合と最後の状態が同じになる。
+    const state = fixpointState(nodes, env);
+    if (state === previousState) break;
+    if (state === twoRoundsAgo && (limit - 1 - i) % 2 === 0) break;
+    twoRoundsAgo = previousState;
+    previousState = state;
   }
+  if (fixpointStats) fixpointStats.push({ rounds, limit });
   };
   // **その前に、証拠だけで一度回す。** 字面の相手から来る `Int` は既定値なので
   // （`inferParamTypesFromUsage`）、呼び出しサイトの証拠が出揃ってから埋める。

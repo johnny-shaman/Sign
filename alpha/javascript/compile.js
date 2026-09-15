@@ -57,6 +57,7 @@ function runPass1b(nodes, env) {
  *   `parser.js` は `npm run build:parser` の成果物であり、実際に一度8/4時点で
  *   止まったまま `sign.pegjs` の修正が反映されていなかったことがあるため、
  *   テストが文法ソースを直接検証する性質は保つ必要がある。
+ * @param options.fixpointStats 配列を渡すと、Pass 3 の型の不動点を回すたびに `{ rounds, limit }` を積む。
  * @returns {{ nodes, env, specializations, diagnostics }}
  *   nodes           行ごとの型注釈済みAST（各ノードに `atomType` が載る）
  *   env             Pass 1a の識別子テーブル（.ist 相当、プロセス内メモリのみ）
@@ -1179,7 +1180,7 @@ function compile(source, options = {}) {
   // 古い並びが残り、`f p` の中の `this ' foo` が隣のスロットを読む。
   // Pass 3 の型注釈と Pass 3b（`__` へ収束する経路の静的記録）は同じ走査で行う。
   const diagnostics = [];
-  annotateAll(nodes, env, diagnostics);
+  annotateAll(nodes, env, diagnostics, options.fixpointStats);
   // layer による使用可能リテラル型の門番（option_ms_schema.md §4）。型が確定した後でないと
   // 判定できないのでここに置く。`options.layer` を渡さなければ検査しない——`option.ms` を
   // 読まない経路（テスト・playground の素の評価）まで std 相当を強制しないためである。
