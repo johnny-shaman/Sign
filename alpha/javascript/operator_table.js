@@ -529,6 +529,8 @@ export function buildLexerRegex() {
   // グループ番号が1つずれてしまい、operator側が常にundefinedになる（strictInfixによる
   // 演算子前後への自動スペース挿入が事実上一切機能しなくなる）バグがあった。
   // 非捕捉グループ `(?:...)` に変更して解消。
-  const regexStr = `(\`[^\`\\r\\n]*\`|\`[^\\r\\n]*|"(?:\\\\.|[^"\\r\\n])*"|\\\\.|!!)|(${infixPattern})`;
+  // 文字リテラルの `\` は直後の1文字を取る——文字の改行（LF）も含めて（preprocessor.md §0）。`.` は LF を
+  // 取らないので、`\` + LF の組が守られず、`\` だけが残っていた。
+  const regexStr = `(\`[^\`\\r\\n]*\`|\`[^\\r\\n]*|"(?:\\\\.|[^"\\r\\n])*"|\\\\[\\s\\S]|!!)|(${infixPattern})`;
   return new RegExp(regexStr, 'g');
 }

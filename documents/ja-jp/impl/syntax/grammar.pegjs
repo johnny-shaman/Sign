@@ -13,8 +13,11 @@ Start = Program
 __ = " "+ { return null; } / &"\x02" { return null; } // coproduct operator（演算子直後に空白なしでインデントブロックが続くケースを先読みで許容（\x02自体は消費しない、Block側が消費する）
 _  = " "* { return null; } // optional (used only at line edges)
 _e = (" " / EOL)* { return null; } // ブロックの縁（`[` の直後・`]` の直前）。ここだけ EOL を許す
-SOL = &{ return location().start.column === 1; }
-EOL = "\r\n" / "\r" / "\n"
+// **行の区切りは CR だけである**（preprocessor.md §0）。前処理の最初の走査が、`\` の直後の改行を LF
+// （文字の改行）に、それ以外を CR（処理の区切り）に分けて渡す。LF は `charactor` が `\` と組んで取る。
+// 行頭も物理的な列ではなく「ファイルの先頭か、直前が CR」である。
+SOL = &{ const o = location().start.offset; return o === 0 || input[o - 1] === "\r"; }
+EOL = "\r"
 EOF = !.
 
 // string_and_comment.md §2「先読みルール」: **行頭のバッククォートは、閉じの直後が
@@ -137,7 +140,8 @@ Atom
   = string / charactor / address / register / unicode / number / identifier / unit / hole
 
 string = $("`" [^`\r\n]* "`")
-charactor = $("\\".)
+// `\` の直後の1文字。CR は処理の区切りであって文字ではないので取らない（preprocessor.md §0）。
+charactor = $("\\" [^\r])
 number = $("-"? [0-9]+ "."? [0-9]*)
 address = $([0-9]+ "x" Hex+)
 register = $("0r" Hex+) / $("0b" ("0" / "1")+)

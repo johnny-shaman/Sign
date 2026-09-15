@@ -36,6 +36,95 @@ export function separateInfix(input) {
   });
 }
 
+/**
+ * **改行を2つの役割に分ける（最初の走査）**（preprocessor.md §0、利用者の決定 2026-09-15）。
+ *
+ * 改行には、処理の区切り（その行を評価してよい、という演算子）と、文字としての改行（`\` の直後の1文字）の
+ * 2つの役割がある。同じバイトに両方を担わせていたので、後の段が文脈から推測していた——`\` + 改行の次が
+ * 0列目だと区切りにもなって値が黙って変わり、次の行へつなぐ処理は LF を空白に替え、行頭の空白を許すかは
+ * 生のテキストから推測していた（`prevEndsWithEscape`）。
+ *
+ * だから最初に一度だけ左から走査して、ディスク上の CRLF・LF・CR を次のように分ける：
+ *
+ *   `\` の直後の改行   → LF（U+000A、文字の改行。`\` と組んで1つの文字リテラル）
+ *   それ以外の改行     → CR（U+000D、処理の区切り）
+ *
+ * 文字列（`` `…` ``・`"…"`）の中は素通しにする——そこでの `\` はただの文字なので、改行を LF に変えない。
+ *
+ * **行頭のコメントはこの走査で判別し、読み捨てる。** 後の段は判別し直さない。判別は生のテキストの上で
+ * string_and_comment.md §2 のとおり（閉じの直後が後置演算子か空白なら式、それ以外はコメント）で、行頭は
+ * 「直前が CR か、ファイルの先頭」、しかも括弧の外で TAB の後ではない所だけである（§3、文法が `comment` を
+ * 試すのもそこだけ）。以前は判別を文法にも任せていたので、文法は separateInfix が空白を入れた後のテキストで、
+ * 括弧やブロックの中では試さずに判別し直し、2つの段の答えが食い違うと `\` が CR を文字として食った。
+ *
+ * **`\` + 改行の後の TAB も、ここで落とす。** 括弧の中ならすべて、括弧の外なら処理行の頭の TAB の数（今の
+ * ブロックの深さ）まで。括弧の深さは `\` + 改行の位置で見る——処理行の頭で1回だけ見ると、同じ行で開いた
+ * 括弧の中の TAB が残って構文エラーになり、閉じた後の TAB は黙って消えていた。括弧の数え方は markBlock の
+ * `bracketDelta` と同じ（文字列と `\` の組は数えない）。
+ */
+export function classifyNewlines(input) {
+  const n = input.length;
+  const newlineWidth = (k) => (input[k] === '\r' ? (input[k + 1] === '\n' ? 2 : 1) : input[k] === '\n' ? 1 : 0);
+  let out = '';
+  let i = 0;
+  let lineStart = true;
+  let bracketDepth = 0;
+  let lineTabs = 0;
+  while (i < n) {
+    if (lineStart) {
+      lineStart = false;
+      if (bracketDepth <= 0 && input[i] === '`' && isCommentAt(input, i)) {
+        while (i < n && !newlineWidth(i)) i++;
+        continue;
+      }
+      lineTabs = 0;
+      while (input[i + lineTabs] === '\t') lineTabs++;
+    }
+    const w = newlineWidth(i);
+    if (w) {
+      out += '\r';
+      i += w;
+      lineStart = true;
+      continue;
+    }
+    const ch = input[i];
+    if (ch === '\\') {
+      const w2 = i + 1 < n ? newlineWidth(i + 1) : 0;
+      if (w2) {
+        out += '\\\n';
+        i += 1 + w2;
+        for (let drop = bracketDepth > 0 ? Infinity : lineTabs; drop > 0 && input[i] === '\t'; drop--) i++;
+      } else {
+        out += input.slice(i, i + 2);
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === '`' || ch === '"') {
+      let k = i + 1;
+      while (k < n && input[k] !== ch && !newlineWidth(k)) k += ch === '"' && input[k] === '\\' && k + 1 < n && !newlineWidth(k + 1) ? 2 : 1;
+      if (input[k] === ch) k++;
+      out += input.slice(i, k);
+      i = k;
+      continue;
+    }
+    if (ch === '[' || ch === '(' || ch === '{') bracketDepth++;
+    else if (ch === ']' || ch === ')' || ch === '}') bracketDepth--;
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+// 行頭のバッククォートがコメントの始まりか（sign.pegjs の `comment` と同じ判別）。
+function isCommentAt(input, j) {
+  let k = j + 1;
+  while (k < input.length && input[k] !== '`' && input[k] !== '\r' && input[k] !== '\n') k++;
+  if (input[k] !== '`') return true;
+  const after = input[k + 1];
+  return !(after === '@' || after === '~' || after === '!' || after === ' ');
+}
+
 // 1行ぶんのコンテンツを見て、ブラケット（[ ( {）の開閉深さの増減を計算する。
 // 文字列（バッククォート・ダブルクォート）やエスケープ文字の中身は、カッコとして
 // 数えないよう読み飛ばす（例: `array[3]` という文字列リテラルの中の`[`は無視する）。
@@ -63,9 +152,10 @@ function bracketDelta(content) {
   return depth;
 }
 
-// Indent・Dedentのマーキング関数
+// Indent・Dedentのマーキング関数。**入力は `classifyNewlines` を通したもの**で、処理行は CR で切る。
+// 行の中の LF は `\` と組んだ文字の改行であり、行の区切りではない（preprocessor.md §0）。
 function markBlock(input) {
-  const lines = input.split(/\r?\n/);
+  const lines = input.split('\r');
   const indentStack = [0];
   let result = [];
   let lastContentLineIdx = -1;
@@ -76,42 +166,38 @@ function markBlock(input) {
   // 二重に差し込まれてパースが壊れる。他の多くの言語のオフサイドルールと同様、
   // ブラケットの中では改行・インデントの意味を一時的に無効化することでこれを防ぐ。
   let bracketDepth = 0;
-  // **行頭のスペースが許されるのは、それが余積演算子であるときだけである。**
-  // 直前の行が文字リテラルの `\` で終わっていれば、`\` は改行そのものを1バイトとして
-  // 食っている（operator_table.md 特殊記号「直後の1文字を文字として扱う」）。すると
-  // 次の行の行頭スペースは字下げではなく、その文字と右辺を繋ぐ**余積**である
-  // （同 基本原則「全ての空白を余積演算子と見なせる」）。落とすと右辺が宙に浮き、
-  // 値が黙って変わる。それ以外の行頭スペースは空白インデントであり、
-  // match_case.md「TABのみ・空白インデントはNG」により受け付けない。
+  // **処理行の頭にスペースは来ない。** 文字の改行（`\` + 改行）の後の行は同じ処理行の続きなので、
+  // そこのスペースは行の中の余積であって、処理行の頭ではない（preprocessor.md §0）。だから処理行の頭の
+  // スペースはいつも空白インデントであり、match_case.md「TABのみ・空白インデントはNG」により受け付けない。
   //
-  // かつてここは「スペース1個までは黙って無視、2個以上はエラー」という閾値だった。
-  // 1個を許していたのは上の余積を通すためだが、閾値は仕様のどこにも無く、
-  // ついでに ` ?`（行頭スペース＋?）という仕様に無い仮引数ブロックの綴りも通していた。
-  let prevEndsWithEscape = false;
+  // かつてはここで「直前の行が `\` で終わっていれば許す」を生のテキストから推測していた
+  // （`prevEndsWithEscape`）。改行が1種類の符号だったからで、コメント行の末尾の `\`・空行・括弧の中で
+  // 漏れ、漏れたスペースは文法の `_` が黙って削っていた。
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // 空行や空白のみの行はそのまま追加し、インデントの深さ計算から除外
-    if (line.trim() === '') {
-      result.push(line);
+    // **空の処理行は読み捨てる**（preprocessor.md §0）。ブロックや括弧の中の空行も同じで、残すと
+    // 行の区切りが2つ続いて構文が壊れていた。空とは TAB と空白しか無い行である——trim() だと
+    // U+3000 や NBSP だけの行まで黙って食っていた。
+    if (/^[\t ]*$/.test(line)) {
       continue;
     }
 
     // Sign言語の仕様により、インデントは厳密に \t のみを使用する
     const leadingWsMatch = line.match(/^\t*/);
     const leadingWs = leadingWsMatch ? leadingWsMatch[0] : '';
+    // 文字の改行（`\` + LF）の後の TAB は classifyNewlines が落とし済み（preprocessor.md §0）。
     const content = line.substring(leadingWs.length);
 
     // ブラケット内（bracketDepth>0）ではインデント自体が意味を持たない（整形用の空白は
-    // 無害）ため対象外。判定の根拠は上の `prevEndsWithEscape` の説明を参照。
-    if (bracketDepth === 0 && content.startsWith(' ') && !prevEndsWithEscape) {
+    // 無害）ため対象外。判定の根拠は上の注記を参照。
+    if (bracketDepth === 0 && content.startsWith(' ')) {
       throw new SyntaxError(
-        `Signのインデントは厳密にタブ文字(\\t)のみです。行頭のスペースが許されるのは、` +
-          `直前の行が文字リテラルの \\ で終わっていて、そのスペースが余積演算子である場合だけです: ${JSON.stringify(line)}`
+        `Signのインデントは厳密にタブ文字(\\t)のみです。行の続きをスペースで始めたいなら、` +
+          `前の行を \\ + 改行（文字の改行）で終えてください: ${JSON.stringify(line)}`
       );
     }
-    prevEndsWithEscape = /(^|[^\\])(\\\\)*\\$/.test(line);
 
     if (bracketDepth > 0) {
       // **ブラケットの中ではタブ深さを INDENT/DEDENT に翻訳しない。** 見やすさのために
@@ -178,11 +264,11 @@ function markBlock(input) {
     }
   }
 
-  return result.join('\n');
+  return result.join('\r');
 }
 
 export function preprocess(input) {
   return separateInfix(
-    markBlock(input)
+    markBlock(classifyNewlines(input))
   );
 }

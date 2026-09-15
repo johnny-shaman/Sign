@@ -166,6 +166,8 @@ text  : `Line 1` \
 
 Note: In Sign, there is no need for traditional escape sequences. Any character immediately following `\` is treated literally as a character.
 
+The value of `text` is `"Line 1\nLine 2"`. A newline right after `\` is a character newline (LF), not a processing boundary, so the next line continues the same processing line, and its leading space is the coproduct joining the newline character to `` `Line 2` `` ([`preprocessor.md`](../impl/build/preprocessor.md) section 0). Starting the continuation at column 0 with no space puts a character and a string next to each other, which is a syntax error. Previously that position was also read as a processing boundary, and `` `Line 2` `` silently became a comment.
+
 ---
 
 ## 6. Relationship with Unicode
@@ -184,7 +186,7 @@ h : `hello` ' 0   ` → \h (0u48)
 
 ## 7. Grammar Specification (Compiler Notes)
 
-- Comment lines may be stripped at the lexing stage (a comment returns the equivalent of Unit).
+- Comment lines may be stripped at the lexing stage (a comment returns the equivalent of Unit). The alpha preprocessor decides and strips them in its first pass, and the grammar never decides again ([`preprocessor.md`](../impl/build/preprocessor.md) section 0). With the decision in two places, the preprocessor looked at raw text while the grammar looked at text with spaces already inserted around infix operators, and the two disagreed.
 - Syntax highlighters and language servers should color **a backtick at SOL whose closer is followed by neither a postfix operator (`@` `~` `!`) nor a space** as a comment.
 - PEG decides this with a **negative lookahead**. Excluding the backtick itself from the scanned character class is the load-bearing part: PEG's `*` does not backtrack, so without the exclusion the scan eats to end-of-line and cannot find a closer that is sitting right there.
 - **The same rule is written down in seven places. Fix them together:**

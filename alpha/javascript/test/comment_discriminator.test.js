@@ -65,7 +65,8 @@ for (const [label, file] of Object.entries(grammars)) {
 		let got;
 		// コメントなら Program は空リストを返す（comment は null を返し、最後に濾される）。
 		// 式なら1つ以上の Term 列が残る。構文エラーは「式として読もうとした」ことを意味する。
-		try { got = parser.parse(src + "\n").length === 0 ? "コメント" : "式"; }
+		// 行の区切りは CR（preprocessor.md §0）。前処理を通さず文法へ直接渡すので、区切りも CR で書く。
+		try { got = parser.parse(src + "\r").length === 0 ? "コメント" : "式"; }
 		catch { got = "式"; }
 		check(label + ": " + name, got, want);
 	}

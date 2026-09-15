@@ -45,7 +45,7 @@ PEG が直接規定する source-level の集合を次のように記す。
 ```text
 IdSrc       = { ASCII identifier が grammar.pegjs の identifier 規則に一致するもの }
 StrLit      = { `s` | s に backquote・改行を含まない }
-CharLit     = { \c | c ∈ Char }
+CharLit     = { \c | c ∈ Char ∖ {CR} }
 NumLit      = { -? d+ .? d* | d ∈ {0,…,9} }
 AddrLit     = { 0x h+ | h ∈ Hex }
 RegLit      = { 0r h+ } ∪ { 0b b+ | b ∈ {0,1} }
@@ -55,6 +55,8 @@ HoleLit     = { _ }
 Lit         = StrLit ⊎ CharLit ⊎ NumLit ⊎ AddrLit ⊎ RegLit ⊎ UnicodeLit ⊎ UnitLit
 AtomSrc     = Lit ⊎ IdSrc ⊎ HoleLit
 ```
+
+PEG の集合は、前処理の最初の走査を通した後のテキストの上で読む。その走査はディスク上の改行を、`\` の直後なら LF（文字の改行）に、それ以外は CR（処理の区切り）に分け、行頭のコメントを読み捨てる（`impl/build/preprocessor.md` §0）。だから `\` + 改行は `\` + LF の `CharLit` であり、CR は `CharLit` の c に入らない。
 
 ここで `HoleLit` は PEG の `Atom` に現れるが、実行時の値ではない。`_` は静的脱糖の対象であり、`__` は実行時に流通する Unit である。この区別は既存の Unit 仕様でも明示されている。[2] [3]
 

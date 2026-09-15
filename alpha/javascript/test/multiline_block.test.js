@@ -28,10 +28,10 @@ function show(node) {
 	return JSON.stringify(node);
 }
 
-// (1 + 2\n3 * 4) という、括弧内に改行区切りで2文ある入力
-// lexer.jsのpreprocess()を通さず直接生の\nを使う（markBlockはこの内部改行に
-// インデントマーカーを挿入しないため、素の改行のままでよい）
-const source = "(1 + 2\n3 * 4)";
+// (1 + 2↵3 * 4) という、括弧内に改行区切りで2文ある入力
+// lexer.jsのpreprocess()を通さず直接渡す。行の区切りは CR である（preprocessor.md §0——
+// 前処理の最初の走査が処理の改行を CR にする。LF は `\` と組んだ文字の改行）
+const source = "(1 + 2\r3 * 4)";
 const want = "paren{add[number(1), number(2)]; mul[number(3), number(4)]}";
 
 const ast = parser.parse(source);

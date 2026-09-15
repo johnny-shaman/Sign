@@ -112,6 +112,39 @@ same("括弧でも同じ", "f : (\n\ta\n\tb\n)");
 same("行頭の中置演算子は前の行へ繋ぐ", "x\n+ 1");
 same("インデントの中でも繋ぐ", "f : x ?\n\tx\n\t+ 1");
 
+// ---- 改行の2つの役割（preprocessor.md §0） ----
+//
+// 最初の走査で、エスケープの直後の改行を LF（文字の改行）に、それ以外を CR（処理の区切り）に分ける。
+// 以前は両方の前処理が同じように間違っていた（一致だけでは見えない）ので、ここは形も並べる。
+same("CRLF をそろえずに通す", "a : 1\r\nb : 2\r\na + b");
+same("裸の CR も改行1個", "a : 1\rb : 2");
+same("文字の改行の後の空白は余積", "t : `L1` \\\n `L2`");
+same("CRLF の文字の改行も LF 1個", "t : `L1` \\\r\n `L2`");
+same("文字の改行の次の行は同じ処理行（行頭の + でもつながない）", "a : \\\n+ 1");
+same("ブロックの中の続きは深さぶんの TAB を落とす", "f : x ?\n\tx = 1 : `a` \\\n\t `b`\n\t`c`");
+same("コメント行の末尾のエスケープは改行を食わない", "`note \\\na : 5");
+same("ブロックの中の空行は読み捨てる", "f : x ?\n\tx = 1 : 10\n\n\t20");
+same("文字列の中のエスケープの記号はただの文字", "s : `a\\`\nb");
+
+// 行頭のコメントは最初の走査が判別して読み捨てる。**括弧の中と TAB の後はコメントにならない**——文法が
+// `comment` を試さない場所で最初の走査だけがコメントと見ると、`\` + 改行が CR のまま文字に食われていた。
+// 両方の前処理が同じように間違っていたので、ここはパースできることも確かめる。
+function sameParsed(note, input) {
+	same(note, input);
+	const js = astOf(preprocess(input));
+	check(`${note}: パースできる`, !js.startsWith("PARSE_FAIL"), `     js: ${js}`);
+}
+sameParsed("括弧の中の TAB の後の文字列はコメントにならない", "xs : [\n\t`a`, `b` \\\n\t `c`\n]");
+sameParsed("括弧の中は0列目でもコメントにならない", "xs : [(\n`a`) , \\\n `b`\n]");
+sameParsed("ブロックの中の文字列はコメントにならない", "f : x ?\n\t`abc`'0 = x : `y` \\\n\t `z`\n\t0");
+sameParsed("同じ処理行で開いた括弧の中の続きは TAB をすべて落とす", "msg : [`Line 1` \\\n\t `Line 2`]");
+same("括弧が閉じた後の続きはブロックの深さまでしか落とさない", "a : [1\n2] \\\n\t\t\t 3");
+sameParsed("行頭のコメントは生のテキストで判別する", "x : 5\n`a`,`b`\nx");
+sameParsed("行頭のコメントの末尾の \\ は後の段が判別し直さない", "x : 5\n`a`,\\\n");
+sameParsed("コメント行の次の字下げは前のコードの行へ付く", "f : x ?\n`note\n\tx + 1");
+sameParsed("空白だけの行は空の行", "a\n  \nb");
+sameParsed("ブロックの中の空白だけの行も空の行", "f : x ?\n\tx = 1 : 10\n \t \n\t20");
+
 // ---- 実ファイルを一巡させる ----
 //
 // 合成した例ではなく、実際に書かれている Sign のコード全体で一致すること。
@@ -123,7 +156,9 @@ for (const rel of [
 	["sign", "preprocess.sn"],
 ]) {
 	const p = path.join(__dirname, "..", "..", ...rel);
-	const text = fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
+	// **改行はそろえずに渡す。** 以前はここで CRLF を LF に直してから渡していて、preprocess.sn が CRLF を
+	// 読めないことを隠していた（CR が行に残ってパースに落ちる）。改行を分けるのは前処理の仕事である。
+	const text = fs.readFileSync(p, "utf8");
 	const lines = text.split("\n").length;
 	const sn = runSn(text);
 	const js = preprocess(text);

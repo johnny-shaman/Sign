@@ -207,7 +207,7 @@ Signは4バイトUTF-8で補助面を直接表現するためサロゲート機�
 
 - `0x00`（NUL）— Unicode niche（U+0000）とは別に、Byte型文脈でも同様の位置づけになりうる
 - `0x02`/`0x03`（STX/ETX）— 既にIndent/Dedentマーカーとして使用中
-- `0x09`/`0x0A`/`0x0D`（TAB/LF/CR）— 空白・改行として意味を持つため除外
+- `0x09`/`0x0A`/`0x0D`（TAB/LF/CR）— 空白・改行として意味を持つため除外。前処理の内部では CR が処理の区切り、LF が文字の改行を担う（preprocessor.md §0）
 - **`0x1C`〜`0x1F`（FS/GS/RS/US: File/Group/Record/Unit Separator）** — ASCII規格が制定時点から
   「階層的なデータ区切り」のために予約していた4つ。Signが今`\x02`/`\x03`でやっている
   インデント区切りと完全に同じ発想がASCII制定時点で既に標準化されていたことになる

@@ -7,12 +7,18 @@
 `出力はトークン列ではなく文字列である。トークンへの分割は後段のパーサが空白で行う`
 
 `--- 文字定数 ---`
-`文字リテラルは直後の1バイトをそのまま取る。末尾に何も無い行が改行文字にあたる`
+`文字リテラルは直後の1文字をそのまま取る`
+``
+`改行は2つの符号に分ける（preprocessor.md 0節）。処理の区切りは CR、文字の改行は LF である。`
+`どちらも名前で書く——末尾に何も無い行で改行を書くと、その改行は文字の改行になって、`
+`次の行が同じ処理行の続きになる`
 
 space : \ 
 tab : \	
-newline : \
+cr : 0u000D
+lf : 0u000A
 quote : \`
+dquote : \"
 escape : \\
 indent : \
 dedent : \
@@ -51,7 +57,7 @@ sep : [c ~rest] ?
 
 in_quote : [c ~rest] ?
 	c = quote : c (sep rest)
-	c = newline : c (sep rest)
+	c = cr : c (sep rest)
 	c (in_quote rest)
 
 `--- 継続行の判定 ---`
@@ -171,15 +177,22 @@ body_of : [c ~rest] ?
 	c = tab : body_of rest
 	c rest
 
-`最初の改行まで、および最初の改行より後ろ`
+`最初の処理の区切り（CR）まで、およびそれより後ろ。行の中の LF は文字の改行なので切らない`
 
 head_line : [c ~rest] ?
-	c = newline : __
+	c = cr : __
 	c (head_line rest)
 
 tail_line : [c ~rest] ?
-	c = newline : rest
+	c = cr : rest
 	tail_line rest
+
+`タブと空白しか無い行は空の行である`
+
+blank : [c ~rest] ?
+	c = tab : blank rest
+	c = space : blank rest
+	c rest
 
 `深さ d より深い段を閉じる。閉じた後のスタックと、その段数ぶんの DEDENT`
 
@@ -200,7 +213,7 @@ close_all : [~st] ?
 
 gap : [~st] d ?
 	d > (top st) : indent
-	(closers st d) newline
+	(closers st d) cr
 
 next_st : [~st] d ?
 	d > (top st) : push st d
@@ -229,12 +242,12 @@ walk :
 		bd
 		line : head_line s
 		rest : tail_line s
-		b : body_of line
 		d : depth_of line
+		b : body_of line
 		nd : bd + (delta b)
 	?
-		!b : (walk rest st bd) | (close_all st)
-		bd > 0 : newline b ((walk rest st nd) | (close_all st))
+		!(blank b) : (walk rest st bd) | (close_all st)
+		bd > 0 : cr b ((walk rest st nd) | (close_all st))
 		continues b : (closers st d) space b ((walk rest (unwind st d) nd) | (close_all (unwind st d)))
 		(gap st d) b ((walk rest (next_st st d) nd) | (close_all (next_st st d)))
 
@@ -242,14 +255,92 @@ walk :
 `先頭行がインデントされている場合は区切りが INDENT になるので、その時は取らない`
 
 strip_head : [c ~rest] ?
-	c = newline : rest
+	c = cr : rest
 	c rest
 
+`--- 0. 改行を2つの役割に分ける（最初の走査、preprocessor.md 0節） ---`
+`ディスク上の CRLF・LF・CR を、エスケープの直後なら LF 1個（文字の改行）に、それ以外は CR 1個（処理の区切り）にする`
+`文字列の中は素通しにする——そこでのエスケープの記号はただの文字である`
+`行頭のコメントはここで判別して読み捨てる。後の段は判別し直さない`
+`bd は括弧の深さ、t は処理行の頭のタブの数（今のブロックの深さ）`
+
+`CR の直後の LF を落とす（CRLF を改行1個に数える）`
+
+skip_lf : [c ~rest] ?
+	c = lf : rest
+	c rest
+
+`行頭は直前が CR か入力の先頭。括弧の外で、行頭のバッククォートの閉じの直後が後置演算子か空白でなければ`
+`コメントなので行末まで読み捨てる。括弧の中とタブの後はコメントにならない（string_and_comment.md 3節）`
+
+at_line : s bd ?
+	bd > 0 : body_cls s bd (depth_of s)
+	((s ' 0) = quote) & !(quote_expr (s ' 1~)) : drop_line s bd
+	body_cls s bd (depth_of s)
+
+`開きの直後から読み、閉じの直後の1文字を返す（式なら真、コメントなら __）`
+
+quote_expr : [c ~rest] ?
+	c = quote : after_close (rest ' 0)
+	c = cr : __
+	c = lf : __
+	quote_expr rest
+
+after_close : ch ?
+	ch = \@ : ch
+	ch = \~ : ch
+	ch = bang : ch
+	ch = space : ch
+	__
+
+`コメントの行。行末まで読み捨て、区切りの CR だけを残す（空の処理行は walk が落とす）`
+
+drop_line : [c ~rest] bd ?
+	c = cr : cr (at_line (skip_lf rest) bd)
+	c = lf : cr (at_line rest bd)
+	drop_line rest bd
+
+body_cls : [c ~rest] bd t ?
+	c = cr : cr (at_line (skip_lf rest) bd)
+	c = lf : cr (at_line rest bd)
+	c = escape : escape (esc_cls rest bd t)
+	c = quote : c (str_cls rest bd t)
+	c = dquote : c (dstr_cls rest bd t)
+	open_br c : c (body_cls rest (bd + 1) t)
+	close_br c : c (body_cls rest (bd - 1) t)
+	c (body_cls rest bd t)
+
+`エスケープの直後。改行なら LF 1個にして、その後のタブを落とす——その位置が括弧の中ならすべて、外なら t まで`
+`（ブロックの深さぶんは字下げで、その後の空白が余積になる）。それ以外はその1文字`
+`入力の末尾ならエスケープの記号だけが残る`
+
+esc_cls : [c ~rest] bd t ?
+	c = cr : lf (body_cls (drop_tabs (skip_lf rest) (bd > 0 & 255 | t)) bd t)
+	c = lf : lf (body_cls (drop_tabs rest (bd > 0 & 255 | t)) bd t)
+	c (body_cls rest bd t)
+
+drop_tabs : [c ~rest] n ?
+	(c = tab) & (n > 0) : drop_tabs rest (n - 1)
+	c rest
+
+str_cls : [c ~rest] bd t ?
+	c = quote : c (body_cls rest bd t)
+	c = cr : cr (at_line (skip_lf rest) bd)
+	c = lf : cr (at_line rest bd)
+	c (str_cls rest bd t)
+
+dstr_cls : [c ~rest] bd t ?
+	c = dquote : c (body_cls rest bd t)
+	c = cr : cr (at_line (skip_lf rest) bd)
+	c = lf : cr (at_line rest bd)
+	(c = escape) & !((rest ' 0) = cr) & !((rest ' 0) = lf) : c (rest ' 0) (dstr_cls (rest ' 1~) bd t)
+	c (dstr_cls rest bd t)
+
 `--- 前処理の全体 ---`
-`インデントを先に確定させてから、演算子の空白を入れる`
+`改行の役割を先に分け、インデントを確定させてから、演算子の空白を入れる`
 `スタックの底の 0 はここで積む——空にならないので unwind が必ず止まる`
 
-preprocess : s ? sep (strip_head (walk s 0 0))
+preprocess : s ? sep (strip_head (walk (at_line s 0) 0 0))
 
 `実行例`
 

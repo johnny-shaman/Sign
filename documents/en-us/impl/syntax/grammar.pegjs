@@ -13,8 +13,13 @@ Start = Program
 __ = " "+ { return null; } / &"\x02" { return null; } // coproduct operator (the lookahead admits an indented block that follows an operator with no space between; \x02 itself is not consumed -- Block consumes it)
 _  = " "* { return null; } // optional (used only at line edges)
 _e = (" " / EOL)* { return null; } // the edge of a block (right after `[`, right before `]`). Only here is EOL allowed
-SOL = &{ return location().start.column === 1; }
-EOL = "\r\n" / "\r" / "\n"
+// **The only line boundary is CR** (preprocessor.md section 0). The preprocessor's
+// first pass hands over a newline right after `\` as LF (a character newline) and
+// every other newline as CR (the processing boundary). LF is taken by `charactor`
+// together with its `\`. Start of line is likewise not a physical column but "start
+// of file, or right after a CR".
+SOL = &{ const o = location().start.offset; return o === 0 || input[o - 1] === "\r"; }
+EOL = "\r"
 EOF = !.
 
 // string_and_comment.md section 2, "lookahead rule": **a backtick at the start of
@@ -146,7 +151,9 @@ Atom
   = string / charactor / address / register / unicode / number / identifier / unit / hole
 
 string = $("`" [^`\r\n]* "`")
-charactor = $("\\".)
+// The one character after `\`. CR is never taken: CR is the processing boundary,
+// not a character (preprocessor.md section 0).
+charactor = $("\\" [^\r])
 number = $("-"? [0-9]+ "."? [0-9]*)
 address = $([0-9]+ "x" Hex+)
 register = $("0r" Hex+) / $("0b" ("0" / "1")+)
