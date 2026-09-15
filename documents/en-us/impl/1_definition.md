@@ -19,7 +19,7 @@
 
 1. The grammar consists exclusively of **Expressions**.
 2. Expressions are constructed from Literals, Identifiers, and Operators.
-3. Expression boundaries are defined by newlines.
+3. Expression boundaries are defined by newlines, except that a line starting with a space or one of the infix operators listed in section 0 continues the previous one ([`preprocessor.md`](build/preprocessor.md) section 0).
 4. Groupings of expressions form **Blocks**:
    1. The start of a block is delimited by increasing the indentation level.
    2. All expressions within a block must share identical indentation depth.

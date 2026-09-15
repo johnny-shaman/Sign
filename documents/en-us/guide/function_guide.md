@@ -39,9 +39,9 @@ Placing a newline and indented block to the right of `?` turns the `:` operators
 
 ```sign
 f : x y ?
-    x > 3 : x - y
-    y < 3 : x + y
-    x y
+	x > 3 : x - y
+	y < 3 : x + y
+	x y
 ```
 
 ### Default Arguments (Local Variable Emulation)
@@ -50,11 +50,11 @@ Placing an indented block to the left of `?` turns the `:` operators into defaul
 
 ```sign
 f :
-    x
-    y : x + 1
-    z : y + 1
-    ~rest
-  ? x y z rest~
+		x
+		y : x + 1
+		z : y + 1
+		~rest
+	? x y z rest~
 ```
 
 > [!IMPORTANT]
@@ -67,13 +67,13 @@ f :
 > ```sign
 > ` ❌ Prohibited: IO in default argument block
 > f :
->     x : @some_ptr   ` ← Compile Error
->   ? x
+> 		x : @some_ptr   ` ← Compile Error
+> 	? x
 >
 > ` ✅ Correct: Place IO inside the body
 > f :
->     x
->   ? @some_ptr
+> 		x
+> 	? @some_ptr
 > ```
 
 ### Combining Default Arguments and `match_case`
@@ -82,13 +82,14 @@ Default argument blocks and `match_case` clauses can co-exist within the same fu
 
 ```sign
 f :
-    x
-    y : x + 1
-    z : y + 1
-    ~rest
-  ? x > 3 : x - y rest~
-    y < 3 : x + y rest~
-    z rest~
+		x
+		y : x + 1
+		z : y + 1
+		~rest
+	?
+		x > 3 : x - y rest~
+		y < 3 : x + y rest~
+		z rest~
 ```
 
 ## Function Application Behavior
@@ -101,10 +102,10 @@ f : [+] _ _ 3 4 5  ` Equivalent to $p0 $p1 ? [+] $p0 $p1 3 4 5
 f 1 2              ` Result: 15
 
 g :
-    x
-    y : x + 1
-    z : y + 1
-  ? x y z
+		x
+		y : x + 1
+		z : y + 1
+	? x y z
 
 ` g has default arguments, which are excluded from required arity calculations.
 ` Providing positional arguments for non-default parameters automatically triggers evaluation.
@@ -116,7 +117,7 @@ f (3 < 2) 1   ` 3 < 2 yields __, turning f into f __ 1, collapsing result to __
 
 ` Passing __ into a parameter with a default value triggers fallback to the default expression.
 g 1 (3 < 2)   ` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
-              ` Result: 1 2 3
+` Result: 1 2 3
 
 ` Behavior when passing __ to rest parameters (~rest):
 ` Rest parameters behave identically to default parameters.
@@ -141,14 +142,14 @@ sum_list [1 2 3 4 5]  ` Result: 15
 
 ` Coexistence with default parameters and match_case
 func_mixed :
-    [
-      x
-      y : x + 1
-      ~z
-    ]
-  ?
-    x > 3 : x - y
-    y
+		[
+			x
+			y : x + 1
+			~z
+		]
+	?
+		x > 3 : x - y
+		y
 
 func_mixed [5]      ` Result: -1 (x=5, y=6. Since x > 3, evaluates 5 - 6 = -1)
 func_mixed [2]      ` Result: 3  (x=2, y=3. Since x > 3 is __, returns y)
@@ -165,23 +166,23 @@ calc_diff : [foo bar ~obj] ? foo - bar
 
 ` Pass struct directly with matching field names
 calc_diff [
-  bar : 20
-  foo : 100
+	bar : 20
+	foo : 100
 ]
 ` Result: 80 (foo = 100, bar = 20 bind automatically by name)
 
 func_mixed :
-    [
-      foo
-      bar : foo * 2
-      ~obj
-    ]
-  ?
-    foo > 3 : foo - bar
-    bar
+		[
+			foo
+			bar : foo * 2
+			~obj
+		]
+	?
+		foo > 3 : foo - bar
+		bar
 
 func_mixed [
-  foo : 4
+	foo : 4
 ]
 ` Result: 8 (foo = 4, bar = 8. Since foo > 3 is True, evaluates foo - bar)
 ```

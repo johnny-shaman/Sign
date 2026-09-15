@@ -191,14 +191,14 @@ check("器が並ぶ形は均さない", streams("f : [c ~rest] ?\n\tc = `;` : c 
 	// ので群が閉じない。
 	// `sep` の枝が並べる3文字は**入力のその3文字**なので切り出し1つで書ける。均せるように
 	// なったので `in_quote` の群も閉じる（枝が `sep` へ移れる）。
-	// 改行を2つの役割に分ける最初の走査（preprocessor.md §0）の関数も並ぶ。その走査は括弧の深さと行頭の TAB の
-	// 数を持ち回るので、`body_cls` / `str_cls` / `dstr_cls` は枝によって次の状態の形が違い（行頭の判別 `at_line` へは
-	// 2つ、自分たちへは3つ）、ストリームではない。`drop_line` と `esc_cls` は形がそろうので並ぶが、枝が
-	// ストリームでない関数へ移るので群は閉じない。閉じるのは `drop_tabs`。
-	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["close_all", "closers", "delta", "drop_line", "drop_tabs", "esc_cls", "head_line", "in_quote", "sep", "unwind"]);
+	// 改行を2つの役割に分ける最初の走査（preprocessor.md §0）の関数も並ぶ。その走査は括弧の深さだけを持ち回るので
+	// 次の状態の形がそろい（行頭の判別 `at_line` へも自分たちへも2つ）、`body_cls` / `str_cls` / `dstr_cls` /
+	// `esc_cls` / `drop_line` はストリームになる。ただし枝がストリームでない `at_line` へ移るので群は閉じない。
+	// （`\` + 改行の後の TAB を落とす `skip_tabs` は、並べる要素の無い末尾呼び出しなので列ではない。）
+	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["body_cls", "close_all", "closers", "delta", "drop_line", "dstr_cls", "esc_cls", "head_line", "in_quote", "sep", "str_cls", "unwind"]);
 	check("in_quote の枝の本数", found.find((f) => f.name === "in_quote").arms.map((a) => a.prefix.length), [1, 1, 1]);
 	const groups = groupStreamFunctions(found);
-	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["unwind"], ["closers"], ["close_all"], ["drop_tabs"]]);
+	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["unwind"], ["closers"], ["close_all"]]);
 	// 実際に均せるのは、状態が1つで、式に再帰が埋まっていないものだけ。
 	const gen = (nm) => generatePullers(groups.find((g) => g[0].name === nm)) !== null;
 	check("均せる群", groups.map((g) => g[0].name).filter(gen), ["sep", "head_line", "close_all"]);

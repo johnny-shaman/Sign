@@ -63,11 +63,11 @@ f : x y ?
 > UART_DATA : 0x40011004
 >
 > uartIO :
-> 	output
-> 	ready : @UART_STATUS
->  ?
-> 	ready : UART_DATA # output
-> 	uartIO output
+> 		output
+> 		ready : @UART_STATUS
+> 	?
+> 		ready : UART_DATA # output
+> 		uartIO output
 > ```
 >
 > ここでの `ready : ...` は「`ready` を再束縛する」ではなく「`ready` が非Unitなら右辺を評価する」である。**ローカル変数を置く場所は仮引数リストの側**であり（後述「仮引数リストは関数の状態ベクタである」）、本体には分岐だけを書く。同じ行の形が仮引数リストと本体とで別の意味を持つのは、この分担による。
@@ -149,18 +149,18 @@ f :
 >
 > ` 禁止：デフォルト引数内での Output（原理4によりコンパイルエラー）
 > bad :
-> 	x : some_ptr # 42
->  ? x
+> 		x : some_ptr # 42
+> 	? x
 >
 > ` 許可：Input はデフォルト引数に書ける
 > good_in :
-> 	x : @some_ptr
->  ? x
+> 		x : @some_ptr
+> 	? x
 >
 > ` 正しい：Output は本体に書く
 > good_out :
-> 	x
->  ? some_ptr # x
+> 		x
+> 	? some_ptr # x
 > ```
 
 ### 仮引数リストは関数の状態ベクタである
@@ -215,7 +215,7 @@ go 6 [4]
 > ```sign
 > ` 子の呼び出しが公理で潰れた瞬間、この階層の st が最終状態である
 > w : k s st ?
->   (w k (s ' 1~) (st (s ' 0)~)) | (@k st)
+> 	(w k (s ' 1~) (st (s ' 0)~)) | (@k st)
 >
 > w $close `abc` __
 > ```

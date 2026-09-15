@@ -11,7 +11,7 @@
 - Table ordered from lowest precedence (evaluated last) to highest precedence (evaluated first).
 - The coproduct operator can be conceptualized as a standard delimiter; all whitespace acts as the coproduct operator.
 - Treating whitespace as a delimiter is valid because precedence between coproduct and product operators is determined statically in downstream compiler passes.
-- Newlines also function as operators, acting as evaluation boundaries at line scope.
+- Newlines also function as operators, acting as evaluation boundaries at line scope. A newline followed by a line that starts with a space or one of the infix operators listed in section 0 is not a boundary but a continuation ([`preprocessor.md`](../build/preprocessor.md) section 0).
 - Absolute value brackets: no space after opening `|`, no space before closing `|`.
 - Parentheses/brackets: no space after opening `(`, `[`, `{`, no space before closing `)`, `]`, `}`.
 - Relationships between lifting (construct and expand) and lowering (fold) operators comprehensively determine types.

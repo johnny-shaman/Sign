@@ -64,7 +64,7 @@ In Sign, lines containing unbound literals produce no runtime side effects.
 Therefore, **strings starting at SOL (Start of Line) function as comments**.
 Because an unindented line starting with `` ` `` is unambiguously a comment, **closing the backtick is optional**. Unclosed lines extend as comments until EOL.
 
-Conversely, backticks indented after tabs are treated as evaluated string literals, not comments.
+Conversely, backticks after a TAB indent, or after a leading space (which continues the previous line), are treated as evaluated string literals, not comments.
 Because SOL backticks are strictly parsed as comments, placing a bare string literal at SOL requires enclosing it in parentheses `()` or binding it to an identifier.
 
 ```sign
@@ -253,11 +253,11 @@ exp2fn 2 3  ` Result: 25
 
 ```sign
 g :
-    x
-    y : x + 1
-    z : y + 1
-    ~rest
-  ? x y z rest~
+		x
+		y : x + 1
+		z : y + 1
+		~rest
+	? x y z rest~
 
 g 3   ` Result: 3 4 5
 g 1 (3 < 2)  ` 3 < 2 evaluates to __ (False), y falls back to 1+1=2. Result: 1 2 3

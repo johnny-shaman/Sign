@@ -114,7 +114,7 @@ statically.
 
 ## 3. Indented Backticks (Docstrings)
 
-When a backtick follows an indent (tab/spaces) it is not at SOL, so it is never a comment.
+When a backtick follows a TAB indent, or a leading space (which continues the previous line), it is not at SOL, so it is never a comment.
 A backtick anywhere other than SOL is always a string literal; the lookahead rule does not apply:
 
 ```sign

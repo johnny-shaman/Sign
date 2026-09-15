@@ -70,9 +70,9 @@ add 3 5   ` → 8
 ### Pattern Matching (`match_case`)
 ```sign
 f : x ?
-    x > 0 : x * 2
-    x < 0 : x * -1
-    0
+	x > 0 : x * 2
+	x < 0 : x * -1
+	0
 ```
 
 ### List Manipulation
@@ -90,7 +90,7 @@ f : x ?
 ### Recursion
 ```sign
 sum : x ~xs ?
-    xs & x + sum xs | x
+	xs & x + sum xs | x
 
 sum [1 2 3 4 5]   ` → 15
 ```

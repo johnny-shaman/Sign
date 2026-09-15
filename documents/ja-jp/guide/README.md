@@ -11,7 +11,7 @@ Sign言語を**書く人**向けのドキュメント集。
 | **[operator_table.md](operator_table.md)** | 全演算子の優先順位・意味・Unit挙動。**言語の骨格** |
 | **[list_cheat_sheet.md](list_cheat_sheet.md)** | よく使うリスト操作の一覧表 |
 | **[examples/](examples/)** | 完結した実プログラム（Nクイーンなど）。動く例はこちら |
-| ~~[example.sn](example.sn)~~ | **古い。参照しないこと**——空白字下げで読めず、今は止まる綴りが混ざっている |
+| ~~[example.sn](example.sn)~~ | **古い。参照しないこと**——今は止まる綴りが混ざっている |
 
 ---
 
@@ -76,9 +76,9 @@ add 3 5
 ### match_case（条件分岐）
 ```sign
 f : x ?
-    x > 0 : x * 2
-    x < 0 : x * -1
-    0
+	x > 0 : x * 2
+	x < 0 : x * -1
+	0
 ```
 
 ### リスト操作
@@ -99,7 +99,7 @@ f : x ?
 ### 再帰
 ```sign
 sum : x ~xs ?
-    xs & x + sum xs | x
+	xs & x + sum xs | x
 
 ` → 15
 sum [1 2 3 4 5]

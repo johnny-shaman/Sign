@@ -61,7 +61,7 @@ in_quote : [c ~rest] ?
 	c (in_quote rest)
 
 `--- 継続行の判定 ---`
-`行頭が中置演算子で始まる行は、前の行の続きとして空白で繋ぐ`
+`行頭が空白か中置演算子で始まる行は、前の行の続きとして空白で繋ぐ（preprocessor.md 0節）`
 `多義的な | と ~ は2文字目まで見る。| は絶対値、~ は残余にもなるため1文字では決まらない`
 
 `記号そのものは名前を通す。文字リテラルを比較へ直書きすると型が決まらず、`
@@ -86,11 +86,6 @@ cont1 : ch ?
 	ch = \^ : ch
 	__
 
-cont_bar : ch ?
-	ch = space : ch
-	ch = bar : ch
-	__
-
 cont_tilde : ch ?
 	ch = space : ch
 	ch = \+ : ch
@@ -104,24 +99,29 @@ cont_tilde : ch ?
 ``
 `行頭のスペースを落としてはならない。スペースは余積演算子であり`
 `（operator_table.md 基本原則「全ての空白を余積演算子と見なせる」）、`
-`落とすと演算子が消える。前の行が \ で改行を文字として食っている場合、`
-`次の行の行頭スペースは字下げではなく、その文字と右辺を繋ぐ余積そのものである。`
-`落とすと右辺が宙に浮き、値が黙って変わる。診断は出ない`
+`その左辺は前の行にある。だから行頭のスペースは字下げではなく続きの印である。`
+`落とすと演算子が消え、右辺が宙に浮いて値が黙って変わる。診断は出ない`
 ``
-`仮引数リストを閉じる ? は、行頭スペースではなく実タブ深さに載せる`
-`（関数のブロックの中に、仮引数がさらにブロックとして入る）。`
-`そう書けば落とすべきスペースは最初から存在しない`
+`| と || が続きなのは、空白が続くときだけ。密着していれば絶対値やノルムの開きである`
 
 continues :
 		b
 		h : b ' 0
 		t : b ' 1
 	?
+		h = space : b
 		cont1 h : b
 		(h = bang) & (t = \=) : b
-		(h = bar) & (cont_bar t) : b
+		(h = bar) & (t = space) : b
+		(h = bar) & (t = bar) & ((b ' 2) = space) : b
 		(h = tilde) & (cont_tilde t) : b
 		__
+
+`括弧の中の行の前の区切り。続きの行なら空白でつなぎ、そうでなければ改行する`
+
+bracket_gap : b ?
+	continues b : space
+	cr
 
 `--- 括弧の中ではインデントを無効化する ---`
 `括弧の中で見やすさのためにタブを深くする書き方があるため、深さの変化を`
@@ -247,7 +247,7 @@ walk :
 		nd : bd + (delta b)
 	?
 		!(blank b) : (walk rest st bd) | (close_all st)
-		bd > 0 : cr b ((walk rest st nd) | (close_all st))
+		bd > 0 : (bracket_gap b) b ((walk rest st nd) | (close_all st))
 		continues b : (closers st d) space b ((walk rest (unwind st d) nd) | (close_all (unwind st d)))
 		(gap st d) b ((walk rest (next_st st d) nd) | (close_all (next_st st d)))
 
@@ -262,7 +262,7 @@ strip_head : [c ~rest] ?
 `ディスク上の CRLF・LF・CR を、エスケープの直後なら LF 1個（文字の改行）に、それ以外は CR 1個（処理の区切り）にする`
 `文字列の中は素通しにする——そこでのエスケープの記号はただの文字である`
 `行頭のコメントはここで判別して読み捨てる。後の段は判別し直さない`
-`bd は括弧の深さ、t は処理行の頭のタブの数（今のブロックの深さ）`
+`bd は括弧の深さ（コメントかどうかを決めるために数える）`
 
 `CR の直後の LF を落とす（CRLF を改行1個に数える）`
 
@@ -274,9 +274,9 @@ skip_lf : [c ~rest] ?
 `コメントなので行末まで読み捨てる。括弧の中とタブの後はコメントにならない（string_and_comment.md 3節）`
 
 at_line : s bd ?
-	bd > 0 : body_cls s bd (depth_of s)
+	bd > 0 : body_cls s bd
 	((s ' 0) = quote) & !(quote_expr (s ' 1~)) : drop_line s bd
-	body_cls s bd (depth_of s)
+	body_cls s bd
 
 `開きの直後から読み、閉じの直後の1文字を返す（式なら真、コメントなら __）`
 
@@ -300,41 +300,41 @@ drop_line : [c ~rest] bd ?
 	c = lf : cr (at_line rest bd)
 	drop_line rest bd
 
-body_cls : [c ~rest] bd t ?
+body_cls : [c ~rest] bd ?
 	c = cr : cr (at_line (skip_lf rest) bd)
 	c = lf : cr (at_line rest bd)
-	c = escape : escape (esc_cls rest bd t)
-	c = quote : c (str_cls rest bd t)
-	c = dquote : c (dstr_cls rest bd t)
-	open_br c : c (body_cls rest (bd + 1) t)
-	close_br c : c (body_cls rest (bd - 1) t)
-	c (body_cls rest bd t)
+	c = escape : escape (esc_cls rest bd)
+	c = quote : c (str_cls rest bd)
+	c = dquote : c (dstr_cls rest bd)
+	open_br c : c (body_cls rest (bd + 1))
+	close_br c : c (body_cls rest (bd - 1))
+	c (body_cls rest bd)
 
-`エスケープの直後。改行なら LF 1個にして、その後のタブを落とす——その位置が括弧の中ならすべて、外なら t まで`
-`（ブロックの深さぶんは字下げで、その後の空白が余積になる）。それ以外はその1文字`
+`エスケープの直後。改行なら LF 1個にして、その後のタブをすべて落とす（続きの行の頭のタブは揃えで、その後の空白が余積になる）`
+`それ以外はその1文字`
 `入力の末尾ならエスケープの記号だけが残る`
 
-esc_cls : [c ~rest] bd t ?
-	c = cr : lf (body_cls (drop_tabs (skip_lf rest) (bd > 0 & 255 | t)) bd t)
-	c = lf : lf (body_cls (drop_tabs rest (bd > 0 & 255 | t)) bd t)
-	c (body_cls rest bd t)
+esc_cls : [c ~rest] bd ?
+	c = cr : lf (body_cls (skip_tabs (skip_lf rest)) bd)
+	c = lf : lf (body_cls (skip_tabs rest) bd)
+	c (body_cls rest bd)
 
-drop_tabs : [c ~rest] n ?
-	(c = tab) & (n > 0) : drop_tabs rest (n - 1)
+skip_tabs : [c ~rest] ?
+	c = tab : skip_tabs rest
 	c rest
 
-str_cls : [c ~rest] bd t ?
-	c = quote : c (body_cls rest bd t)
+str_cls : [c ~rest] bd ?
+	c = quote : c (body_cls rest bd)
 	c = cr : cr (at_line (skip_lf rest) bd)
 	c = lf : cr (at_line rest bd)
-	c (str_cls rest bd t)
+	c (str_cls rest bd)
 
-dstr_cls : [c ~rest] bd t ?
-	c = dquote : c (body_cls rest bd t)
+dstr_cls : [c ~rest] bd ?
+	c = dquote : c (body_cls rest bd)
 	c = cr : cr (at_line (skip_lf rest) bd)
 	c = lf : cr (at_line rest bd)
-	(c = escape) & !((rest ' 0) = cr) & !((rest ' 0) = lf) : c (rest ' 0) (dstr_cls (rest ' 1~) bd t)
-	c (dstr_cls rest bd t)
+	(c = escape) & !((rest ' 0) = cr) & !((rest ' 0) = lf) : c (rest ' 0) (dstr_cls (rest ' 1~) bd)
+	c (dstr_cls rest bd)
 
 `--- 前処理の全体 ---`
 `改行の役割を先に分け、インデントを確定させてから、演算子の空白を入れる`

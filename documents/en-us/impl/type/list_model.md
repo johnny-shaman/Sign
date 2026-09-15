@@ -108,7 +108,7 @@ $$\text{typeof}(L \text{ op } R) = \text{typeof}(L)$$
 ```sign
 ` Extracting key 'foo' and collecting remainder into 'obj'
 f : x [foo ~obj] y ?
-    ...
+	...
 
 f 10 [ foo : 1, bar : 2, baz : 3 ] 20
 ```

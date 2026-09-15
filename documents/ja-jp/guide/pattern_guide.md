@@ -15,8 +15,8 @@ f 3 < 2 2
 
 g :
 		x : 0
-   	y : 0
-   ?
+		y : 0
+	?
 		x + y
 
 `デフォルト値が`0`なので、`3 < 2`で`Unit`が返っても`0`が代入され、2となる。
@@ -135,8 +135,8 @@ map $[* 2] 1 2 3 4 5
 get_age : [age ~obj] ? age
 
 dict :
-   name : `Johnny`
-   age  : 20
+	name : `Johnny`
+	age  : 20
 
 
 ` name ' key の操作がされる。

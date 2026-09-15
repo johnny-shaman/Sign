@@ -95,7 +95,7 @@ PCやSBCのように、実行時（UEFIやデバイスツリー経由）にメ�
 
 ```son
 ` OSカーネル開発での宣言例
- layer : 0
+layer : 0
 link :
 	static :
 		memory :
@@ -112,7 +112,7 @@ link :
 
 ```son
 ` layer: 1 以上でのヒープ一括確保
- layer : 1
+layer : 1
 link :
 	static :
 		memory :

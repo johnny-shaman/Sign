@@ -20,7 +20,7 @@ Undefined identifiers (`tick`, `next`) evaluate safely to `__`, functioning as n
 Logical AND (`&`) and OR (`|`) evaluate via short-circuiting:
 ```sign
 append : [x ~xs] [y ~ys] ?
-    xs & x (append xs (y ys)) | @x y ys
+	xs & x (append xs (y ys)) | @x y ys
 ```
 - Non-empty `xs` (truthy) evaluates the recursive step.
 - Empty `xs` (`__` / falsy) evaluates the right-hand termination branch.

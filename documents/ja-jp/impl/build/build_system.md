@@ -115,27 +115,27 @@ BIOS/UEFIレベルの開発では、`option.ms` と `.sn` コードが役割を�
 ` Int/UInt のみ使用可能。Float/SIMDはコンパイルエラー
 
 ddr_init :
-    ` メモリコントローラ設定
-    0xFED10000 # 0x12345678
-    ` タイミングパラメータ
-    0xFED10004 # 0x87654321
+` メモリコントローラ設定
+	0xFED10000 # 0x12345678
+` タイミングパラメータ
+	0xFED10004 # 0x87654321
 
 fpu_init :
-    ` CR0.EMをクリア、CR0.MPをセット（アドレス操作のみ）
-    0xCR0 # (@ 0xCR0 & 0xFFFFFFFB | 0x00000002)
+` CR0.EMをクリア、CR0.MPをセット（アドレス操作のみ）
+	0xCR0 # (@ 0xCR0 & 0xFFFFFFFB | 0x00000002)
 
 simd_init :
-    ` CR4.OSFXSR、CR4.OSXMMEXCPTをセット
-    0xCR4 # (@ 0xCR4 | 0x00000600)
+` CR4.OSFXSR、CR4.OSXMMEXCPTをセット
+	0xCR4 # (@ 0xCR4 | 0x00000600)
 
 _start :
-    ` → layer 1（alloca有効）相当
-    ddr_init
-    ` → layer 2（Float有効）相当
-    fpu_init
-    ` → layer 3（SIMD有効）相当
-    simd_init
-    ` 以降は全型が使用可能
+` → layer 1（alloca有効）相当
+	ddr_init
+` → layer 2（Float有効）相当
+	fpu_init
+` → layer 3（SIMD有効）相当
+	simd_init
+` 以降は全型が使用可能
 ```
 
 `layer: 0` コード内で alloca / Float / SIMD 型を使用するとコンパイルエラーになる。

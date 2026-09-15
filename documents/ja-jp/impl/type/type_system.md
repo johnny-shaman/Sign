@@ -375,8 +375,8 @@ val : 42            → val は Atom
 >
 > ```sign
 > p : [
->     x : 10
->     y : 20
+> 	x : 10
+> 	y : 20
 > ]
 > i : 0
 >
@@ -408,8 +408,8 @@ val : 42            → val は Atom
 >
 > ```sign
 > point : [
->     x : 3
->     y : 4
+> 	x : 3
+> 	y : 4
 > ]
 > point ' x       ` 3   名前で引く
 > point ' 0       ` 3   連番（宣言順）で引く
@@ -431,8 +431,8 @@ val : 42            → val は Atom
 >
 > ```sign
 > point2 : [
->     y : 4
->     x : 3
+> 	y : 4
+> 	x : 3
 > ]
 > point == point2   ` 真   Hom集合の一致は宣言順を問わない
 > point ' 0         ` 3
@@ -482,8 +482,8 @@ val : 42            → val は Atom
 > ```sign
 > ` これは止まる（原理4）
 > a : [
->     tier : 14
->     tier : 24
+> 	tier : 14
+> 	tier : 24
 > ]
 > ```
 >
@@ -1002,9 +1002,9 @@ f 3 (2 < 1)
 
 ```sign
 g :
-    x
-    y : x + 1
-  ? x + y
+		x
+		y : x + 1
+	? x + y
 
 ` → 7   （y はデフォルト値 3+1=4 を使用）
 g 3
@@ -1043,8 +1043,8 @@ apply : g x ? g x
 
 ```sign
 apply_five : f ?
-    ` @f で Address を Lambda として呼び出す
-    (@f) 5.0
+` @f で Address を Lambda として呼び出す
+	(@f) 5.0
 
 high_order_result : apply_five ($(add 10.0))
 ` $(add 10.0) → Address(Atom)
@@ -1869,8 +1869,8 @@ add 1 2
 ```sign
 ` Point 型 = Point というコンストラクタ関数
 #Point : x y ? [
-  x : x
-  y : y
+	x : x
+	y : y
 ]
 
 ` インスタンス生成 = ただの関数適用
@@ -1963,9 +1963,9 @@ Pass 1 が束縛の右辺を静的に遡れる場合、`' !__` はそのコン�
 
 ```sign
 describe : col ?
-  col === Red   : `red`
-  col === Green : `green`
-  `blue`
+	col === Red   : `red`
+	col === Green : `green`
+	`blue`
 ```
 
 `Red`・`Green`・`Blue` がそれぞれ異なる Int 値として定義されている以上、`col == Red` は値の直接比較であり、
@@ -2009,9 +2009,9 @@ Pass 1 が集めれば、要求フィールド集合を自動生成できる。�
 
 ```sign
 distance : p1 p2 ?
-  dx : p1 ' x - p2 ' x
-  dy : p1 ' y - p2 ' y
-  dx * dx + dy * dy
+	dx : p1 ' x - p2 ' x
+	dy : p1 ' y - p2 ' y
+	dx * dx + dy * dy
 ```
 
 ```signtype
@@ -2082,8 +2082,8 @@ f : x y ? x + y
 >
 > ```sign
 > f : p n ?
->     n = 0 : p
->     f (p + 8) (n - 1)
+> 	n = 0 : p
+> 	f (p + 8) (n - 1)
 > f 0xFFFFFFFFFFFFFFE0 4
 > ```
 >
@@ -2101,10 +2101,10 @@ f : x y ? x + y
 >
 > ```sign
 > uart_read :
->     state : 0x0 + @stateAddr    ` Address として読む
->     level : 0.0 + @levelAddr    ` Float として読む
->     raw : @rawAddr              ` 型を決める情報が無い
->  ? ...
+> 		state : 0x0 + @stateAddr    ` Address として読む
+> 		level : 0.0 + @levelAddr    ` Float として読む
+> 		raw : @rawAddr              ` 型を決める情報が無い
+> 	? ...
 > ```
 >
 > `0x0 +` も `0.0 +` も加法単位元なので値を変えず、コンパイル時に消える。実行時コストは無いまま
@@ -2156,10 +2156,10 @@ HM は型変数を導入して制約ソルビングを行うが、Sign は演算
 
 ```sign
 classify : x ?
-  x < 0 : `negative`   ` arm 1: String
-  ` arm 2: Int（Unit と同型の 0）
-  x = 0 : 0
-  `positive`            ` arm 3: String（デフォルト）
+	x < 0 : `negative`   ` arm 1: String
+` arm 2: Int（Unit と同型の 0）
+	x = 0 : 0
+	`positive`            ` arm 3: String（デフォルト）
 ```
 
 デシュガー後：
@@ -2208,9 +2208,9 @@ Blue  : !__
 ` match_case → 返値型が直和（String）になる例
 ` Lambda<returns: String>
 #classify : col ?
-  col == Red   : `red`
-  col == Green : `green`
-  `blue`
+	col == Red   : `red`
+	col == Green : `green`
+	`blue`
 ```
 
 Sign における「成功/失敗」のパターンは、データ付き variant ではなく **Unit 伝播** で実現する。
@@ -2219,8 +2219,8 @@ Sign における「成功/失敗」のパターンは、データ付き variant
 ```sign
 ` ✅ Sign の Result パターン（Ok/Err は不要）
 #parse : src ?
-  ` 成功: src を返す、失敗: __ に収束
-  valid src & src | __
+` 成功: src を返す、失敗: __ に収束
+	valid src & src | __
 
 ` 呼び出し元
 result : parse input | `default`

@@ -14,10 +14,10 @@ f : x y ? x + y
 f (3 < 2) 2
 
 g :
-    x : 0
-    y : 0
-  ?
-    x + y
+		x : 0
+		y : 0
+	?
+		x + y
 
 ` Default value of x is 0. Even if (3 < 2) returns Unit, x defaults to 0, yielding 2.
 g (3 < 2) 2
@@ -53,9 +53,9 @@ f [1 2 3]~
 
 ```sign
 f : x y ?
-    x < 0 : `Error : x is negative`
-    y < 0 : `Error : y is negative`
-    x * y
+	x < 0 : `Error : x is negative`
+	y < 0 : `Error : y is negative`
+	x * y
 
 ` Returns 6
 f 2 3
@@ -76,11 +76,11 @@ f 2 -1
 
 ```sign
 f :
-    x : x + 1
-    y : x + y
-  ?
-    x > 10 : y
-    f x y
+		x : x + 1
+		y : x + y
+	?
+		x > 10 : y
+		f x y
 
 ` Returns 60
 f 0 5
@@ -136,8 +136,8 @@ map $[* 2] 1 2 3 4 5
 get_age : [age ~obj] ? age
 
 dict :
-   name : `Johnny`
-   age  : 20
+	name : `Johnny`
+	age  : 20
 
 ` Executes name ' key extraction
 get_age dict

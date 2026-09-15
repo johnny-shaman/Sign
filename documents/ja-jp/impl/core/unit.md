@@ -34,7 +34,7 @@ Sign言語には `null`, `nil`, `false` などの予約語は存在しません�
 ```sign
  appendの終了条件と再帰ステップ
 append : [x ~xs] [y ~ys] ?
-    xs & x (append xs (y ys)) | @x y ys
+	xs & x (append xs (y ys)) | @x y ys
 ```
 - `xs` が空リストではない（真）場合、後続の再帰ステップが評価される
 - `xs` が空リスト（`__`／偽）の場合、`|` の右辺（終了条件）が評価される
@@ -539,7 +539,7 @@ result : add_then_multiply 3 5
 ```sign
 `Unitの論理的性質を活用
 safe_divide : x y ?
-    y = 0 & __ | [x / y]
+	y = 0 & __ | [x / y]
 
 ` → __ (Unit)
 result : safe_divide 10 0
@@ -572,10 +572,10 @@ result : safe_divide 10 2
 natural_transform : f list ?
 
 `   空の場合の処理
-    f __ list
+	f __ list
 
 `   通常の処理
-    f list
+	f list
 
 example : natural_transform [* 2,] 1, 2, 3
 ```

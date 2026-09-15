@@ -212,8 +212,8 @@ runBtn.addEventListener("click", runWithFeedback);
 stScopeEl.addEventListener("change", run);
 srcEl.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.key === "Enter") runWithFeedback();
-  // Signのインデントは厳密にタブ文字のみ（lexer.jsのmarkBlockは/^\t*/でタブしか見ない、
-  // スペースは意味を持たない）。素のtextareaはTabキーでフォーカス移動してしまい
+  // Signのインデントは厳密にタブ文字のみ（lexer.jsのmarkBlockは/^\t*/でタブしか見ない。
+  // 行頭のスペースは字下げではなく前の行の続き、preprocessor.md §0）。素のtextareaはTabキーでフォーカス移動してしまい
   // タブ文字を入力できないため、ここで明示的にタブ文字を挿入する。
   if (e.key === "Tab") {
     e.preventDefault();

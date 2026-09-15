@@ -57,10 +57,15 @@ export function separateInfix(input) {
  * 試すのもそこだけ）。以前は判別を文法にも任せていたので、文法は separateInfix が空白を入れた後のテキストで、
  * 括弧やブロックの中では試さずに判別し直し、2つの段の答えが食い違うと `\` が CR を文字として食った。
  *
- * **`\` + 改行の後の TAB も、ここで落とす。** 括弧の中ならすべて、括弧の外なら処理行の頭の TAB の数（今の
- * ブロックの深さ）まで。括弧の深さは `\` + 改行の位置で見る——処理行の頭で1回だけ見ると、同じ行で開いた
- * 括弧の中の TAB が残って構文エラーになり、閉じた後の TAB は黙って消えていた。括弧の数え方は markBlock の
- * `bracketDelta` と同じ（文字列と `\` の組は数えない）。
+ * 括弧の深さは、コメントかどうかを決めるために数える。数え方は markBlock の `bracketDelta` と同じ（文字列と
+ * `\` の組は数えない）。
+ *
+ * **`\` + 改行の後の TAB は、ここですべて落とす。** 続きの行の頭の TAB は揃えであって字下げではない——CR の後の
+ * 続きの行（markBlock）で深い TAB を読み捨てるのと同じ扱いにする。以前は「今のブロックの深さ」まで落とす
+ * つもりで物理行の頭の TAB の数を使っていたので、続きの行で揃えた行の後だけ多く落ち、CR の後の続きとも食い違った。
+ *
+ * **文字列は行をまたがない。** 行の終わりまでに閉じないバッククォートは構文エラーにする。続きの行がつながった
+ * 後の段で閉じが見つかると、2行にまたがる文字列が黙ってできていた。
  */
 export function classifyNewlines(input) {
   const n = input.length;
@@ -69,7 +74,6 @@ export function classifyNewlines(input) {
   let i = 0;
   let lineStart = true;
   let bracketDepth = 0;
-  let lineTabs = 0;
   while (i < n) {
     if (lineStart) {
       lineStart = false;
@@ -77,8 +81,6 @@ export function classifyNewlines(input) {
         while (i < n && !newlineWidth(i)) i++;
         continue;
       }
-      lineTabs = 0;
-      while (input[i + lineTabs] === '\t') lineTabs++;
     }
     const w = newlineWidth(i);
     if (w) {
@@ -93,7 +95,7 @@ export function classifyNewlines(input) {
       if (w2) {
         out += '\\\n';
         i += 1 + w2;
-        for (let drop = bracketDepth > 0 ? Infinity : lineTabs; drop > 0 && input[i] === '\t'; drop--) i++;
+        while (input[i] === '\t') i++;
       } else {
         out += input.slice(i, i + 2);
         i += 2;
@@ -104,6 +106,10 @@ export function classifyNewlines(input) {
       let k = i + 1;
       while (k < n && input[k] !== ch && !newlineWidth(k)) k += ch === '"' && input[k] === '\\' && k + 1 < n && !newlineWidth(k + 1) ? 2 : 1;
       if (input[k] === ch) k++;
+      else if (ch === '`') {
+        const lineEnd = input.slice(i).search(/[\r\n]/);
+        throw new SyntaxError(`文字列が行の終わりまでに閉じていません（文字列は行をまたげません）: ${JSON.stringify(input.slice(i, lineEnd < 0 ? n : i + lineEnd))}`);
+      }
       out += input.slice(i, k);
       i = k;
       continue;
@@ -166,13 +172,13 @@ function markBlock(input) {
   // 二重に差し込まれてパースが壊れる。他の多くの言語のオフサイドルールと同様、
   // ブラケットの中では改行・インデントの意味を一時的に無効化することでこれを防ぐ。
   let bracketDepth = 0;
-  // **処理行の頭にスペースは来ない。** 文字の改行（`\` + 改行）の後の行は同じ処理行の続きなので、
-  // そこのスペースは行の中の余積であって、処理行の頭ではない（preprocessor.md §0）。だから処理行の頭の
-  // スペースはいつも空白インデントであり、match_case.md「TABのみ・空白インデントはNG」により受け付けない。
+  // **続きの行**（preprocessor.md §0）。TAB を除いた行頭が空白か中置演算子なら、その行は前の行の続きであり、
+  // 前の改行は処理の区切りではない。空白は余積（あるいは中置演算子の前の空白）で、その左辺は前の行にある——
+  // だから `1 +` の次の ` 1` は `1 + 1` である。空白は字下げにならない（字下げは TAB だけ）。括弧の中でも
+  // 同じで、括弧の中か外かで続きの読みを変えない。
   //
-  // かつてはここで「直前の行が `\` で終わっていれば許す」を生のテキストから推測していた
-  // （`prevEndsWithEscape`）。改行が1種類の符号だったからで、コメント行の末尾の `\`・空行・括弧の中で
-  // 漏れ、漏れたスペースは文法の `_` が黙って削っていた。
+  // かつては行頭の空白を「空白インデント」として断り、`\` + 改行の後だけ許していた（`prevEndsWithEscape`、
+  // その後は常に断った）。括弧の中では逆に黙って削っていたので、`(1` の次の ` + 1` は `[1, (+ 1)]` になった。
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -190,22 +196,32 @@ function markBlock(input) {
     // 文字の改行（`\` + LF）の後の TAB は classifyNewlines が落とし済み（preprocessor.md §0）。
     const content = line.substring(leadingWs.length);
 
-    // ブラケット内（bracketDepth>0）ではインデント自体が意味を持たない（整形用の空白は
-    // 無害）ため対象外。判定の根拠は上の注記を参照。
-    if (bracketDepth === 0 && content.startsWith(' ')) {
-      throw new SyntaxError(
-        `Signのインデントは厳密にタブ文字(\\t)のみです。行の続きをスペースで始めたいなら、` +
-          `前の行を \\ + 改行（文字の改行）で終えてください: ${JSON.stringify(line)}`
-      );
+    // 継続行の判定。**行頭をそのまま見る**——かつてはここで `content.trim()` していたが、行頭の空白は
+    // 余積演算子であって剥がしてよいものではない（preprocess.sn 側の lstrip と同じ穴だった）。
+    //
+    // **行頭の `|` / `||` が「続き」なのは、空白が続くときだけである。** 密着していれば
+    // それは囲みの開き（絶対値・ノルム）であって中置演算子ではない——`||xs||` を続きと
+    // 読むと、インデントブロックの境界がずれる（枝が1つ header へ吸い込まれていた）。
+    // `.` は演算子表に無いので、行頭に来ても継続行にはなりえない（かつては文法の
+    // 文字クラスが `'-=` をレンジとして読み、`.` を演算子として受理していた名残）。
+    const isContinuation = content.startsWith(' ') || /^[?+*\/,=<>;%&^]/.test(content) || /^!=(?:=)?/.test(content) || /^\|\|? /.test(content) || /^~(?: |[+*\/\^-])/.test(content);
+
+    // 行頭の空白の左に続ける行が無い。空白は字下げではないので、ファイルの先頭の空白は断る。
+    if (content.startsWith(' ') && lastContentLineIdx === -1) {
+      throw new SyntaxError(`行頭の空白は前の行の続きですが、続ける行がありません（字下げは TAB だけです）: ${JSON.stringify(line)}`);
     }
 
     if (bracketDepth > 0) {
       // **ブラケットの中ではタブ深さを INDENT/DEDENT に翻訳しない。** 見やすさのために
       // 中を深くインデントする書き方（function_guide.md の func_mixed 例）で、本来無い
       // インデントブロックが二重に差し込まれるのを防ぐ。行頭のタブだけ落として、
-      // 改行はそのまま残す——ブロックの縁の EOL は文法の `_e` が受ける。
-      result.push(content);
-      lastContentLineIdx = result.length - 1;
+      // 改行はそのまま残す——ブロックの縁の EOL は文法の `_e` が受ける。続きの行は外と同じにつなぐ。
+      if (isContinuation && lastContentLineIdx !== -1) {
+        result[lastContentLineIdx] += ' ' + content;
+      } else {
+        result.push(content);
+        lastContentLineIdx = result.length - 1;
+      }
       bracketDepth += bracketDelta(content);
       continue;
     }
@@ -220,17 +236,8 @@ function markBlock(input) {
       }
     }
 
-    // 継続行の判定（行頭が中置演算子で始まる場合）。**行頭をそのまま見る**——
-    // かつてはここで `content.trim()` していたが、行頭のスペースは余積演算子であって
-    // 剥がしてよいものではない（preprocess.sn 側の lstrip と同じ穴だった）。
-    //
-    // **行頭の `|` / `||` が「続き」なのは、空白が続くときだけである。** 密着していれば
-    // それは囲みの開き（絶対値・ノルム）であって中置演算子ではない——`||xs||` を続きと
-    // 読むと、インデントブロックの境界がずれる（枝が1つ header へ吸い込まれていた）。
-    // `.` は演算子表に無いので、行頭に来ても継続行にはなりえない（かつては文法の
-    // 文字クラスが `'-=` をレンジとして読み、`.` を演算子として受理していた名残）。
-    const isContinuation = /^[?+*\/,=<>;%&^]/.test(content) || /^!=(?:=)?/.test(content) || /^\|\|?\s/.test(content) || /^~(?:\s|[+*\/\^-])/.test(content);
-
+    // 続きの行は、浅くなったぶんのブロックを閉じてから（上の DEDENT）前の行へつなぐ。だからブロックの後の
+    // 0列目の ` * 2` はブロック全体に掛かり、`\t * 2` は最後の行に掛かる。
     if (isContinuation) {
       if (lastContentLineIdx !== -1) {
         result[lastContentLineIdx] += ' ' + content;

@@ -53,5 +53,5 @@ compare : x y ?
 collatz : n steps ?
 	n = 1       : steps
 	n % 2 = 0   : collatz (n / 2)      (steps + 1)
-	              collatz (n * 3 + 1) (steps + 1)
+	collatz (n * 3 + 1) (steps + 1)
 ```

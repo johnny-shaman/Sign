@@ -46,8 +46,8 @@ $heap_ptr # ...
 
 ```sign
 map : f ... ?
-    ` 参照 f から関数実体を取り出して適用
-    @f ...
+` 参照 f から関数実体を取り出して適用
+	@f ...
 ```
 
 ### 3. `#` Store (Update)
@@ -133,7 +133,7 @@ Sign の IO は Pull 型であり、**消費すること自体が待つことと
 ```sign
 ` STATUS が立つまで待ち、立ったら DATA を読む
 read : ?
-  @STATUS & @DATA | read __
+	@STATUS & @DATA | read __
 ```
 
 `@STATUS` が `__`（未準備）なら `&` が短絡して全体が `__` になり、`|` が右辺の

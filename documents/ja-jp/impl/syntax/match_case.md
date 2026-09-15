@@ -14,13 +14,13 @@
 > ```sign
 > ` match_case（インデントブロック）
 > f : x ?
->   x < 0 : `negative`
->   `non-negative`
+> 	x < 0 : `negative`
+> 	`non-negative`
 >
 > ` struct コンストラクタ（[...]ブロック）
 > Point : x y ? [
->   x : x
->   y : y
+> 	x : x
+> 	y : y
 > ]
 > ```
 >
@@ -40,7 +40,7 @@ TAB   ...
 TAB   default_result
 ```
 
-- `?` の直後からインデント（**TABのみ・空白インデントはNG**）されたブロックが match_case 式
+- `?` の直後からインデント（**TABのみ**。行頭の空白は字下げではなく前の行の続きになる、[`preprocessor.md`](../build/preprocessor.md) §0）されたブロックが match_case 式
 - 各 arm は `condition : result` の形（`: ` がセパレータ）
 - **最終行は条件なしの `result` のみ** → デフォルトケース
 
@@ -127,7 +127,7 @@ check : a b ?
 collatz : n steps ?
 	n = 1        : steps
 	n % 2 = 0   : collatz (n / 2)      (steps + 1)
-	               collatz (n * 3 + 1) (steps + 1)
+	collatz (n * 3 + 1) (steps + 1)
 ```
 
 各 arm の再帰呼び出しが末尾位置にあるため、すべて `JMP` に変換されるのは、内部的に変更なし。
@@ -151,7 +151,7 @@ is_odd : n ?
 - **最終行は必ず存在する**：空のブロックはエラー
 - **default_case行は `:` を書かない**（条件なし）
 - **default_case行は 必ず最終行に置く**
-- **インデントは TAB のみ**：Sign の大原則として空白によるインデントは NG。
+- **インデントは TAB のみ**：空白は字下げにならない。行頭の空白は前の行の続きになる（[`preprocessor.md`](../build/preprocessor.md) §0）ので、枝を空白で揃えると前の枝につながる。
 - **条件式内の構造体リテラルは型エラー**：arm の条件式内に `[key : val]` のような構造体リテラルを直接記述すると、内側の `:` が arm セパレータと競合するため型エラーとなる。変数に束縛してから比較すること。
 
 ```text
