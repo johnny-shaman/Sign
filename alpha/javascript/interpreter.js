@@ -1179,7 +1179,8 @@ function arithOnValues(name, l, r, resultType) {
       return 0;
     }
   }
-  // **1文字は符号位置そのものである**（`[x] ≅ x` なので長さ1の文字列は `Char`）。
+  // **`Char` は符号位置そのものである**（値の上では1文字の JS 文字列。型が `String` の1文字は
+  // `evalArith` の入口で `__` にしてある——`` `a` `` は1文字でも `String`、type_system.md §2）。
   // 文字の算術は符号位置の算術である——**そして値としてはそれで全部**である。
   //
   // ここで charset の範囲を見るのをやめた。`Char` は `Int` と同じ値であり、違うのは
@@ -1187,13 +1188,13 @@ function arithOnValues(name, l, r, resultType) {
   // 算術で見ると、(1) 判定が半端になり（上限しか見ずサロゲートが通っていた）、
   // (2) `__` を「誤りの印」として使うことになり、(3) 演算のたびに払う。
   //
-  // 長さ2以上の文字列は §3.2 の通り算術の対象ではない（型エラーで `__` へ収束）。
-  // 区別できるのは、1要素の器がスカラーと同型だからである（原理8）。
+  // `String` は長さによらず §3.2 の通り算術の対象ではない（型エラーで `__` へ収束）。
+  // ここで長さ2以上だけを弾けば足りるのは、1文字の `String` を入口で型から弾いてあるからである。
   const cp = (x) => (typeof x === "string" && [...x].length === 1 ? x.codePointAt(0) : null);
   const lc = cp(l);
   const rc = cp(r);
   // **どちらが文字でも同じ道である。** `Char` は `Int` と同じ値なので、順序で答えが
-  // 変わる理由が無い。以前は左辺しか見ておらず、`\`a\` + 1` は "b" なのに `1 + \`a\``
+  // 変わる理由が無い。以前は左辺しか見ておらず、`\a + 1` は "b" なのに `1 + \a`
   // が `__` になっていた——右辺の文字が「算術に混ざった非数値」として弾かれていた。
   if (lc !== null || (rc !== null && typeof l === "number")) {
     if (isUnit(r)) return l; // 右辺Unit = 単位元（素通し）
@@ -1286,7 +1287,8 @@ function evalArith(node, env) {
   const name = node.name;
   const l = unspreadScalar(evaluate(node.left, env));
   // 左辺が String の時点で右辺を評価せずに済ませる（型エラーは右辺に依らない）。
-  // **ただし1文字は短絡しない**——`Char` は算術の対象なので右辺が要る。
+  // **ただし1文字は短絡しない**——値の上では `Char` と1文字の `String` が同じ JS 文字列なので、
+  // 型を見るまで決まらない（`Char` なら算術の対象で右辺が要る。`String` なら下で `__`）。
   //
   // **`__` では短絡できない。** 爆発律で結果が右辺そのものになるので、右辺の値が要る
   // ——ここは観測できる差である（`__ + ($UART # x)` は書き込みが起きる）。以前は
@@ -1298,6 +1300,9 @@ function evalArith(node, env) {
   // の継続の規則）。決まるまでは `Int` と同じ道を通し、機械（両辺を積んでから `csel`）と揃える。
   if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined, node.atomType);
   const r = unspreadScalar(evaluate(node.right, env));
+  // **型が `String` と言う辺は、1文字でも `Char` ではない**（type_system.md §2 の書き方の表、§3.2）。
+  // 値は同じ JS 文字列なので、見分けるのは型である——見ないと `(s ' 2~) / 0` が JS の Infinity を漏らす。
+  if ((typeof l === "string" && node.left && node.left.atomType === "String") || (typeof r === "string" && node.right && node.right.atomType === "String")) return UNIT;
   // **番地の域に、掛け算と冪の射は無い**（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
   // 射が無いので零射を通る（原理4）。値では番地と数の区別が付かないので、辺の型で見る——`Unit` と型付け
   // される掛け算には `__ * x`（x の型が決まっていない）もあり、そちらは爆発律で x を返す。
@@ -1670,6 +1675,9 @@ function structuralEqual(l, r) {
   if (Array.isArray(l) && Array.isArray(r)) {
     return l.length === r.length && l.every((v, i) => structuralEqual(v, r[i]));
   }
+  // **1要素の器とその要素は構造として等しい**（`[x] ≅ x`、原理8）。機械も狭い側を1要素へ広げて比べる。
+  if (Array.isArray(l) && l.length === 1) return structuralEqual(l[0], r);
+  if (Array.isArray(r) && r.length === 1) return structuralEqual(l, r[0]);
   if (Array.isArray(l) || Array.isArray(r)) return false;
   const lIsPlainObject = l !== null && typeof l === "object" && !l.__lambda__;
   const rIsPlainObject = r !== null && typeof r === "object" && !r.__lambda__;
@@ -1948,15 +1956,15 @@ function getPropValue(l, rightNode, env) {
 // ——ストリームから値で届く——ため、この入口が要る。
 
 /**
- * 切り出した並びを値へ戻す。**1要素はスカラーである**（`[5]` は `Int`、list_model.md）。
+ * **器でない左辺**（スカラー・名前付きスロット）を切り出した並びを、左辺の段へ戻す。
  *
- * リテラルのブロックは構文の時点で潰れる（1行だけのブロックは括りでしかない）。文字列の
- * スライスも `join("")` で潰れる。ところがリストのスライスだけが配列のまま残っており、
- * `String ≅ List(0u)` が片側でしか成立していなかった——同じ操作の結果が、器が文字列か
- * リストかで別の形になっていた。
+ * **切り出しは段を変えない。** 器を切れば同じ型の器であり、1要素でも0要素でも器のまま
+ * である（`List` の切り出しはここを通らない）。段が実行時の長さで変わるなら、それは
+ * 型ではなく値が表現を決めている——type_system.md が「動的型付けは持たない」と言うもの。
+ * `(xs ' i~) ' 0 = xs ' i` と `||xs ' i~|| = ||xs|| - i` が長さ1で割れていた。
  *
- * これは見た目の問題ではない。`|st| = 1` のような長さでの場合分けが、潰れる側と潰れない
- * 側で違う答えを出す（parser.sn の `peek` が末尾のトークンを器ごと返していたのがこれ）。
+ * スカラーは `[x] ≅ x` の1要素として引かれるので、切っても段0のまま——`5 ' 0~` は `5`、
+ * `5 ' 1~` は空（`__`）である。潰しているのではなく、左辺の段へ戻している。
  */
 function collapseSlice(arr) {
   if (!Array.isArray(arr)) return arr;
@@ -2010,7 +2018,7 @@ function getPropByValue(l, r) {
     // ずらすだけである。写すと書き込みが元へ届かなくなる。
     if (Array.isArray(l) && !asStr) {
       const start = from < 0 ? Math.max(0, items.length + from) : from;
-      return collapseSlice(listView(items, start, items.length));
+      return listView(items, start, items.length);
     }
     const sliced = items.slice(from);
     return asStr ? sliced.join("") : collapseSlice(sliced);
@@ -2022,7 +2030,7 @@ function getPropByValue(l, r) {
     // 左辺がイテレータなら、位置ごとに規則を適用すれば済む——**左辺は展開しない**。
     // 無限ストリームからの部分列取得もこれで通る。
     if (typeof r === "number" || typeof r === "bigint") return iteratorAt(l, r);
-    if (Array.isArray(r)) return collapseSlice(r.map((i) => iteratorAt(l, i)));
+    if (Array.isArray(r)) return r.map((i) => iteratorAt(l, i));
     return UNIT;
   }
   const isString = typeof l === "string";
@@ -2059,7 +2067,7 @@ function getPropByValue(l, r) {
       const idx = resolveIndex(i);
       return idx >= 0 && idx < asIndexable.length ? asIndexable[idx] : UNIT;
     });
-    return isString ? mapped.map((v) => (isUnit(v) ? "" : v)).join("") : collapseSlice(mapped);
+    return isString ? mapped.map((v) => (isUnit(v) ? "" : v)).join("") : Array.isArray(l) ? mapped : collapseSlice(mapped);
   }
   return UNIT;
 }
@@ -2872,11 +2880,10 @@ function observe(v) {
   // 有限の規則は要素の並びとして描かれる（`String ≅ List` を描画側で保つのと同じ）。
   if (Array.isArray(v)) return v.map(observe);
   const d = deIterate(v);
-  // **1要素はスカラーである**（`[5]` は `Int`、list_model.md）。実体化した規則にも同じ
-  // 規則が効く——`1 ~ 1` や `st~`（`st` が底の1要素だけ）が `[x]` のまま残っていると、
-  // 同じ値が作られ方によって器になったりスカラーになったりする。`collapseSlice` が
-  // スライスに対してやっているのと同じ潰しである。
-  return isIterator(v) && Array.isArray(d) ? collapseSlice(d) : d;
+  // **観測は段を変えない。** 段を下ろしたのは後置 `~`（撒いた並び）だけなので、1要素を
+  // 要素へ戻すのもそれだけである（`st : 0` の `st~` は `0`、`5~` は `5`）。作った規則
+  // （`1 ~ 1`）も切り出した規則（`[1 ~ 5] ' 4~`、`[h ~t]` の `t`）も器のまま描く。
+  return isIterator(v) && Array.isArray(d) && v.spread ? collapseSlice(d) : d;
 }
 
 export { evaluate, newRuntimeEnv, envDefine, envGet, UNIT, isUnit, observe };

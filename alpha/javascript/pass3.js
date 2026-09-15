@@ -36,7 +36,7 @@ import { OperationError } from "./errors.js";
 // ノードの形を見るだけの述語・名前の綴りを剥ぐ規則・族で割る規則は、layout.js が唯一の
 // 置き場である（理由はそこの `isDefineNode` のコメント）。このファイルでの呼び名
 // （`isSpreadNode` / `bareKey` / `slotsByFamily`）は別名で受ける——写しを持たない。
-import { stringLength, layoutOfStruct , elementShapeOfList, itemShapeOfListAt, commonSlotShape, isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isSpreadNode, bareName as bareKey, flattenByFamily as slotsByFamily, addressWithoutArrow, unparen } from "./layout.js";
+import { layoutOfStruct , elementShapeOfList, itemShapeOfListAt, commonSlotShape, isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isSpreadNode, bareName as bareKey, flattenByFamily as slotsByFamily, addressWithoutArrow, unparen } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 
 const ARITHMETIC_OPS = new Set(["add", "sub", "mul", "div", "mod", "pow"]);
@@ -191,15 +191,8 @@ function rangeResultType(node, env) {
     if (typeof el === "string") node.elementType = el;
     return "Iterator";
   }
-  // **長さ1のリストは存在しない。** 1要素の器はスカラーと同型なので（`[5]` は `Int`）、
-  // その瞬間にスカラーへ落ちる。端点が同じレンジ（`[3 ~ 3]`）は1要素であり、値としては
-  // 既に `3` になっている（interpreter.js）——型だけが器のまま取り残されていた。
-  // **型が値より広い**のは、`is_digit` を壊したのと同じ形である。
-  const one = rangeSingleton(node, env);
-  if (one) {
-    const el = rangeElementType(startType, endType);
-    return typeof el === "string" ? el : startType;
-  }
+  // 端点が同じレンジ（`[3 ~ 3]`）も長さ1の規則であって、要素ではない。段を変えるのは書き方
+  // （1要素のリテラル・添字・`~`）だけで、端点の値ではない（list_model.md §2.5）。
   // 文字の範囲は文字の並び＝String（`String ≅ List(Char)`）。端点は `Char` である。
   if (startType === "Char" && endType === "Char") {
     node.elementType = "Char";
@@ -209,58 +202,6 @@ function rangeResultType(node, env) {
   const el = rangeElementType(startType, endType);
   if (typeof el === "string") node.elementType = el;
   return "List";
-}
-
-// 括りを剥いでから整数リテラルを読む（読めなければ null）。`sliceLengthOne` の2つの枝
-// （`~+` 付きと素の `~`）が同じものを読むので、規則はここに1つだけ置く。
-function intLiteral(n) {
-  let d = n;
-  while (d && d.type === "block" && Array.isArray(d.lines) && d.lines.length === 1) d = d.lines[0];
-  return d && d.type === "atom" && d.kind === "number" && Number.isInteger(Number(d.value)) ? Number(d.value) : null;
-}
-
-// 切り出しの長さが静的に1か（`s ' (1 ~+ 1 ~ 1)`）。終端の無い形は器の長さが要るので
-// 判定しない——決まらないものを決まったことにはしない（原理4）。
-function sliceLengthOne(node, env) {
-  let r = node.right;
-  while (r && r.type === "block" && Array.isArray(r.lines) && r.lines.length === 1) r = r.lines[0];
-  if (!r) return false;
-  // **終端の無い形でも、器の長さが分かれば決まる。** リテラルの器（`` `abc` ' 2~ ``）は
-  // 長さが静的に分かるので、そこから 1 になるかどうかも静的に出る。決まるものは決める。
-  if (r.type === "operation" && RANGE_STEP_OPS.has(r.name)) {
-    const st = intLiteral(r.left);
-    const sp = intLiteral(r.right);
-    if (st === null || sp !== 1) return false;
-    const total = stringLength(node.left, env);
-    return total !== null && total - st === 1;
-  }
-  if (r.type !== "operation" || r.name !== "range") return false;
-  const end = intLiteral(r.right);
-  if (end === null) return false;
-  let l = r.left;
-  while (l && l.type === "block" && Array.isArray(l.lines) && l.lines.length === 1) l = l.lines[0];
-  if (l && l.type === "operation" && RANGE_STEP_OPS.has(l.name)) {
-    const st = intLiteral(l.left);
-    const sp = intLiteral(l.right);
-    return st !== null && sp === 1 && st === end;
-  }
-  return intLiteral(l) === end;
-}
-
-// 端点が静的に等しいレンジか（`[3 ~ 3]`）。**1要素の器は存在しない**ので、そのときは
-// 器ではなくスカラーである。実行時に決まる端点は判定できないので false（原理4）。
-function rangeSingleton(node, env) {
-  if (RANGE_STEP_OPS.has(node.name)) return false;
-  const [s, e] = rangeEndpoints(node, env);
-  const lit = (n) => {
-    const d = derefToNode(n, env);
-    if (!d || d.type !== "atom") return null;
-    if (d.kind === "number" && Number.isInteger(Number(d.value))) return Number(d.value);
-    return null;
-  };
-  const a = lit(s);
-  const b = lit(e);
-  return a !== null && a === b;
 }
 
 // type_system.md §3.2「要素型の join」: 余積で構築される List の要素型を求める。
@@ -279,7 +220,7 @@ function memberOfListFamily(family, type) {
 
 // **スカラーは1要素の器と同型である**（`Scalar ⇒ [Scalar, __]`）。
 //
-// 「長さ1のリストは存在しない」（`[5]` は `Int`）は既にこの同型を**降りる**方向で
+// 「1要素のリテラルは要素そのもの」（`[5]` は `Int`）は既にこの同型を**降りる**方向で
 // 使っている。ここはその同じ同型を**昇る**方向で読むだけである——片方が `T`、もう片方が
 // `T` の器なら、上限は器である。
 //
@@ -288,8 +229,8 @@ function memberOfListFamily(family, type) {
 // 持ち上げの底が `__` のまま動かないから、持ち上げてよい。
 //
 // **そして自然同型はコードの表面に出さない。** 書かせた時点で自然ではなくなるからで、
-// 実際 Sign には1文字の `String` を書く手段が無い（`s ' 0` も `s ' (0 ~ 0)` も `Char` へ
-// 降りる）。だから昇る側はフロントエンドが黙って吸う。lexer.sn の `tokens` が記号1文字の
+// `s ' 0` は `Char` へ降りるが、`s ' (0 ~ 0)` は切り出しなので `String` のままである（段は
+// 変わらない）。書き手に変換を書かせないので、昇る側はフロントエンドが黙って吸う。lexer.sn の `tokens` が記号1文字の
 // 枝で `Char`、語の枝で `String` を積むのは、書き手にとっては同じ「トークンを1つ積む」で
 // あって、そこに変換を書かせる理由が無い。
 //
@@ -1257,19 +1198,12 @@ function getPropResultType(node, env) {
 
   // 範囲添字は部分列なので器と同じ型。要素型もそのまま引き継ぐ。
   if (sliceIndexNode(node)) {
-    // **長さ1のリストは存在しない。** 終端が起点と同じ切り出し（`s ' (1 ~+ 1 ~ 1)`）は
-    // 1要素であり、値としては既にスカラーになっている（interpreter.js）——型だけが器の
-    // まま取り残されると、幅が値より広くなる。
+    // **切り出しは入れ子の段を変えない。** 長さが 1 でも 0 でも器は器である（`s ' [1 ~ 1]` は
+    // `String`、`xs ' 1~` は `List`）。段を変えるのは添字 `' i`・後置 `~`・前置 `~`・1要素の
+    // リテラルだけで、長さで表現を変えるのは動的型付けになる（type_system.md）。以前ここで
+    // 静的に長さ1と分かる切り出しを要素型へ潰していたが、表現（Pass 4）は器のままだったので、
+    // `List(String)` では器の番地の下位バイトが文字として読まれていた。
     //
-    // 終端の無い形（`s ' i~`）は器の長さが要るので、そこは触らない。**これは直和の理由
-    // ではない**——直和（`Char | String`）は「どちらか分からない」ではなく「経路によって
-    // 型が違う」ことであり、両方の型はコンパイル時に決まっている（`gap` の枝はリテラルの
-    // `Char` と計算した `String`）。実行時に決まるのは**どの経路を通るか**だけである。
-    if (sliceLengthOne(node, env)) {
-      if (containerType === "String") return "Char";
-      const el = containerElementType(node.left, env);
-      if (el) return el;
-    }
     // 規則を切っても要素の型は同じである。落とすと、切った規則の添字が型を持たず、番地の規則でも
     // 番地の算術（溢れの検査）にならない。
     if (containerType === "List" || containerType === "Iterator") node.elementType = containerElementType(node.left, env);
@@ -1399,13 +1333,13 @@ function literalAtomTypeFromKind(node) {
   switch (node.kind) {
     // アドレスは `0x` 記法のみ（§3.6）。十進整数は `Int`。
     case "number": return node.value.includes(".") ? "Float" : "Int";
-    // **1文字は `Char`、2文字以上が `String`。**
+    // **文字列リテラルは長さによらず `String`、文字リテラルは `Char`。**
     //
-    // `String ≅ List(0u)`（§2）であり、1要素のリストはスカラーと同型（`[5]` は `Int`）。
-    // したがって1文字の文字列は `0u` 1個そのもの——`Char` である。潰れの規則を型に
-    // 見せているだけで、新しい概念ではない。
+    // `String ≅ List(0u)`（§2）であり、`0u` はその要素型である。1要素のリテラル（`[5]`）は
+    // 要素そのものだが、文字列の長さは型を変えない——`` `a` `` も、1文字の切り出しも `String`。
+    // 決めるのは書き方（`` ` `` か `\`）である。
     //
-    // 分けないと**表現が実行時の長さで変わる**。`Char` はレジスタに乗る符号位置、
+    // 長さで分けると**表現が実行時の長さで変わる**。`Char` はレジスタに乗る符号位置、
     // `String` は `{ptr, len}` の参照（stack_abi.md §4.6）なので、同じ型が両方を
     // 指すと実行時に見分ける必要が出る——それは動的型付けである。
     //
@@ -1764,7 +1698,7 @@ function computeAtomType(node, env) {
       }
       // §3.2の余積族テーブル。**`Char` も文字の並びを作る**——`String ≅ List(Char)` で
       // あり、文字を並べれば文字列だからである。1文字どうしを並べれば2文字になり、
-      // それは `Char` ではなく `String` である（潰れるのは1要素のときだけ）。
+      // それは `Char` ではなく `String` である。
       if (leftType === "String" || rightType === "String" || leftType === "Char" || rightType === "Char") {
         node.elementType = "Char";
         return "String";

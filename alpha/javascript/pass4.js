@@ -401,8 +401,8 @@ function unwrap(node) {
 // 文字・文字列リテラルの符号位置の並び。読めなければ null。
 // サロゲートペアを2文字と数えないため `[...s]` で回す。
 // **1文字かどうかは型が言う。** `Char` は Layer 2 の型であり（type_system.md §2）、
-// 1文字は `Char`、2文字以上が `String` である——`String ≅ List(Char)` と1要素の潰れ
-// （`[5]` は `Int`）から出てくる。
+// `String` の要素である。文字列は長さによらず `String` である——`[5]` が `Int` なのは
+// 1要素のリテラルの話で、文字列の長さは型を変えない。
 //
 // リテラルの形を見るのをやめたのは、**表現が実行時の長さで変わってはいけない**からで
 // ある。`Char` はレジスタに乗る符号位置、`String` は `{ptr, len}` の参照なので、同じ型が
@@ -1466,7 +1466,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			return 1;
 		}
 		const w = charSizeOf(em.conf.charset);
-		// 型が `String` なら2文字以上である（1文字は `Char` へ潰れ、0文字は `Unit`）。
+		// 1本に置くのは型が `Char` と言う1文字だけである。`` `a` `` は1文字でも `String` なので下の参照の道へ行く。
 		if (n.atomType === "Char" && cps.length === 1) {
 			const off = em.push();
 			if (off === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
@@ -2614,9 +2614,6 @@ function genExpr(node, env, em, scope, tail = false) {
 		if (!parts) return em.fail(n, `等差のレンジだけを出せます（${n.op}——添字が start + i × step にならない）`);
 		const want = slotsOfNode(n, em.conf, em.env);
 		if (want === null) return em.fail(n, `レンジの渡し方が決まりません（${n.atomType}）`);
-		// **長さ1のリストは存在しない。** 端点が同じレンジ（`[3 ~ 3]`）は1要素であり、
-		// それはスカラーである——型がそう言っているので、置くのも起点1本でよい。
-		if (want === 1) return genExpr(parts.start, env, em, scope);
 		const pieces = [parts.start, parts.step, ...(parts.end ? [parts.end] : [])];
 		if (pieces.length !== want) return em.fail(n, `レンジの本数が合いません（${pieces.length} と ${want}）`);
 		const base = em.slot;
@@ -4848,7 +4845,7 @@ function cannotBeUnit(node, env, scope, critical = false) {
 		if (critical || n.atomType === "Unit" || n.atomType === "Char" || n.atomType === "Address" || n.name === "div") return false;
 		return cannotBeUnit(n.left, env, scope) && cannotBeUnit(n.right, env, scope);
 	}
-	// **スカラーへの `' 0` は恒等射である**（`[x] ≅ x`——1要素の器は存在しない）。
+	// **スカラーへの `' 0` は恒等射である**（`[x] ≅ x`——スカラーは1要素の器として引ける）。
 	//
 	// 値を出す道は左辺をそのまま返すので、「`__` になり得るか」も左辺と同じでなければ
 	// ならない。片方だけが知っていると、**同じものが綴りによって違う命令数になる**
@@ -5419,43 +5416,10 @@ function genIndex(node, env, em, scope) {
 			const step = idx.right;
 			if (!(step && step.kind === "number" && literalValue(step) === 1n)) return null;
 		}
-		// 部分列は器と同じ型でなければおかしい——**ただし長さ1は別**である。1要素の器は
-		// 存在しないので、そこはスカラー（1本）になる。型がそう言っているなら従う。
-		if (rw !== cw && rw !== 1) return null;
-	}
-
-	// **長さ1の切り出しは要素そのものである。** 1要素の器は存在しないので、`s ' (i ~+ 1 ~ i)`
-	// は `s ' i` と同じものである——型がそう言っているので、引くのも要素1つでよい。
-	// **長さ1の切り出しは要素そのものである。** 1要素の器は存在しないので、型が
-	// スカラーだと言っているなら、引くのも要素1つでよい（`s ' (i ~+ 1 ~ i)` も
-	// `` `abc` ' 2~ `` も同じことである——長さが1だと決まっている）。
-	if (isSlice && rw === 1 && cw === 2) {
-		const et = node.atomType;
-		const em1 = elementCellSize(et, conf);
-		if (!em1 || !em1.size) return em.fail(node, `切り出した要素の幅が決まりません（${et}）`);
-		const cw2 = genExpr(node.left, env, em, scope);
-		if (cw2 === false) return false;
-		if (cw2 !== cw) { em.pop(cw2); return null; }
-		const co2 = (em.slot - cw) * 8;
-		if (bounded) {
-			em.emit(`mov ${SCRATCH[1]}, #${bounded.start}`, "長さ1の切り出しは要素そのもの");
-		} else {
-			const sw = genScalar(idx.left, env, em, scope, "切り出しの起点はレジスタ1本の値です");
-			if (sw === false) return false;
-			em.load(SCRATCH[1], (em.slot - 1) * 8, "長さ1の切り出しは要素そのもの");
-			em.pop(1);
-		}
-		em.load(SCRATCH[0], co2 + 8, "len");
-		em.emit(`cmp ${SCRATCH[1]}, ${SCRATCH[0]}`, "範囲内か");
-		em.load(SCRATCH[0], co2, "ptr");
-		emitGuardedElementLoad(em, "x14", SCRATCH[0], SCRATCH[1], em1.size);
-		em.emit("movz x12, #0x8000, lsl #48", "範囲外は __");
-		em.emit(`csel ${SCRATCH[0]}, x14, x12, lo`);
-		em.pop(cw);
-		const eo = em.push();
-		if (eo === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
-		em.store(SCRATCH[0], eo, "要素");
-		return 1;
+		// 部分列は器と同じ型である——**長さが 1 でも 0 でも**（切り出しは入れ子の段を変えない）。
+		// 以前は長さ1のときだけ要素（1本）を許していたが、型と表現が別々に潰れるので、
+		// 要素が2本で運ばれる `List(String)` では器の番地を文字として読んでいた。
+		if (rw !== cw) return null;
 	}
 
 	// **`x ' 0~` は恒等射である。**
@@ -5483,6 +5447,9 @@ function genIndex(node, env, em, scope) {
 	// これはカーソルを進める操作の原型でもある。`cur ' 1~` が次の状態そのものなので、
 	// 状態を持ち回るのに記憶は要らない。
 	if (isSlice && ruleLeft && cw >= 2) {
+		// **終端の有る切り出しは、起点をずらすだけでは足りない。** 終端も縮めなければならず、
+		// その命令はまだ無い——ずらすだけだと `||[0 ~ 9] ' [2 ~ 3]||` が 2 ではなく 8 になる。
+		if (bounded) return em.fail(node, "終端の有る切り出しを規則に当てる形はまだ出せません（起点はずらせるが、終端を縮める命令が無い）");
 		const cvw0 = genExpr(node.left, env, em, scope);
 		if (cvw0 === false) return false;
 		if (cvw0 !== cw) { em.pop(cvw0); return null; }
