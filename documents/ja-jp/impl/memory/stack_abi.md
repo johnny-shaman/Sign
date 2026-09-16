@@ -533,11 +533,31 @@ arr[0] = 1; arr[1] = 2; /* ... */
 ```
 ` charset : ascii（Char = 1 byte）のとき
 m : [
-	a : `x`      ` String  1 byte  → offset 0
+	a : \x       ` Char    1 byte  → offset 0
 	b : 1        ` Int     8 byte  → offset 8（1 の直後ではなく境界まで送る）
 ]
 ` 全体: size 16 / align 8
 ```
+
+> [!IMPORTANT]
+> **スロットに置かれるのは中身ではなく「運ぶ姿」である。**
+>
+> §4.6 が `String` / `List` / `Struct` を参照渡しと定めている。構造体のスロットも同じで、
+> 置かれるのは `{ptr, len}` や `{ptr}` であって中身ではない。**中身の長さで場所を取ると、
+> 次のスロットが ptr を踏み潰す**——リテラルのときだけ中身が読めるので、その形だけが
+> 黙って壊れる。
+>
+> ```
+> ` charset : ascii、aarch64（GPR 8 byte）のとき
+> s : [
+>	a : `x`      ` String  {ptr, len} で 16 byte → offset 0
+>	b : 1        ` Int               8 byte → offset 16
+> ]
+> ` 全体: size 24 / align 8
+> ```
+>
+> 1文字の `` `x` `` でも 16 byte である。長さが型に入っていない以上、**中身を埋め込む道は
+> そもそも無い**（埋め込めるなら長さが型に在ることになる）。
 
 根拠はハードウェアにある。
 

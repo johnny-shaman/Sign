@@ -99,6 +99,18 @@ check("1 byte の次の 8 byte は境界まで送られる", slotsOf("m : [\n\ta
 check("全体の大きさは最大境界へ切り上げる", measure(rhs("m : [\n\ta : \\x\n\tb : 1\n]"), packed).size, 16);
 check("構造体の境界は最大スロットの境界", measure(rhs("m : [\n\ta : \\x\n\tb : 1\n]"), packed).align, 8);
 check("alignUp の単体動作", [alignUp(0, 8), alignUp(1, 8), alignUp(8, 8), alignUp(9, 8)], [0, 8, 8, 16]);
+
+// **条文の綴りそのままを1つ置く。** `stack_abi.md` §7.2 の実例は長らく
+// ``a : `x``` を「String 1 byte → offset 0、全体 size 16」と書いていた。§4.6 が String を
+// ``{ptr, len}`` と定めているので実装の方が正しく（a@0 は 16 バイト、b@16、全体 24）、
+// **条文の実例だけが古かった**。ここの検査は同じ形を ``\x``（Char）に差し替えてあったので、
+// 条文の綴りのままの入力は**どこにも無かった**——だから食い違いが誰にも見えなかった。
+// 条文を直した（2026-09-17）ついでに、その綴りをここへ置く。次に条文と実装が割れたら、
+// 直すのは条文か実装かの**どちらか**であって、検査が黙っている道はもう無い。
+const specSpelling = "s : [\n\ta : `x`\n\tb : 1\n]";
+check("条文 §7.2 の綴り：String は運ぶ姿で置かれる", slotsOf(specSpelling, packed), ["a@0", "b@16"]);
+check("条文 §7.2 の綴り：全体の大きさ", measure(rhs(specSpelling), packed).size, 24);
+check("条文 §7.2 の綴り：全体の境界", measure(rhs(specSpelling), packed).align, 8);
 // 要素のストライドも境界へ切り上がる（`List(Struct)` が壊れないため）。
 check("List の stride は要素境界へ切り上げた大きさ", measure(rhs("l : [1 2 3]"), A64).stride, 8);
 
