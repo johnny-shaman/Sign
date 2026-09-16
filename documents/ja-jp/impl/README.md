@@ -17,6 +17,7 @@
 ```
 impl/
 ├── layer_relations.md ← 演算子と層の関係（何を要求するかで層が決まる・実測表）
+├── idiom_to_instructions.md ← 字面と命令の対応（Sign で Sign を書くための土台・実測表）
 │
 ├── syntax/            ← 字句・構文フェーズ
 │   ├── operator_table.md    演算子テーブル（優先順位・位置・Unit挙動）

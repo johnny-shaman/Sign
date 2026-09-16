@@ -17,6 +17,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
 import { evaluate, newRuntimeEnv, UNIT, isUnit, observe } from "../interpreter.js";
+import { generateAsm } from "../pass4.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const grammar = fs.readFileSync(path.join(__dirname, "..", "sign.pegjs"), "utf8");
@@ -171,5 +172,23 @@ for (const name of ["lexer.sn", "parser.sn", "preprocess.sn"]) {
 	compile(fs.readFileSync(path.join(signDir, name), "utf8"), { parse: parser.parse, readImport, fixpointStats });
 	check(`${name}: 型の不動点はどの回も上限の前で止まる`, fixpointStats.length > 0 && fixpointStats.every((s) => s.rounds < s.limit), true);
 }
+// ---- emit.sn：後段を Sign で書く最初の1枚 ----
+//
+// 自己ホストの後段は「綴りを文字として書き出す」形で書く（idiom_to_instructions.md）。この1枚は
+// その形を使い切っている——位置で歩く、出来た端から書き出す、表を実行時の鍵で引く、外れは `__` を
+// `|` で受ける、駆動行が全部を呼ぶ。**機械が出せることが要点**なので、値ではなく診断と出方を見る。
+// `blr` が 0 なのは、`$` が静的に解けて実行時の関数値が無いことの裏返しである。
+{
+	const source = fs.readFileSync(path.join(signDir, "emit.sn"), "utf8");
+	const { nodes, env, diagnostics } = compile(source, { parse: parser.parse, readImport });
+	check("emit.sn: 前段の診断が無い", diagnostics.length, 0);
+	const asm = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
+	check("emit.sn: 機械の診断が無い", asm.diagnostics.length, 0);
+	check("emit.sn: blr を出さない", (asm.text.match(/^\tblr/gm) || []).length, 0);
+	// 命令数は後段を直せば動く。桁が変わったら（半分・倍）気づけるだけの幅で見る。
+	const count = (asm.text.match(/^\t[a-z]/gm) || []).length;
+	check("emit.sn: 命令数はこの桁（500〜700、いまは 576）", count > 500 && count < 700, true);
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

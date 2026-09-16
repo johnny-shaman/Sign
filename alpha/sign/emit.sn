@@ -1,0 +1,73 @@
+`emit.sn — 後段の最初の一枚。綴りを文字として書き出す`
+
+`operator_table.sn`@~
+
+`--- 書き出し先。番地は束縛するだけで、算術はしない ---`
+
+out : 0x9000000
+
+`--- 並べる。左から順に評価され、最後の値が返る ---`
+
+seq2 : a b ? b
+seq4 : a b c d ? d
+seq8 : a b c d e f g h ? h
+
+`--- 1文字 ---`
+
+put_char : c ?
+	out # c
+
+`--- 綴り。添字で歩く（器を縮めると完全性公理で止まらない） ---`
+
+put_str : s i ?
+	i >= ||s|| : i
+	out # (s ' i) : put_str s (i + 1)
+
+`--- 10 の冪。n を収める桁を選ぶ ---`
+
+scale : n d ?
+	(n / d) = 0 : d / 10
+	scale n (d * 10)
+
+`--- 上の桁から 1 桁ずつ。`%` は出ないので割り目で書く ---`
+
+put_digits : n d ?
+	d = 0 : n
+	out # (48 + ((n / d) - (((n / d) / 10) * 10))) : put_digits n (d / 10)
+
+put_dec : n ?
+	n = 0 : put_char 48
+	put_digits n (scale n 1)
+
+`--- レジスタと即値。表は要らない——綴りと10進の連結である ---`
+
+put_reg : n ?
+	seq2 (put_char 120) (put_dec n)
+
+put_imm : n ?
+	seq2 (put_char 35) (put_dec n)
+
+`--- 綴りから命令の綴りを引く。無い綴りなら __ が返る ---`
+
+mnemonic : k ?
+	(asm_infix_signed ' k~) ' gpr_signed
+
+`--- 一行ずつ ---`
+
+put_alu : op d n m ?
+	seq8 (put_str op 0) (put_char 32) (put_reg d) (put_str `, ` 0) (put_reg n) (put_str `, ` 0) (put_reg m) (put_char 10)
+
+put_movz : d n ?
+	seq4 (put_str `movz ` 0) (put_reg d) (put_str `, ` 0) (seq2 (put_imm n) (put_char 10))
+
+`--- 綴りが表に無ければ .err を吐く（__ を | で受ける） ---`
+
+put_infix : k d n m ?
+	put_alu ((mnemonic k) | `.err`) d n m
+
+`--- 駆動 ---`
+
+main : x ?
+	seq4 (put_movz 9 42) (put_infix `+` 0 1 2) (put_infix `-` 10 11 12) (put_infix `><` 0 1 2)
+
+main 0
