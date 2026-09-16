@@ -20,7 +20,8 @@ Sign の後段を Sign で書くための土台である。
 | 何を | どう |
 |---|---|
 | 出す | `compile(src, {charset:"ascii", readImport})` → `generateAsm(nodes, env, {target:"aarch64_qemu", charset:"ascii", layer:1})` |
-| 移植の門 | 同じ入力を `{regAlloc:false}` でも出す。**別形** と呼ぶ |
+| 移植の門 | 同じ入力を `{regAlloc:false, peepholes:false}` でも出す。**別形** と呼ぶ（本書の「別形」の数は `{regAlloc:false}` だけで測ったもので、両方切った数は `alpha/javascript/test/corpus.js` に記録がある） |
+| 門を走らせる | `node alpha/javascript/test/asm_gate.test.js`。比べる道具は `alpha/javascript/asmdiff.mjs`（`node asmdiff.mjs a.s b.s` でも使える） |
 | 静的な命令数 | 1行から `//` 以降を落として両端を削る。空行・`.` で始まる行（ディレクティブ、`.L…:` を含む）・`名前:` だけの行を捨て、残りを1命令と数える |
 | 実行した命令数 | `qemu-system-aarch64 -M virt -cpu cortex-a57 -accel tcg,one-insn-per-tb=on -d exec,nochain` のトレースを読み、pc が `0x40080090` 以上の行だけ数える（`start.s` はそこまで）。`0` という原文が静的3・実行3で一致することで較正した |
 | 値 | 実機（qemu）とインタプリタの両方へ通し、観測境界（`Char` は符号位置、`!__` は 0）を揃えて突き合わせる |
@@ -540,10 +541,10 @@ main 0
 5. **`charset` が `ascii` 以外**。幅の前置（`NxHHHH`）は未実装であり、UTF の道は測っていない。
 6. **regAlloc を切った形の実行命令数**。別形は静的な数しか測っていない。移植の門は静的な比較なのでそれで足りるが、
    「別形は何倍遅いか」は言えない。
-7. **`peepholes: false` は旗として存在していない。** `pass4.js` に `peepholes` という綴りは1つも無く、
-   `preprocess.sn` を `{regAlloc:false}` だけで出したものと `{regAlloc:false, peepholes:false}` で出したものは
-   **バイト同一**（どちらも 4869 命令）である。覗き穴の4本は `wrapFrame` の中で常に走る。
-   移植の門は実質 `regAlloc:false` の1本であり、2つの旗として書いてある所は直すか、旗を配線するかである。
+7. ~~**`peepholes: false` は旗として存在していない。**~~ **配線した**（2026-09-16）。書いた当時は `pass4.js` に
+   `peepholes` という綴りが1つも無く、`{regAlloc:false}` だけで出したものと `{regAlloc:false, peepholes:false}` で
+   出したものはバイト同一だった。いまは覗き穴の4本と、その後の畳みループが旗の下に入っている。
+   両方切った側の命令数（preprocess.sn 5628 など）は `test/corpus.js` に golden として記録してある。
 8. **表が大きくなったときの実行時の鍵**。35 行で 91〜383 を測った。数百行での形（線形のままか）は測っていない。
 9. **`__` の見張りを外したときの正しさ**。§4 の #1 は「ループ不変だから外せる」と書いてあるが、
    外して壊れないことは測っていない。**外す提案ではなく、大きさの記録である。**

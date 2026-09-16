@@ -9064,8 +9064,11 @@ function peelGroup(x, flatten) {
 }
 
 
-function wrapFrame(bodyLines, slots, name, movedSp = false, alloc = true) {
-	bodyLines = peepholeShareAddressBase(peepholeDeadSlotStores(peepholeSlotMoves(peepholeRedundantLoads(bodyLines))));
+function wrapFrame(bodyLines, slots, name, movedSp = false, alloc = true, peep = true) {
+	// **覗き穴を切れる口**（`peep`）。自己ホストの門は「JS の pass4 が出した命令列と、Sign で
+	// 書いた後段が出した命令列を、最適化を切って比べる」ものなので、切る口が無ければ門その
+	// ものが開かない。既定は入りのままで、切ったときだけ通らない道である。
+	if (peep) bodyLines = peepholeShareAddressBase(peepholeDeadSlotStores(peepholeSlotMoves(peepholeRedundantLoads(bodyLines))));
 
 	// **フレームが要るかは、写す*前*の本体で決める。** 写した後を見ると `x29` が消えて
 	// いるので「場所を使わない関数」に見え、退避を出さないまま x19… を壊す機械語になる
@@ -9081,7 +9084,7 @@ function wrapFrame(bodyLines, slots, name, movedSp = false, alloc = true) {
 	// ——動かなくなるまで回す。
 	if (moved) {
 		bodyLines = moved.lines;
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; peep && i < 4; i++) {
 			const next = deadCodeElim(propagateCopies(peepholeFoldMoves(bodyLines)));
 			if (next.length === bodyLines.length && next.every((l, k) => l === bodyLines[k])) break;
 			bodyLines = next;
@@ -10053,7 +10056,7 @@ function genFunction(name, lambdaNode, env, em, mono) {
 
 	const body = em.lines;
 	em.lines = outer;
-	const wrapped = wrapFrame(body, em.maxSlot, name, em.movedSp, em.conf.regAlloc !== false);
+	const wrapped = wrapFrame(body, em.maxSlot, name, em.movedSp, em.conf.regAlloc !== false, em.conf.peepholes !== false);
 	checkStackFree(em, wrapped, name, lambdaNode);
 	em.lines.push(...wrapped);
 	em.blank();
@@ -10112,6 +10115,9 @@ function generateAsm(nodes, env, options = {}) {
 		layer: options.layer,
 		// **割り当てを切る口**（既定は入り）。パスごとに何を決めたのかを分けて読むため。
 		regAlloc: options.regAlloc,
+		// **覗き穴を切る口**（既定は入り）。`regAlloc` と対で、これを切ると素の命令列が出る
+		// ——自己ホストの門（JS の後段と Sign の後段の命令列を比べる）は、両方を切った側で見る。
+		peepholes: options.peepholes,
 	};
 	const em = new Emitter(conf);
 	if (!widthsOf(conf.target)) {
@@ -10339,7 +10345,7 @@ function generateAsm(nodes, env, options = {}) {
 	const body = em.lines;
 	em.lines = outer;
 	em.lines.push("\t.global _sign_main");
-	const wrappedMain = wrapFrame(body, em.maxSlot, "_sign_main", em.movedSp, em.conf.regAlloc !== false);
+	const wrappedMain = wrapFrame(body, em.maxSlot, "_sign_main", em.movedSp, em.conf.regAlloc !== false, em.conf.peepholes !== false);
 	checkStackFree(em, wrappedMain, "_sign_main", null);
 	em.lines.push(...wrappedMain);
 	// 文字列の中身は最後に置く。`.text` と混ぜないのは、書き換えない領域だからである。
