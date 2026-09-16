@@ -55,6 +55,11 @@ export const CORPUS = [
 	// golden では足りない理由も、そのままこの行に立っている。
 	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "67d287f67f8b3139", plain: "67d287f67f8b3139" } },
 	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "fa2dd3698dc3bbc2", plain: "34d2cebcee03e40e" } },
+	// 型システムと Pass 4 の継ぎ目。表が8つと、そこから1つの還元、それに字面のプリフィックスを
+	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
+	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
+	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
+	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1293, plain: 2053 }, digest: { full: "db010fbe9c735c49", plain: "cc5d8a20de8e5ca5" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,

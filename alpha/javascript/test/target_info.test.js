@@ -8,7 +8,7 @@
  *
  * 実行: node test/target_info.test.js（`npm test` からも呼ばれる）
  */
-import { widthsOf, isSupported, sizeOf, reduceToMachineType, charSizeOf, CHARSETS, DEFAULT_CHARSET } from "../target_info.js";
+import { widthsOf, isSupported, sizeOf, reduceToMachineType, charSizeOf, charLimitOf, literalParts, literalDigits, CHARSETS, CHARSET_LIMITS, DEFAULT_CHARSET, ACCESS_WIDTHS, LITERAL_FAMILIES } from "../target_info.js";
 import { readOptionMs } from "../option_ms.js";
 
 let passed = 0;
@@ -83,6 +83,16 @@ check("未対応なら幅も null", widthsOf("cortex_m"), null);
 check("未対応なら sizeOf も null", sizeOf("Int", "cortex_m"), null);
 check("未知のターゲットも同じ", widthsOf("nosuch"), null);
 
+// **「未対応」は零対象より先に立つ。** `Unit` は幅が型名だけで決まる唯一の型なので、
+// ターゲットを見ずに 0 を返す道がある。その順番を間違えると「幅も分からないターゲットで
+// `Unit` だけ 0 が返る」——**分からないことを分かった顔で通す**形になる（原理4）。
+// 移植の門を攻めていて見つけた（2026-09-16）: `target_info.sn` の `size_of` から未対応の
+// 見張りを落としても、**この問いを誰も立てていなかったので門は緑のまま**だった。
+// 同じことが還元の側にもある（`mt_signed` / `mt_class` の見張り）ので、そちらも問う。
+check("未対応なら Unit も決まらない（零対象より「未対応」が先）", sizeOf("Unit", "cortex_m"), null);
+check("未対応なら還元も null（Unit でも）", reduceToMachineType("Unit", "cortex_m"), null);
+check("未対応なら還元は符号もクラスも言わない", reduceToMachineType("Int", "cortex_m"), null);
+
 // ---- option.ms との接続 ----
 //
 // 幅の根拠はターゲットであり、ターゲットの入口は `option.ms` である。この2つが繋がって
@@ -106,6 +116,76 @@ check("ascii は 1 byte（layer 0 の組み込み向け）", charSizeOf("ascii")
 check("どちらも固定幅なので `String ≅ List(0u)` が保たれる", Object.values(CHARSETS).every((n) => Number.isInteger(n) && n > 0), true);
 check("可変長（utf8）は選択肢に無い", Object.prototype.hasOwnProperty.call(CHARSETS, "utf8"), false);
 check("既定値は ascii（OS カーネルが初歩の対象なので）", DEFAULT_CHARSET, "ascii");
+
+
+// ---- 書ける符号位置の上限は、幅とは別の話である ----
+//
+// **この枚の export のうち `charLimitOf` / `literalParts` / `literalDigits` の3つは、
+// ここで一度も問われていなかった。** 型検査・インタプリタ・コード生成の3箇所が同じ数を
+// 引くと書いてあるのに、その数を見る所が無い。移植の門（`target_info_sn.test.js`）は
+// **実際に問われた問いだけ**を Sign 側へ立てるので、ここで問わないものは Sign 側でも
+// 誰も見ない——実測で、`charLimitOf("utf32")` を Sign 側で ascii の上限に書き換えても
+// 門は緑のまま通った。問う所を足すと、門はその分だけ広がる。
+//
+// `ascii` は1バイトだが書けるのは 0x7F までである。0x80〜0xFF は「入るが charset の外」で、
+// 文字の算術（`c + 1`）がそこを越えたら `__` になる——**足せることと、足した先が文字で
+// あることは別**だからである。
+check("ascii の上限は 0x7F（1 byte 入るが、書けるのはここまで）", charLimitOf("ascii"), 0x7f);
+check("utf32 の上限は 0x10FFFF（Unicode の全域）", charLimitOf("utf32"), 0x10ffff);
+check("知らない charset は既定（ascii）の上限を使う", charLimitOf("nosuch"), 0x7f);
+
+// **「既定」は1か所にある。** `charLimitOf` は以前 `charset === "utf32" ? … : 0x7f` という
+// 三項で、知らない charset が ascii の上限に落ちるのは `DEFAULT_CHARSET` に従った結果では
+// なく**三項の else に居合わせた結果**だった。幅は `CHARSETS[DEFAULT_CHARSET]` を見るので、
+// 既定を変えた日に幅だけが動く。表にして根拠を1本にしたので、鍵が揃っていることを見る
+// ——揃っていない charset は「幅は在るが上限が無い」という答えを返す。
+check("幅の表と上限の表は同じ charset を並べる", Object.keys(CHARSETS).sort(), Object.keys(CHARSET_LIMITS).sort());
+check("既定はどちらの表にも在る", [DEFAULT_CHARSET in CHARSETS, DEFAULT_CHARSET in CHARSET_LIMITS], [true, true]);
+
+// ---- リテラルのプリフィックスは、幅と数字に分かれる（value_representation.md §5） ----
+//
+// `x` は byte、`u` は bit で書く——それぞれの族の世界共通の呼び名（UTF-8/16/32）に
+// 合わせているだけなので、**ここで byte へ揃える**。以降のパスは byte しか見ない。
+check("x は byte で書く（1x → 1 byte）", literalParts("1x41").width, 1);
+check("2x → 2 byte", literalParts("2x4142").width, 2);
+check("4x → 4 byte", literalParts("4x41424344").width, 4);
+check("8x → 8 byte", literalParts("8x4142434445464748").width, 8);
+check("16x → 16 byte（SIMD の幅）", literalParts("16x00").width, 16);
+check("u は bit で書く（8u → 1 byte）", literalParts("8u3042").width, 1);
+check("16u → 2 byte", literalParts("16u3042").width, 2);
+check("32u → 4 byte", literalParts("32u0041").width, 4);
+
+// **`0` は「幅 0」ではなく「言っていない」である。** 呼ぶ側が `option.ms`（`target` の
+// 語幅 / `charset`）から埋める（§5.4）。`NaN` とは別の答えでなければならない
+// ——`unicodeWidthError`（pass4.js）が両者を区別して断っているからである。
+check("0 は幅 0 ではなく「言っていない」", literalParts("0u000D").width, null);
+check("0x も同じ（幅を言っていない）", literalParts("0x7F").width, null);
+check("機械にその幅の命令が無いものは NaN（3 byte の読み書きは無い）", Number.isNaN(literalParts("3x40810028").width), true);
+check("8 で割り切れない bit 幅も NaN（12u）", Number.isNaN(literalParts("12u0041").width), true);
+
+check("b は2進", literalParts("0b1010").radix, 2);
+check("r 族は16進", literalParts("0r18").radix, 16);
+check("族はそのまま取り出せる", [literalParts("0u000D").family, literalParts("0x7F").family], ["u", "x"]);
+
+// **族も腕である。** 4つの綴りは文字クラスへ畳まず表に置いてある——畳むと、移植の門は
+// 「`r` の枝が一度も問われていない」と言えなくなる（`target_info_sn.test.js` の「見えているか」）。
+// 表に在る綴りは全部通り、無い綴りは通らない、の両方を見る。
+check("族の表に在る綴りは全部プリフィックスとして通る", [...LITERAL_FAMILIES].map((f) => literalParts("1" + f + "41").family), [...LITERAL_FAMILIES]);
+check("族の表に無い綴りは通らない（`1a41`）", literalParts("1a41"), null);
+check("機械が持つ幅はこの5本だけ", [...ACCESS_WIDTHS], [1, 2, 4, 8, 16]);
+
+// **プリフィックスは可変長である。** `16x` や `32u` は3文字なので、`.slice(2)` で数字を
+// 取ると壊れる。数字が欲しい側は `digits` を使う。
+check("プリフィックスが可変長でも数字は正しく取れる（16x）", literalDigits("16x00"), "00");
+check("32u も同じ", literalDigits("32u0041"), "0041");
+check("プリフィックスが無ければ分けられない", literalParts("48"), null);
+
+// ---- `Raw` は「値は在るが型が無い」 ----
+//
+// 生の番地から読んだビット列がこれである（`@0x40200000`）——`__` は値が無いのに対し、
+// こちらは在る。単体で出すときは GPR 1語として運び、**符号は主張しない**
+// （ビットはビットであり、符号ありと読むかどうかは相手が決める）。
+check("Raw は GPR 1語・符号を主張しない", reduceToMachineType("Raw", "aarch64_qemu"), { size: 8, signed: false, class: "gpr" });
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

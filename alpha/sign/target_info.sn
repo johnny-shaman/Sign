@@ -1,0 +1,275 @@
+`target_info.sn — 型システムと Pass 4 の継ぎ目。型の名前を「何バイト幅・符号あり/なし」へ落とす`
+`移植もと alpha/javascript/target_info.js`
+
+`幅は方針ではなく事実である。type_system.md §2 が Address を「GPR 幅」、Float を「FPU の`
+`最高精度」と定めており、どちらもレジスタファイルを名指ししている。だからこの表は設計`
+`判断の置き場ではなく ISA の転記である`
+
+`AArch64 以外は書かない。書かないことが「まだ決まっていない」である——鍵が無ければ __ が`
+`返り、それが JS 側の `|| null` と同じ線引きになる。憶測で表を埋めると、間違った幅で`
+`黙って通る方が危ない`
+
+`--- ターゲットの幅クラス ---`
+
+`endian を同じ行に置いてはいけない。幅の欄は Int・endian は String なので、クラスの名前で`
+`幅を引く道（w ' cls~）が「鍵が実行時に決まる引き方は、全スロットが同じ幅でなければ`
+`出せません」で断られる。別の表へ出すと機械は 8 を返す（実測）`
+
+target_widths :
+	`aarch64_rpi` :
+		gpr : 8
+		float : 8
+		vector : 16
+	`aarch64_qemu` :
+		gpr : 8
+		float : 8
+		vector : 16
+	`aarch64_firmware` :
+		gpr : 8
+		float : 8
+		vector : 16
+
+target_endian :
+	`aarch64_rpi` : `little`
+	`aarch64_qemu` : `little`
+	`aarch64_firmware` : `little`
+
+`--- 符号とクラス ---`
+
+`Address は符号なし（値域が 0 以上）、Int は符号あり（十進は符号を書ける唯一の記法）`
+`Float は IEEE 754 で符号あり。Raw は「値は在るが型が無い」ので符号を主張しない`
+
+signedness :
+	`Address` : `unsigned`
+	`Int` : `signed`
+	`Char` : `unsigned`
+	`Float` : `signed`
+	`Vector` : `signed`
+	`Raw` : `unsigned`
+
+`真偽は所属の表で持つ。= は器に使えず、== は解釈器と機械で答えが違う（機械は真のとき`
+`器の番地を返す）——表を引けば両エンジンで同じ答えになる`
+
+is_signed :
+	`signed` : `signed`
+
+`Char は符号位置という整数なので、レジスタ上は GPR である。記憶上の幅だけが charset で`
+`決まる。Identity（!__）は値として運ばれるとき GPR 1本である`
+
+width_class :
+	`Address` : `gpr`
+	`Int` : `gpr`
+	`Char` : `gpr`
+	`Float` : `float`
+	`Vector` : `vector`
+	`Identity` : `gpr`
+	`Raw` : `gpr`
+
+`型名だけで幅が決まるもの。Unit は零対象なので場所を占めない`
+`String はここに無い——List(0u) と同型だが長さが型に入っていないので単体では決まらない`
+
+fixed_size :
+	`Unit` : 0
+
+`--- charset ---`
+
+`どちらも固定幅である。可変長を選ぶと String ≅ List(0u) の同型が崩れ、s ' i を`
+`base + i × sizeof(T) の1命令で出せなくなる`
+
+charsets :
+	`ascii` : 1
+	`utf32` : 4
+
+`書ける符号位置の上限。幅とは別の話で、ascii は1バイトだが書けるのは 0x7F までである`
+`文字の算術がここを越えたら __ になる——足せることと、足した先が文字であることは別`
+
+charset_limit :
+	`ascii` : 0x7F
+	`utf32` : 0x10FFFF
+
+`__ の niche。0 を使ってはいけない——Sign では 0 は真であり、0 = 0 の返せるオペランドは`
+`0 しかない。Int では INT_MIN、Address では AArch64 の非正準領域である`
+
+unit_niche : `0x8000000000000000`
+
+`既定は ascii。最初に書くのは OS カーネルであり、そこは layer 0 の世界である`
+
+default_charset : `ascii`
+
+`--- 表を引く ---`
+
+`表は必ず関数越しに引く。静的な鍵で外すと機械は「構造体に Struct というスロットが`
+`ありません」で断り、__ は返らない（実測）。仮引数越しの実行時の鍵だけが JS の`
+`undefined と同じ答えになる`
+
+widths_of : tg ? target_widths ' tg~
+endian_of : tg ? target_endian ' tg~
+signed_of : ty ? signedness ' ty~
+class_of : ty ? width_class ' ty~
+charset_of : cs ? charsets ' cs~
+
+`真は前提そのものを返す。__ でないことしか意味を持たない`
+
+is_supported : tg ?
+	(widths_of tg) : tg
+
+width_by_class : w cls ? w ' cls~
+
+`--- 幅 ---`
+
+size_of : ty tg ?
+	!(widths_of tg) : __
+	(fixed_size ' ty~) : (fixed_size ' ty~)
+	width_by_class (widths_of tg) (class_of ty)
+
+`Pass 4 が要る形（幅・符号・クラス）。器を返すと sret の上界が要るので3つの問いに分ける`
+`Unit の幅は 0 だが、0 は Sign では真である——だから「決まらない」の見張りは !(size_of …)`
+`で書ける。JS の size === null と同じ線が引ける`
+
+mt_size : ty tg ? size_of ty tg
+
+mt_signed : ty tg ?
+	!(size_of ty tg) : __
+	is_signed ' (signed_of ty)~
+
+mt_class : ty tg ?
+	!(size_of ty tg) : __
+	class_of ty
+
+`--- charset の問い ---`
+
+char_size_of : cs ? (charsets ' cs~) | (charsets ' default_charset~)
+char_limit_of : cs ? (charset_limit ' cs~) | (charset_limit ' default_charset~)
+
+`--- 字面のプリフィックス ---`
+
+`NxHHHH / NuHHHH の先頭の数がその幅である。x は byte、u は bit で書く——それぞれの族の`
+`世界共通の呼び名（UTF-8/16/32）に合わせているだけなので、ここで byte へ揃える`
+
+`プリフィックスは可変長である（16x や 32u は3文字）。だから数字は「2文字目から」ではなく`
+`数字の続く長さで切る。JS 側にある slice(2) の落とし穴は移さない——一式でも一度も通らず、`
+`しかも同じ関数の但し書き（可変長）と矛盾している`
+
+zero_ch : \0
+nine_ch : \9
+u_ch : \u
+x_ch : \x
+r_ch : \r
+b_ch : \b
+
+is_digit : c ?
+	(c >= zero_ch) & (c <= nine_ch) : c
+	__
+
+`数字の続く長さ。器を縮めず添字で歩く`
+
+digit_run : s i ?
+	i >= ||s|| : i
+	is_digit (s ' i) : digit_run s (i + 1)
+	i
+
+`十進の値。桁の値は零からの隔たりそのものなので、10 枝の表は要らない`
+`——実測で表が 220 命令、引き算が 136 命令。0 は真なので、終わりは「数字でない」で見る`
+
+digit_num : s i acc ?
+	i >= ||s|| : acc
+	!(is_digit (s ' i)) : acc
+	digit_num s (i + 1) ((acc * 10) + ((s ' i) - zero_ch))
+
+`族は表ではなく所属で見る。鍵が Char なので綴りの表には入らない`
+
+fam_ok : c ?
+	c = x_ch : c
+	c = u_ch : c
+	c = r_ch : c
+	c = b_ch : c
+	__
+
+`プリフィックスが在るか。数字が1文字も無ければ在らない（JS の ^([0-9]+) がそれである）`
+`数字だけで終わる字面（1 / 10 / 48）は s ' n が範囲の外なので __ が渡り、完全性公理の`
+`見張りが fam_ok の本体より先に立って __ を返す`
+
+`digit_run を既定引数のブロックで let にしてはいけない。そこから呼ぶと String の仮引数の`
+`型が呼ばれた先へ伝わらず、digit_run が「仮引数 s の渡し方が決まりません（直和か族）」で`
+`落ちて、その中の s ' i が「まだ出せない式です（get_prop）」になる（実測。Int の引数なら`
+`伝わる）。式を2回書く方が安いという §1.5 の但し書きが、ここでは唯一の書き方である`
+
+lit_family : s ?
+	(digit_run s 0) = 0 : __
+	fam_ok (s ' (digit_run s 0))
+
+`数字の部分。開いた切り出しなので写しは起きない（add と subs だけ）`
+
+lit_digits : s ?
+	!(lit_family s) : __
+	s ' ((digit_run s 0) + 1)~
+
+`b（2進）だけが 16 でない。族が無ければそもそも答えが無い`
+
+lit_radix : s ?
+	!(lit_family s) : __
+	(lit_family s) = b_ch : 2
+	16
+
+`機械が持っている幅だけが幅である（1/2/4/8 と、SIMD の 16）`
+`0 は「幅 0」ではなく「言っていない」——呼ぶ側が option.ms から埋める`
+`機械にその幅の命令が無いもの（3x / 12u）は「言っていない」とは別の答えでなければならない`
+`——unicodeWidthError が両者を区別して断っているからである。Sign に NaN は無く __ は`
+`既に「言っていない」で使っているので、ここは負の Int で返す`
+
+no_width : 0 - 1
+
+is_access : n ?
+	n = 1 : n
+	n = 2 : n
+	n = 4 : n
+	n = 8 : n
+	n = 16 : n
+	__
+
+`u は bit で書くので 8 で割る。割り切れない指定（12u）は幅ではない`
+`% は出ないので割り目で書く`
+
+bits_to_bytes : n ?
+	(n - ((n / 8) * 8)) = 0 : n / 8
+	no_width
+
+bytes_of : fam n ?
+	fam = u_ch : bits_to_bytes n
+	n
+
+lit_width : s ?
+	!(lit_family s) : __
+	(digit_num s 0 0) = 0 : __
+	(is_access (bytes_of (lit_family s) (digit_num s 0 0))) | no_width
+
+`数字が欲しい側はこれを使う。プリフィックスが無ければ __ である`
+
+literal_digits : s ? lit_digits s
+
+`--- 駆動 ---`
+`呼ばれない関数は出せない（仮引数 X の渡し方が決まりません）ので、この枚は自分を使い切る`
+
+drive : x ?
+	(widths_of `aarch64_qemu`) : 1
+	endian_of `aarch64_qemu` : 1
+	is_supported `aarch64_qemu` : 1
+	signed_of `Int` : 1
+	class_of `Int` : 1
+	charset_of `ascii` : 1
+	size_of `Int` `aarch64_qemu` : 1
+	mt_size `Int` `aarch64_qemu` : 1
+	mt_signed `Int` `aarch64_qemu` : 1
+	mt_class `Int` `aarch64_qemu` : 1
+	char_size_of `ascii` : 1
+	char_limit_of `ascii` : 1
+	lit_family `0u000D` : 1
+	lit_digits `0u000D` : 1
+	lit_radix `0u000D` : 1
+	lit_width `8u3042` : 1
+	literal_digits `0u000D` : 1
+	||unit_niche|| : 1
+	||default_charset|| : 1
+	0
+
+drive 0

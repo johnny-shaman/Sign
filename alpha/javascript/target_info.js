@@ -120,9 +120,18 @@ function charSizeOf(charset) {
  * 文字の算術（`c + 1`、`c1 + c2`）はここを越えたら `__` になる——**足せることと、
  * 足した先が文字であることは別**だからである。型検査・インタプリタ・コード生成の
  * 3箇所が同じ数を引く必要がある。別々に書くと片方だけが正しい答えを出す。
+ *
+ * **表で持つ。** 以前は `charset === "utf32" ? 0x10ffff : 0x7f` と三項で書いており、
+ * 知らない charset が `ascii` の上限に落ちるのは `DEFAULT_CHARSET` に従った結果ではなく
+ * **三項の else に居合わせた結果**だった。`charSizeOf` は `CHARSETS[DEFAULT_CHARSET]` を
+ * 見るので、既定を `utf32` へ変えた日に幅は 4 になり上限は 0x7F のまま——**同じ「既定」が
+ * 2か所にあって片方だけ動く**という、この工程が何度も踏んでいる形である。今の値では
+ * どちらの書き方も同じ答えを出すので、これは**振る舞いの変更ではなく写しの削除**である。
  */
+const CHARSET_LIMITS = { ascii: 0x7f, utf32: 0x10ffff };
+
 function charLimitOf(charset) {
-  return charset === "utf32" ? 0x10ffff : 0x7f;
+  return CHARSET_LIMITS[charset] ?? CHARSET_LIMITS[DEFAULT_CHARSET];
 }
 
 /**
@@ -190,11 +199,20 @@ function reduceToMachineType(type, target) {
  * **プリフィックスは可変長である。** `16x` や `32u` は3文字なので、`.slice(2)` で数字を
  * 取ると壊れる。数字を欲しい側は `digits` を使う。
  */
+// **腕を1本ずつ名指しできるように export する。** 移植の門は「表の行と `match_case` の腕が
+// 1本ずつ問われているか」を見る（`target_info_sn.test.js` の「見えているか」）。数を検査の
+// 側へ写すと2つ目の綴りができるので、名前を渡して数えるのはこちらの表からにする。
 const ACCESS_WIDTHS = new Set([1, 2, 4, 8, 16]);
 
+// 族の綴り。**表にする理由は腕と同じ**——`[xurb]` と正規表現へ畳み込むと、門は
+// 「`r` の枝が一度も問われていない」と言えない。文字クラスを `[a-z]` へ広げて所属で
+// 断るので、通る字面は1つも変わらない（`1a41` は前も後も `null`）。
+const LITERAL_FAMILIES = new Set(["x", "u", "r", "b"]);
+const PREFIX_RE = /^([0-9]+)([a-z])(.*)$/;
+
 function literalParts(text) {
-  const m = /^([0-9]+)([xurb])(.*)$/.exec(String(text ?? ""));
-  if (!m) return null;
+  const m = PREFIX_RE.exec(String(text ?? ""));
+  if (!m || !LITERAL_FAMILIES.has(m[2])) return null;
   const n = Number(m[1]);
   const family = m[2];
   const bytes = family === "u" ? n / 8 : n;
@@ -213,4 +231,4 @@ function literalDigits(text) {
   const p = literalParts(text);
   return p ? p.digits : String(text ?? "").slice(2);
 }
-export { TARGET_WIDTHS, SIGNEDNESS, UNIT_NICHE_ASM, WIDTH_CLASS, CHARSETS, DEFAULT_CHARSET, charSizeOf, charLimitOf, widthsOf, isSupported, sizeOf, reduceToMachineType, literalParts, literalDigits };
+export { TARGET_WIDTHS, SIGNEDNESS, UNIT_NICHE_ASM, WIDTH_CLASS, CHARSETS, CHARSET_LIMITS, DEFAULT_CHARSET, ACCESS_WIDTHS, LITERAL_FAMILIES, charSizeOf, charLimitOf, widthsOf, isSupported, sizeOf, reduceToMachineType, literalParts, literalDigits };
