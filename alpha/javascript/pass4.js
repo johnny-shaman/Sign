@@ -7528,6 +7528,67 @@ function flatBaseParam(q0, params) {
 	return base.value;
 }
 
+/** その節が指しうる**値ノードの候補**（決まらなければ null）。実行時の鍵なら全行が候補である。 */
+function staticValueNodes(node, env, seen) {
+	const u = unwrap(node);
+	if (!u || !env) return null;
+	if (isIdentifierNode(u)) {
+		if (seen.has(u.value)) return null; // 名前が輪になっている
+		seen.add(u.value);
+		const b = envLookup(env, u.value);
+		if (!b || b.addressTaken) return null; // 仮引数（値ノードが無い）・場所を持つ束縛
+		const v = b.valueNode || b.rhsNode;
+		return v ? staticValueNodes(v, env, seen) : null;
+	}
+	if (u.type === "operation" && u.name === "get_prop") {
+		const bases = staticValueNodes(u.left, env, seen);
+		if (!bases) return null;
+		const key = unwrap(u.right);
+		const spelling = slotKeySpelling(key, env); // 実行時に決まる鍵なら null
+		const out = [];
+		for (const base of bases) {
+			if (!Array.isArray(base.lines) || base.slotKind !== "named") return null;
+			let hit = false;
+			for (const line of base.lines) {
+				const l = unwrap(line);
+				if (!isDefineNode(l) || !isSlotKeyAtom(l.left)) return null; // 全行が `名前 : 値` でなければ表ではない
+				if (spelling !== null && slotName(l.left.value) !== spelling) continue;
+				hit = true;
+				const vs = staticValueNodes(l.right, env, new Set(seen));
+				if (!vs) return null;
+				out.push(...vs);
+			}
+			if (!hit) return null;
+		}
+		return out.length ? out : null;
+	}
+	return [u];
+}
+
+/**
+ * その部分の**中身の総量（μ）が静的に測れる**なら、その上界。測れなければ null。
+ *
+ * 呼び出しの結果は辿らない——辿れば「その関数が返す値」を一つに決めたことになる。
+ */
+function staticMuBound(q0, env, seen = new Set()) {
+	if (!env) return null;
+	const vs = staticValueNodes(q0, env, seen);
+	if (!vs) return null;
+	let m = 0;
+	for (const u of vs) {
+		let one = null;
+		if (u.type === "atom" && (u.value === "_" || u.value === "__")) one = 0;
+		else if (u.type === "atom" && u.kind === "string") one = [...String(u.value).replace(/^`|`$/g, "")].length;
+		// **スカラーは数えない。** 何要素になるかは**落ちる先の器が決める**——`List` なら
+		// 1つだが、`String` は吸って**綴りにする**（解釈器は `51` を `` `51` `` と2文字に
+		// 綴る）。ここからは落ちる先が見えないので、1と決め打つと短く見積もる。
+		// 実測：`a : 51` を `` `\t` b a `` へ置くと、解釈器 6・機械 5 になった。
+		if (one === null) return null; // 字面の綴りだけ。組んだ列もスカラーも数えない
+		m = Math.max(m, one); // 実行時に選ばれうる行の最大
+	}
+	return m;
+}
+
 /**
  * その部分が「上界の分かっている関数の呼び出し」なら、その上界を**こちらの仮引数で
  * 言い換えて**返す。言い換えられなければ null。
@@ -7662,7 +7723,7 @@ function literalElemCount(q, elemType) {
 	return [...String(q.value || "").replace(/^`|`$/g, "")].length;
 }
 
-function returnSizeBound(lam, name, known, group) {
+function returnSizeBound(lam, name, known, group, env = null) {
 	const params = boundParamNames(lam);
 	// 要素の型。**要素が器なら、器を1つ置くのは1要素である**——並べるものが器だから
 	// といって個数が決まらないわけではない（幅は `passingOf` が答える）。
@@ -7797,6 +7858,8 @@ function returnSizeBound(lam, name, known, group) {
 				// 受け取って文字列を組む形（parser.sn の `out_one`）が上界を持てなかった。
 				const mu0 = flatBaseParam(q, params);
 				if (mu0) return { k: 0, refs: new Map([[muKey(mu0), 1]]), rec: null };
+				const kn0 = staticMuBound(q, env);
+				if (kn0 !== null) return { k: kn0, refs: new Map(), rec: null };
 				return null;
 			}
 			return { k: 1, refs: new Map(), rec: null };
@@ -7818,6 +7881,18 @@ function returnSizeBound(lam, name, known, group) {
 		// 多い方で抑えれば足りる。
 		const addRef = (nm, c) => { if (nm) refs.set(nm, (refs.get(nm) || 0) + c); };
 		let rec = null; // 自己呼び出しが食っている仮引数
+		// **静的な綴りの項と、「それ以外は1要素」の数え方を同じ節で混ぜない。**
+		//
+		// 末尾の `k += 1` は**落ちる先が `List` なら**正しいが、`String` は数を吸って
+		// 綴りにする（解釈器は `51` を2文字に綴る）ので、そこでは足りない。これは前から
+		// ある数え違いで、`a : 51` を返す形は HEAD でも解釈器 3・機械 2 と食い違う。
+		//
+		// 直せば筋は通るが、それは**この変更の外**の話である。ここで要るのは
+		// 「断りが誤答に化けない」ことだけなので、**新しい項が効いた節では混ぜない**。
+		// 実測：`a : 51` / `b : ``add`` ` の `` `\t` b a `` が、混ぜると 5（正しくは 6）を
+		// 返した——断りが誤答へ化ける唯一の道だった。
+		let usedStatic = false;
+		let looseScalar = false;
 		for (const p of parts) {
 			// 撒いた仮引数（`st~`）と裸の仮引数は、その器の要素数ぶん。
 			const q = p && p.type === "operation" && p.position === "postfix" && p.name === "expand" ? unwrap(p.operand) : p;
@@ -7887,12 +7962,17 @@ function returnSizeBound(lam, name, known, group) {
 				// **器の要素を平らへ写すぶんは μ で測れる**（`flatBaseParam`）。並置は直積
 				// なので、同じ節に k 回現れれば k×μ||p||——`addRef` が和で足す。
 				const mu = flatBaseParam(q, params);
-				if (!mu) return null;
-				addRef(muKey(mu), 1);
+				if (mu) { addRef(muKey(mu), 1); continue; }
+				const kn = staticMuBound(q, env);
+				if (kn === null) return null;
+				usedStatic = true;
+				k += kn;
 				continue;
 			}
+			looseScalar = true;
 			k += 1;
 		}
+		if (usedStatic && looseScalar) return null;
 		// **食いながら撒く枝は、証明ではなく見積もりで通す。**
 		//
 		// `(take_while p s) , (tokens (drop_while p s))~` は撒き（`ref`）と食い（`rec`）が
@@ -9519,7 +9599,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		// 取られている」とき——自分で組むか、下の呼び出しの結果を返すか——であり、
 		// どちらも幅が言えなければ確保できない。
 		const name = bareName(node.left.value);
-		const b = returnSizeBound(lam, name, known, groups && groups.get(bareName(node.left.value)));
+		const b = returnSizeBound(lam, name, known, groups && groups.get(bareName(node.left.value)), em.env);
 		if (!b) continue;
 		// **名前も位置も持つ。** 呼ぶ側は引数の位置で、呼ばれた側は自分の仮引数の名前で
 		// 同じ器を指す。位置は枠ごとに違いうる（分解した名前が混ざる）ので、両側が同じ

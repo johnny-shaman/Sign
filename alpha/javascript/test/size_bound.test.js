@@ -143,5 +143,84 @@ check("呼び出しを含む形は求めない", bound("g : x ? x\nf : a b ? a (
 	check("そのまま渡す再帰は求めない", bound(SAME), null);
 }
 
+// ---- 静的に測れる綴りは konst である ----
+//
+// **上界の語彙に「静的に分かっていて、仮引数ではない」項が無かった。** 字面で書かれた
+// 綴りへ辿り着ける名前——モジュールの束縛と、名前付きスロットの欄——は、呼ぶ側も
+// 呼ばれた側も**同じ表を読めば同じ数**になる。測る必要が無いのだから `konst` である。
+//
+// これが無いあいだ、アセンブラが1行を組む形（`` `\t` (表 ' 鍵~) ` x0, x1` ``）が
+// 丸ごと断られていた。長さは3つとも静的に分かっているのに、上界の側にそれを書く言葉が
+// 無かっただけである。
+//
+// **実行時の鍵なら、選ばれうる行の最大を取る。** どれが選ばれるかは分からないが、
+// 選ばれるのは表の行のどれかなので、最大は上界である。
+{
+	// `env` を渡した側の上界。渡さなければ今まで通り（既定は null）で、この項は出ない。
+	const boundE = (src) => {
+		const { nodes, env } = compile(src, { charset: "ascii" });
+		const nm = (n) => String(n.left.value).replace(/[<>]/g, "");
+		const d = nodes.find((n) => n.name === "define" && /^f(\$|$)/.test(nm(n)));
+		const b = returnSizeBound(d.right, nm(d), undefined, undefined, env);
+		if (!b) return null;
+		if (!b.terms || b.terms.length === 0) return String(b.konst);
+		const parts = b.terms.map((t) => `${t.coef === 1 ? "" : `${t.coef} × `}||${String(t.sizeOf).replace(/[<>]/g, "")}||`);
+		return `${b.konst} + ${parts.join(" + ")}`;
+	};
+
+	// 字面1つ（1文字）＋ モジュールの名前（3文字）。
+	check("モジュールの名前は konst", boundE("a : `add`\nf : n ? `\t` a\nf 1"), "4");
+	// 名前から名前へ辿っても同じ。底が字面であることだけが条件である。
+	check("名前から名前へ辿る", boundE("b : `add`\na : b\nf : n ? `\t` a\nf 1"), "4");
+	// 静的な鍵なら、その欄だけを見る。
+	check("静的な鍵はその欄だけ", boundE("t :\n\tadd : `add`\n\tsub : `subtract`\nf : n ? `\t` (t ' add)\nf 1"), "4");
+	// **実行時の鍵は、行の最大**。`subtract`（8文字）が選ばれうるので 1 + 8 である。
+	// ここを「先頭の行」にすると 4 になり、長い行を選んだときに足りない。
+	check("実行時の鍵は行の最大", boundE("t :\n\tadd : `add`\n\tsub : `subtract`\nf : k ? `\t` (t ' k~)\nf `add`"), "9");
+	// アセンブラの1行そのもの。`\t`(1) + 最大の綴り(8) + ` x0, x1`(7)。
+	check("アセンブラの1行", boundE("t :\n\tadd : `add`\n\tsub : `subtract`\nf : k ? `\t` (t ' k~) ` x0, x1`\nf `add`"), "16");
+	// `env` を渡さなければ今まで通り断る——**既存の呼び出しは何も変わらない**。
+	check("env を渡さなければ今まで通り", bound("a : `add`\nf : n ? `\t` a\nf 1"), null);
+
+	// ---- 静的に測れないものは、今まで通り断る ----
+	//
+	// **呼び出しの結果を辿ってはならない。** 辿れば「その関数が返す値」を一つに決めた
+	// ことになり、上界の根拠が「読めば分かる字面」から「関数の意味」へすり替わる。
+	check("呼び出しに束縛した名前は求めない", boundE("g : n ? `add`\na : g 1\nf : n ? `\t` a\nf 1"), null);
+	check("欄が呼び出しなら求めない", boundE("g : n ? `add`\nt :\n\tk : g 1\n\tj : `xy`\nf : n ? `\t` (t ' k)\nf 1"), null);
+	// **番地を取られた束縛は畳まない。** そこには場所があり、書き換えられうる——
+	// 長さが静的だという根拠が消える（`constStructField` が同じ理由で断っている）。
+	//
+	// 印（`addressTaken`）を付けるのは Pass 4 の中なので、`compile` しただけの木にはまだ
+	// 付いていない。ここで見たいのは**印が付いていたら畳まないこと**なので、印を立てて
+	// から測る。実際の道で断ることは `qemu.test.js` の側（`$` を書いた形）で見る。
+	{
+		const src = "a : `add`\nf : n ? `\t` a\nf 1";
+		const { nodes, env } = compile(src, { charset: "ascii" });
+		const nm = (n) => String(n.left.value).replace(/[<>]/g, "");
+		const d = nodes.find((n) => n.name === "define" && /^f(\$|$)/.test(nm(n)));
+		const b0 = returnSizeBound(d.right, nm(d), undefined, undefined, env);
+		checkTrue("印が無ければ畳む", b0 && b0.konst === 4, `konst = ${b0 && b0.konst}`);
+		// 束縛の鍵は `<名前>`（`pass1` の綴り）。
+		let s = env;
+		let bind = null;
+		while (s && !bind) { bind = s.bindings instanceof Map ? s.bindings.get("<a>") : s.bindings["<a>"]; s = s.parent; }
+		checkTrue("束縛が見つかる", !!bind, "a の束縛が取れなかった");
+		bind.addressTaken = true;
+		check("番地を取られたら畳まない", returnSizeBound(d.right, nm(d), undefined, undefined, env), null);
+	}
+	// **組んだ列は数えない。** `l : a , b` は `List(String)` であり、字面ではない——
+	// ここを辿ると「文字列を組む」形へ器を撒くことになり、解釈器と食い違う。
+	// （実測：辿らせると解釈器が 2、機械が 3 を返した。断りが誤答に化ける方が悪い。）
+	check("組んだ列は求めない", boundE("a : `ab`\nb : `cd`\nl : a , b\nf : n ? `\t` l\nf 1"), null);
+	// **数と綴りを同じ節で混ぜたら求めない。**
+	//
+	// 末尾の「それ以外は1要素」は、落ちる先が `List` なら正しいが `String` は数を吸って
+	// **綴りにする**（解釈器は `51` を2文字に綴る）。これは前からある数え違いで、この
+	// 変更の外にある——ここで要るのは**断りが誤答に化けない**ことだけなので混ぜない。
+	// 混ぜていた版は 5 を返した（正しくは 6）。
+	check("数と綴りを混ぜたら求めない", boundE("a : 51\nb : `add`\nf : n ? `\t` b a\nf 1"), null);
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
