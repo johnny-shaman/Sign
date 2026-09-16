@@ -966,6 +966,43 @@ function emitSliceLift(em, node, env, scope) {
 }
 
 /**
+ * **実行時に `__` になった要素は、並べない**（連結の単位元）。
+ *
+ * `__` は連結の単位元なので `1 __ 3` は `[1 3]` である。書かれた `__` は
+ * 既に落としてある（`parts` のフィルタ）が、**走らせてみないと分からない** `__`
+ * ——範囲外の添字、尽きた選択写像、`__` を返す呼び出し、偽の比較、既定の引数——
+ * が残る。**法は書かれたか計算されたかを問わない**ので、そちらも同じく落とす。
+ *
+ * 見分け方は運び方で決まる。スカラーは niche（`INT64_MIN`）そのもの、器は `len = 0`
+ * である。niche は定数を置かずに見分けられる——**0 から引いて溢れるのは `INT64_MIN`
+ * だけ**だから、`negs xzr, x` の V がそのまま答えになる（実機で確認：niche→1、
+ * `0`/`1`/`-1`/`0x7FFF…FF`/`0x8000…01`/`0x4000…`→0）。定数を組む綴り
+ * （`movz` + `cmp` + `b.eq`）より1本短く、しかも**レジスタを1本も食わない**
+ * ——写す枝の中で使えるのはそのためである。
+ *
+ * **飛び先は照合より手前に置く。** `__` は場所を消費しないので、器がちょうど
+ * 満杯のときに `__` が来ても器ごと `__` に落としてはならない。
+ *
+ * 払うのは `__` になり得る要素だけである（`cannotBeUnit`）。リテラルの並びは
+ * 今まで通り静的なオフセットと静的な長さで出る。
+ *
+ * @param reg  スカラーなら値そのもの、器なら `len` を持つレジスタ
+ * @param kind `"scalar"`（niche を見る）か `"len"`（0 を見る）
+ * @returns 飛び先のラベル。払わないなら null（呼ぶ側は `em.label` を出さない）
+ */
+function emitUnitSkip(em, node, env, scope, reg, kind) {
+	if (cannotBeUnit(node, env, scope)) return null;
+	const skip = em.newLabel("nofill");
+	if (kind === "len") {
+		em.emit(`cbz ${reg}, ${skip}`, "len = 0 は __（連結の単位元）");
+	} else {
+		em.emit(`negs xzr, ${reg}`, "この要素は __ か（niche だけが 0 から引くと溢れる）");
+		em.emit(`b.vs ${skip}`, "__ は並べない（連結の単位元）");
+	}
+	return skip;
+}
+
+/**
  * `[x1 … xn ~r]` を出す。**先頭を n 個読んで、残りは同じ領域を指したまま頭をずらす。**
  *
  * 分解は受け取った器を指し直すだけであり、確保は起きない
@@ -3529,22 +3566,54 @@ function genExpr(node, env, em, scope, tail = false) {
 			}
 			const k = (em.slot - base) / per;
 			const w = em1.size;
+			const wShift = w === 16 ? 4 : w === 8 ? 3 : w === 4 ? 2 : w === 2 ? 1 : 0;
+			// **実行時に `__` になる先頭が居るなら、置いた個数も実行時である。**
+			// 静的なオフセットでは `__` の跡が1つぶん空いたままになり、長さだけが伸びる。
+			const dynK = lead.some((p) => !cannotBeUnit(p, env, scope));
+			// 個数が実行時に決まるなら、その置き場所。静的なら null（今まで通り即値）。
+			let kSlot = null;
 			em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
 			// **先頭のぶんも書く前に照合する。** 個数は静的なので、いちばん後ろの1つだけ
-			// 見れば足りる（前が入らないなら後ろも入らない）。
+			// 見れば足りる（前が入らないなら後ろも入らない）。`__` を落とすと実際に書く数は
+			// これより減りうるが、**上界のままでよい**——確保の見積もりも同じ数で取っている。
 			emitSretCapacityNeed(em, k);
+			if (dynK) em.emit("mov x13, #0", "先頭で書けた個数（バイト）");
 			for (let i = 0; i < k; i++) {
 				if (per === 2) {
-					em.load(SCRATCH[0], (base + i * 2) * 8);
-					em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "先頭を並べる（要素の ptr）" : undefined);
+					if (!dynK) {
+						em.load(SCRATCH[0], (base + i * 2) * 8);
+						em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "先頭を並べる（要素の ptr）" : undefined);
+						em.load(SCRATCH[0], (base + i * 2 + 1) * 8);
+						em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+						continue;
+					}
 					em.load(SCRATCH[0], (base + i * 2 + 1) * 8);
-					em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+					const skip2 = emitUnitSkip(em, lead[i], env, scope, SCRATCH[0], "len");
+					em.emit(`add x11, ${SCRATCH[1]}, x13`, i === 0 ? "書けた位置へ" : undefined);
+					em.emit(`str ${SCRATCH[0]}, [x11, #8]`, i === 0 ? "その len" : undefined);
+					em.load(SCRATCH[0], (base + i * 2) * 8);
+					em.emit(`str ${SCRATCH[0]}, [x11]`, i === 0 ? "先頭を並べる（要素の ptr）" : undefined);
+					em.emit("add x13, x13, #16", i === 0 ? "書けたぶんだけ進む" : undefined);
+					if (skip2) em.label(skip2);
 					continue;
 				}
 				em.load(SCRATCH[0], (base + i) * 8);
-				em.emit(storeElem(SCRATCH[0], SCRATCH[1], i * w, w), i === 0 ? "先頭を並べる" : undefined);
+				if (!dynK) {
+					em.emit(storeElem(SCRATCH[0], SCRATCH[1], i * w, w), i === 0 ? "先頭を並べる" : undefined);
+					continue;
+				}
+				const skip1 = emitUnitSkip(em, lead[i], env, scope, SCRATCH[0], "scalar");
+				em.emit(storeElem(SCRATCH[0], SCRATCH[1], null, w, "x13"), i === 0 ? "先頭を並べる" : undefined);
+				em.emit(`add x13, x13, #${w}`, i === 0 ? "書けたぶんだけ進む" : undefined);
+				if (skip1) em.label(skip1);
 			}
 			em.pop(k * per);
+			if (dynK) {
+				kSlot = em.push();
+				if (kSlot === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+				if (wShift) em.emit(`lsr x13, x13, #${wShift}`, `バイトから個数へ（1要素 ${w} byte）`);
+				em.store("x13", kSlot, "先頭で置いた個数（実行時）");
+			}
 			// **自分自身への追記はループになる。**
 			//
 			// 追記は器の**続き**を書くので、段が下がるたびに宛先だけが進む。ならば段を下げず
@@ -3567,19 +3636,36 @@ function genExpr(node, env, em, scope, tail = false) {
 					// カーソルと合計を進める命令は、飛ぶ手前——つまり引数を積む前——へ差し込む。
 					// どちらもスロットしか触らないので、引数の組み立てとは干渉しない。
 					const before = em.lines.length;
-					em.load(SCRATCH[1], em.sretDest);
-					if (k * w) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, #${k * w}`, `${k} 要素ぶんカーソルを進める`);
-					em.store(SCRATCH[1], em.sretDest, "次の周はここから書く");
-					em.load(SCRATCH[0], em.sretTotal);
-					if (k) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `書いた ${k} を足す`);
-					em.store(SCRATCH[0], em.sretTotal, "周を跨ぐ合計");
-					// **残りも同じだけ狭くする。** そうすれば照合は今まで通り「この周の位置 vs 残り」
-					// で済み、位置に合計を足す必要が無い——足すと**もう1本レジスタが要る**ことに
-					// なり、写す枝が持っている値（x14 に読んだ1文字）を潰していた。
-					em.load(SCRATCH[0], em.sretLimit);
-					if (k) em.emit(`sub ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `置いた ${k} ぶん狭い`);
-					em.store(SCRATCH[0], em.sretLimit, "次の周の残り");
+					// **進む量は「置いた数」であって「並べた数」ではない。** `__` を落とすと
+					// 両者は食い違うので、実行時の個数を読んで進める（周ごとに書き直される）。
+					if (kSlot !== null) {
+						em.load(SCRATCH[0], kSlot, "この周で置いた個数");
+						em.load(SCRATCH[1], em.sretDest);
+						em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}${wShift ? `, lsl #${wShift}` : ""}`, "置いたぶんカーソルを進める");
+						em.store(SCRATCH[1], em.sretDest, "次の周はここから書く");
+						em.load(SCRATCH[1], em.sretTotal);
+						em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}`, "置いたぶんを足す");
+						em.store(SCRATCH[1], em.sretTotal, "周を跨ぐ合計");
+						// **残りも同じだけ狭くする。**（下の静的な枝と同じ理由）
+						em.load(SCRATCH[1], em.sretLimit);
+						em.emit(`sub ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}`, "置いたぶん狭い");
+						em.store(SCRATCH[1], em.sretLimit, "次の周の残り");
+					} else {
+						em.load(SCRATCH[1], em.sretDest);
+						if (k * w) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, #${k * w}`, `${k} 要素ぶんカーソルを進める`);
+						em.store(SCRATCH[1], em.sretDest, "次の周はここから書く");
+						em.load(SCRATCH[0], em.sretTotal);
+						if (k) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `書いた ${k} を足す`);
+						em.store(SCRATCH[0], em.sretTotal, "周を跨ぐ合計");
+						// **残りも同じだけ狭くする。** そうすれば照合は今まで通り「この周の位置 vs 残り」
+						// で済み、位置に合計を足す必要が無い——足すと**もう1本レジスタが要る**ことに
+						// なり、写す枝が持っている値（x14 に読んだ1文字）を潰していた。
+						em.load(SCRATCH[0], em.sretLimit);
+						if (k) em.emit(`sub ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `置いた ${k} ぶん狭い`);
+						em.store(SCRATCH[0], em.sretLimit, "次の周の残り");
+					}
 					em.lines.splice(lineMark, 0, ...em.lines.splice(before, em.lines.length - before));
+					if (kSlot !== null) em.pop(1); // 先頭で置いた個数
 					em.sretLooped = true;
 					return TAIL;
 				}
@@ -3592,15 +3678,21 @@ function genExpr(node, env, em, scope, tail = false) {
 			const destSlot = em.push();
 			if (destSlot === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.load(SCRATCH[1], em.sretDest);
-			if (k * w) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, #${k * w}`, `${k} 要素ぶん進める`);
+			if (kSlot !== null) {
+				em.load(SCRATCH[0], kSlot, "先頭で置いた個数");
+				em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}${wShift ? `, lsl #${wShift}` : ""}`, "置いたぶん進める");
+			} else if (k * w) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, #${k * w}`, `${k} 要素ぶん進める`);
 			em.store(SCRATCH[1], destSlot, "続きを書く場所");
 			tailPart._sretInto = destSlot;
 			// **呼び先の取り分は k 個ぶん狭い。** 器を割ったのはこちらなので、割れ目を伝える
-			// のもこちらである（genExpr の apply 分岐が x15 を組み立てる）。
-			tailPart._sretAdvance = k;
+			// のもこちらである（genExpr の apply 分岐が x15 を組み立てる）。`__` を落とすと
+			// 割れ目は実行時にしか分からないので、そのときは個数の入ったスロットを渡す。
+			if (kSlot !== null) tailPart._sretAdvanceSlot = kSlot;
+			else tailPart._sretAdvance = k;
 			const tw = genExpr(tailPart, env, em, scope);
 			tailPart._sretInto = undefined;
 			tailPart._sretAdvance = undefined;
+			tailPart._sretAdvanceSlot = undefined;
 			if (tw === false) return false;
 			if (tw !== 2) {
 				em.pop(tw === TAIL ? 0 : tw);
@@ -3608,9 +3700,13 @@ function genExpr(node, env, em, scope, tail = false) {
 			}
 			// 長さは「自分が書いた数 ＋ 続きが書いた数」。ptr は自分の宛先のままである。
 			em.load(SCRATCH[0], (em.slot - 1) * 8, "続きの len");
-			if (k) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `先頭の ${k} を足す`);
+			if (kSlot !== null) {
+				em.load(SCRATCH[1], kSlot, "先頭で置いた個数");
+				em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "先頭のぶんを足す");
+			} else if (k) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${k}`, `先頭の ${k} を足す`);
 			em.pop(2);
 			em.pop(1); // 続きの宛先
+			if (kSlot !== null) em.pop(1); // 先頭で置いた個数
 			// **後ろの要素は、書かれた個数を足した位置へ置く。** 呼び先が何個書いたかは
 			// `len` で返ってきているので、静的に決まらないだけで実行時には決まっている。
 			if (trail.length > 0) {
@@ -3633,20 +3729,44 @@ function genExpr(node, env, em, scope, tail = false) {
 				const shift = w === 16 ? 4 : w === 8 ? 3 : w === 4 ? 2 : w === 2 ? 1 : 0;
 				if (shift) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}, lsl #${shift}`, "書かれた個数ぶん進める");
 				else em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}`, "書かれた個数ぶん進める");
+				// 後ろにも `__` になり得るものが混ざるなら、位置はカーソルで決める。
+				const dynT = trail.some((p) => !cannotBeUnit(p, env, scope));
+				if (dynT) em.emit("mov x13, #0", "後ろで書けた個数（バイト）");
 				for (let i = 0; i < t; i++) {
 					if (per === 2) {
-						em.load("x14", (tbase + i * 2) * 8);
-						em.emit(`str x14, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "後ろを並べる（要素の ptr）" : undefined);
+						if (!dynT) {
+							em.load("x14", (tbase + i * 2) * 8);
+							em.emit(`str x14, [${SCRATCH[1]}, #${i * 16}]`, i === 0 ? "後ろを並べる（要素の ptr）" : undefined);
+							em.load("x14", (tbase + i * 2 + 1) * 8);
+							em.emit(`str x14, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+							continue;
+						}
 						em.load("x14", (tbase + i * 2 + 1) * 8);
-						em.emit(`str x14, [${SCRATCH[1]}, #${i * 16 + 8}]`, i === 0 ? "その len" : undefined);
+						const skipT2 = emitUnitSkip(em, trail[i], env, scope, "x14", "len");
+						em.emit(`add x11, ${SCRATCH[1]}, x13`, i === 0 ? "書けた位置へ" : undefined);
+						em.emit(`str x14, [x11, #8]`, i === 0 ? "その len" : undefined);
+						em.load("x14", (tbase + i * 2) * 8);
+						em.emit(`str x14, [x11]`, i === 0 ? "後ろを並べる（要素の ptr）" : undefined);
+						em.emit("add x13, x13, #16", i === 0 ? "書けたぶんだけ進む" : undefined);
+						if (skipT2) em.label(skipT2);
 						continue;
 					}
 					em.load("x14", (tbase + i) * 8);
-					em.emit(storeElem("x14", SCRATCH[1], i * w, w), i === 0 ? "後ろを並べる" : undefined);
+					if (!dynT) {
+						em.emit(storeElem("x14", SCRATCH[1], i * w, w), i === 0 ? "後ろを並べる" : undefined);
+						continue;
+					}
+					const skipT1 = emitUnitSkip(em, trail[i], env, scope, "x14", "scalar");
+					em.emit(storeElem("x14", SCRATCH[1], null, w, "x13"), i === 0 ? "後ろを並べる" : undefined);
+					em.emit(`add x13, x13, #${w}`, i === 0 ? "書けたぶんだけ進む" : undefined);
+					if (skipT1) em.label(skipT1);
 				}
 				em.pop(t * per);
 				em.load(SCRATCH[0], cnt);
-				em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${t}`, `後ろの ${t} を足す`);
+				if (dynT) {
+					if (shift) em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, x13, lsr #${shift}`, "後ろに置いたぶんを足す");
+					else em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, x13`, "後ろに置いたぶんを足す");
+				} else em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #${t}`, `後ろの ${t} を足す`);
 				em.pop(1);
 			}
 			const [po2, lo2] = pushPair(em);
@@ -3700,6 +3820,10 @@ function genExpr(node, env, em, scope, tail = false) {
 					if (pw === false) return false;
 					em.load("x14", (em.slot - 1) * 8, "置く値");
 					em.pop(1);
+					// **niche は幅で消える。** `storeElem` は `String` なら `strb` を出すので、
+					// `__` の下位バイト（0）だけが並んで**長さ1の NUL** になっていた。見るのは
+					// 幅を切る前の 64 ビットである。
+					const skipA = emitUnitSkip(em, parts[i], env, scope, "x14", "scalar");
 					em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
 					em.load(SCRATCH[0], cnt);
 					if (shift) em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, ${SCRATCH[0]}, lsl #${shift}`, "書いた個数ぶん進める");
@@ -3708,6 +3832,7 @@ function genExpr(node, env, em, scope, tail = false) {
 					em.emit(storeElem("x14", SCRATCH[1], 0, w), `${w} byte を1つ`);
 					em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #1`, "1つぶん進む");
 					em.store(SCRATCH[0], cnt);
+					if (skipA) em.label(skipA);
 					continue;
 				}
 				// 撒いているか（後置 `~`）。剥がす前に見ておく。
@@ -3779,17 +3904,21 @@ function genExpr(node, env, em, scope, tail = false) {
 				// 左辺の `take_while` の結果まで要素ごとに写していた——`words `ab`` が語数 1 では
 				// なく文字数 2 を返したのはこれである。**型は通るのに数が違う**形だった。
 				if (w === 16 && !spreadHere) {
+					// 器の `__` は `{0, 0}`（添字の枝が既にそう出している）。1要素として
+					// 置くときも単位元なので、置かずに個数も進めない。
+					em.load("x14", so + 8, "この要素の len");
+					const skipB = emitUnitSkip(em, parts[i], env, scope, "x14", "len");
 					em.load(SCRATCH[0], cnt);
 					emitSretCapacityGuard(em, SCRATCH[0]);
 					em.load("x11", em.sretDest);
 					em.emit(`add x11, x11, ${SCRATCH[0]}, lsl #4`, "書く先の位置へ");
+					em.emit("str x14, [x11, #8]", "この要素の len");
 					em.load("x14", so, "この要素の ptr");
 					em.emit("str x14, [x11]");
-					em.load("x14", so + 8, "この要素の len");
-					em.emit("str x14, [x11, #8]");
 					em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #1`, "1つぶん進む");
 					em.store(SCRATCH[0], cnt);
 					em.pop(2);
+					if (skipB) em.label(skipB);
 					continue;
 				}
 				const top = em.newLabel("cp");
@@ -3912,18 +4041,39 @@ function genExpr(node, env, em, scope, tail = false) {
 				em.emit(`sub sp, sp, #${count16 * 16}`, `${count16} 要素ぶんの場所を取る（1要素 16 byte）`);
 				em.movedSp = true;
 			}
-			for (let k = 0; k < count16; k++) {
-				em.load(SCRATCH[0], cells[k]);
-				em.emit(`str ${SCRATCH[0]}, [${into16}, #${k * 16}]`, k === 0 ? "要素の ptr" : undefined);
-				em.load(SCRATCH[0], cells[k] + 8);
-				em.emit(`str ${SCRATCH[0]}, [${into16}, #${k * 16 + 8}]`, k === 0 ? "その len" : undefined);
+			// **実行時に `__` になる要素が居るなら、位置も個数も実行時である。**
+			// 居ないなら今まで通り静的なオフセットと静的な長さで出る（リテラルの並びは
+			// ここに乗るので、1命令も増えない）。
+			const dynamic16 = parts.some((q) => !cannotBeUnit(q, env, scope));
+			if (!dynamic16) {
+				for (let k = 0; k < count16; k++) {
+					em.load(SCRATCH[0], cells[k]);
+					em.emit(`str ${SCRATCH[0]}, [${into16}, #${k * 16}]`, k === 0 ? "要素の ptr" : undefined);
+					em.load(SCRATCH[0], cells[k] + 8);
+					em.emit(`str ${SCRATCH[0]}, [${into16}, #${k * 16 + 8}]`, k === 0 ? "その len" : undefined);
+				}
+			} else {
+				em.emit("mov x13, #0", "書けた個数（バイト）");
+				for (let k = 0; k < count16; k++) {
+					// 持ち上げた1要素も器なので、見るのは同じ `len` である
+					// （`emitLiftToContainer` が `__` に `len = 0` を置いている）。
+					em.load(SCRATCH[0], cells[k] + 8);
+					const skip = emitUnitSkip(em, parts[k], env, scope, SCRATCH[0], "len");
+					em.emit(`add x11, ${into16}, x13`, k === 0 ? "書けた位置へ" : undefined);
+					em.emit(`str ${SCRATCH[0]}, [x11, #8]`, k === 0 ? "その len" : undefined);
+					em.load(SCRATCH[0], cells[k]);
+					em.emit(`str ${SCRATCH[0]}, [x11]`, k === 0 ? "要素の ptr" : undefined);
+					em.emit("add x13, x13, #16", k === 0 ? "書けたぶんだけ進む" : undefined);
+					if (skip) em.label(skip);
+				}
 			}
 			em.emit(`mov ${SCRATCH[0]}, ${into16}`, "ptr");
 			em.pop(em.slot - base16);
 			const [po16, lo16] = pushPair(em);
 			if (lo16 === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 			em.store(SCRATCH[0], po16, "ptr");
-			em.emit(`mov ${SCRATCH[1]}, #${count16}`, "len は要素数");
+			if (dynamic16) em.emit(`lsr ${SCRATCH[1]}, x13, #4`, "len は書けた個数（1要素 16 byte）");
+			else em.emit(`mov ${SCRATCH[1]}, #${count16}`, "len は要素数");
 			em.store(SCRATCH[1], lo16, "len");
 			return 2;
 		}
@@ -3975,20 +4125,15 @@ function genExpr(node, env, em, scope, tail = false) {
 				return 2;
 			}
 			em.emit("mov x13, #0", "書けた個数（バイト）");
-			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 			for (let k = 0; k < count; k++) {
 				em.load(SCRATCH[0], (base + k) * 8);
-				if (!maybeUnit[k]) {
-					em.emit(storeElem(SCRATCH[0], into, null, w, "x13"), k === 0 ? "並べる" : undefined);
-					em.emit(`add x13, x13, #${w}`);
-					continue;
-				}
-				const skip = em.newLabel("nofill");
-				em.emit(`cmp ${SCRATCH[0]}, x12`, "この要素は __ か");
-				em.emit(`b.eq ${skip}`, "__ は並べない（構築の単位元）");
-				em.emit(storeElem(SCRATCH[0], into, null, w, "x13"), "並べる");
-				em.emit(`add x13, x13, #${w}`, "書けたぶんだけ進む");
-				em.label(skip);
+				// **見分け方は1箇所で決める**（`emitUnitSkip`）。ここには定数を組んで
+				// 比べる綴りが別に在ったが、同じ問いに答え方が2つあると片方だけが古くなる
+				// ——追記と器の並びが `__` を落とせていなかったのは、まさにそれである。
+				const skip = emitUnitSkip(em, parts[k], env, scope, SCRATCH[0], "scalar");
+				em.emit(storeElem(SCRATCH[0], into, null, w, "x13"), k === 0 || skip ? "並べる" : undefined);
+				em.emit(`add x13, x13, #${w}`, skip ? "書けたぶんだけ進む" : undefined);
+				if (skip) em.label(skip);
 			}
 			em.emit(`mov ${SCRATCH[0]}, ${into}`, "ptr");
 			em.pop(count);

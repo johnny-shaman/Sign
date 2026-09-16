@@ -1783,5 +1783,32 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 	// 書けなくてもアドレスは返る——だから「書けなかった」と「値が __ だった」が混ざらない。
 	checkTrue("`__` を書いてもアドレスは返る", run("x : 1\n($x # __) | 0") !== 0);
 }
+
+// ---- 実行時に `__` になった要素も、連結の単位元である（unit.md「`__` は連結の単位元」）----
+//
+// 字面の `__` が消えるのはパス側で落としているからだが、**法はそこを区別しない**。
+// 範囲外の添字・尽きた枝・`__` を返す呼び出し・偽の比較・既定の引数——どこから来た
+// `__` でも、連結に現れれば単位元として消える。ここは解釈器の値そのものを留める
+// （機械と同じ答えになることは test/qemu.test.js の `agree` が見ている）。
+{
+	check("String：連結の真ん中が範囲外", run("g : s ? `<` (s ' 5) `>`\ng `ab`"), "<>");
+	check("String：連結の先頭が範囲外", run("g : s ? (s ' 5) `<` `>`\ng `ab`"), "<>");
+	check("String：連結の末尾が範囲外", run("g : s ? `<` `>` (s ' 5)\ng `ab`"), "<>");
+	check("String：範囲内は落ちない（対照）", run("g : s ? `<` (s ' 0) `>`\ng `ab`"), "<a>");
+	check("String：字面の `__`（対照）", run("g : s ? `<` __ `>`\ng `ab`"), "<>");
+	check("List(Int)：真ん中が範囲外", run("l : [11 , 22]\ng : m ? [1 , (m ' 5) , 3]\ng l"), [1, 3]);
+	check("List(Int)：範囲内は落ちない（対照）", run("l : [11 , 22]\ng : m ? [1 , (m ' 0) , 3]\ng l"), [1, 11, 3]);
+	check("List(String)：真ん中が範囲外", run("l : [`x` , `y`]\ng : m ? [`a` , (m ' 5) , `b`]\ng l"), ["a", "b"]);
+	check("List(String)：範囲内は落ちない（対照）", run("l : [`x` , `y`]\ng : m ? [`a` , (m ' 1) , `b`]\ng l"), ["a", "y", "b"]);
+	const AP = (body) => "f : [c ~rest] ?\n\t||rest|| = 0 : c\n\t" + body + "\nf `abc`";
+	check("追記：先頭に範囲外", run(AP("(rest ' 9) c (f rest)")), "abc");
+	check("追記：後ろに範囲外", run(AP("c (f rest) (rest ' 9)")), "abc");
+	check("枝が尽きて __", run("h : x c ?\n\tx > 10 : c\ng : s ? `<` (h 1 (s ' 0)) `>`\ng `ab`"), "<>");
+	check("枝が通る（対照）", run("h : x c ?\n\tx > 10 : c\ng : s ? `<` (h 99 (s ' 0)) `>`\ng `ab`"), "<a>");
+	check("呼び先が __ を返す", run("h : x ? __\ng : s ? `<` (h (s ' 0)) `>`\ng `ab`"), "<>");
+	check("偽の比較は __", run("g : s ? `<` ((s ' 0) = (s ' 1)) `>`\ng `ab`"), "<>");
+	check("既定の引数が __", run("g :\n\t\ts\n\t\tc : s ' 9\n\t? `<` c `>`\ng `ab`"), "<>");
+	check("既定の引数が範囲内（対照）", run("g :\n\t\ts\n\t\tc : s ' 0\n\t? `<` c `>`\ng `ab`"), "<a>");
+}
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
