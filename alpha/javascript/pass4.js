@@ -62,6 +62,11 @@ const MAX_SLOTS = 48;
 
 // 器を作る余積の演算（記憶の確保を要求する）。
 const COPRODUCT_BUILD_OPS = new Set(["construct", "concat", "push", "unshift", "product"]);
+// **蓄積子になれるのは余積だけで、積（`,`）は入らない。** 解釈器の `COPRODUCT_OPS`
+// （`interpreter.js` の `isAccumulator`）と同じ並びである——同じ規則を2つの綴りで書かない。
+const COPRODUCT_ACC_OPS = new Set(["construct", "concat", "push", "unshift"]);
+// 積の連鎖（`,` は右結合なので、開くのは右だけ）。`interpreter.js` の `isChain` と同じ。
+const PRODUCT_OPS = new Set(["product"]);
 
 /**
  * **引数をレジスタとスタックへ割り振る**（AAPCS64 §6.4）。
@@ -3470,15 +3475,31 @@ function genExpr(node, env, em, scope, tail = false) {
 		// **結合の向きに依存しない歩き方をする。** 片方へ降りる while ループは「左結合で
 		// 積まれている」を前提にしており、`,` を仕様どおり右結合にした瞬間に、連鎖の残りが
 		// 「器が1つ」に見えて「要素数が実行時に決まる」へ落ちていた。左右とも再帰で開く。
+		//
+		// **開いてよい側は演算が決める。** 解釈器は2つの問いを分けている——「この位置は
+		// **組み立ての途中**か」（構文、`isAccumulator`）と「書き手が**撒け**と言ったか」
+		// （値、後置 `~`）。ここは前者にあたる。
+		//
+		// 余積（空白・`+`）は左結合なので、左が余積なら**それが組み立て中の器**であり
+		// 開く。右は開かない。積（`,`）は右結合なので逆で、**左は常に1要素**、右は
+		// 連鎖（`,` が続く）のときだけ開く（`interpreter.js` の `isAccumulator` と
+		// `isChain`）。
+		//
+		// ここが左右とも無条件に開いていたので、`1 2 , 9~` が `[[1,2], 9]`（長さ2）では
+		// なく `[1, 2, 9]`（長さ3）になっていた——**7149efc が捨てた「左辺は常に撒く」が、
+		// 機械の側では木の歩き方として残っていた**。
 		const parts = [];
-		const walkParts = (x) => {
+		const isCoprod = (x, names) => {
 			const u = peel(x);
-			if (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name)) {
-				walkParts(u.left);
-				walkParts(u.right);
-				return;
-			}
-			parts.push(u);
+			return u && u.type === "operation" && names.has(u.name) ? u : null;
+		};
+		const walkParts = (u) => {
+			const openL = u.name === "product" ? null : isCoprod(u.left, COPRODUCT_ACC_OPS);
+			const openR = u.name === "product" ? isCoprod(u.right, PRODUCT_OPS) : isCoprod(u.right, COPRODUCT_BUILD_OPS);
+			if (openL) walkParts(openL);
+			else parts.push(peel(u.left));
+			if (openR) walkParts(openR);
+			else parts.push(peel(u.right));
 		};
 		walkParts(n);
 		// **構築は `__` を落とす。** `1 __ 3` は `[1 3]` である（operator_table.md の
@@ -3494,6 +3515,68 @@ function genExpr(node, env, em, scope, tail = false) {
 		}
 		const et = n.elementType || (n.atomType === "String" ? "Char" : null);
 		const em1 = elementCellSize(et, em.conf);
+		// **部分ごとに「1要素ぶんの幅」を見る。** 撒けば相手の**要素**が、撒かなければ
+		// 相手**そのもの**が1要素になる。どちらも置き場所の幅（`w`）と揃っていなければ、
+		// 診断も出ないまま別の値が返る——生の番地が要素として出たり、`{ptr, len}` の
+		// 片割れだけが読まれたりする。
+		const atomOfPart = (p) => {
+			const q = stripExpand(p);
+			return q ? q.atomType : undefined;
+		};
+		// **名前は要素型を持ち歩かないが、束縛は知っている。**
+		//
+		// `f : l m ? … m~` の `<m>` に載っているのは器の型（`List`）だけで、要素型は
+		// 束縛の側にある（`pass3.js` の `containerElementType` がそこを引いている）。
+		// 注釈として節点へ載せると**関数の署名にも出る**ので、そちらへは書けない
+		// ——呼び出しサイトで決まった要素型を署名に書くと、`.st` が多相の関数に
+		// 「`List(Int)` を返す」と言い張ることになる（`st.test.js`「呼び出し側から決まる」）。
+		// ここは命令を出す場で、いま目の前の呼び出しに対する幅を知りたいだけなので、
+		// 束縛を直に引く。
+		const elemTypeOfPart = (q) => {
+			if (q.elementType) return q.elementType;
+			if (q.atomType === "String") return "Char";
+			if (q.type === "atom" && q.kind === "identifier" && env) {
+				const b = envLookup(env, q.value);
+				if (b && b.elementType) return b.elementType;
+			}
+			return null;
+		};
+		const cellOfPart = (p) => {
+			const q = stripExpand(p);
+			if (!q) return null;
+			return elementCellSize(elemTypeOfPart(q), em.conf);
+		};
+		// **文字列に並べられるのは文字と文字列だけである。**
+		//
+		// 解釈器の側は `stringifyForConcat` が数を綴りへ直すので、`` `abc` 9 `` は "abc9"
+		// ——4文字目は `'9'`（符号位置 57）である。機械はその道を持っていないので、
+		// `storeElem` が 1 byte を書くだけで**値 9 のバイト**が並んでいた。長さは合うので
+		// **長さだけ見ている検査は全部素通りする**。
+		//
+		// これは「まだ出していない射」であって型の誤りではない（原理4 の区分表の2行目）。
+		// だから `__` へ収束させるのではなく、名指しで断る。
+		//
+		// **`Unit` は数えない。** 余積の単位元なので、実行時に `__` になった要素は置かずに
+		// 飛ばすだけである（`emitUnitSkip`）——静的に `__` と分かるぶんは既に上で落として
+		// あり、ここへ来るのは「落ちるかもしれない呼び出し」である。
+		if (em1 && em1.size && n.atomType === "String") {
+			for (const p of parts) {
+				const a = atomOfPart(p);
+				if (a === "Char" || a === "String" || a === "Unit") continue;
+				// **層の禁止が先に立つ。** `Float` は layer 2 以上、`Vector` は layer 3 以上と
+				// `option_ms_schema.md` §4 が定めている。段が足りないなら**設計上の結論**であって
+				// 「まだ」ではない（上の `literalBits` の門が同じ区別を持っている）。ここで先に
+				// 「綴りへ直す道が無い」と断ると、**直す当てのある言い分（段を上げろ）が、当ての
+				// 無い言い分に置き換わる**。だから段で止まるものは譲って、下の門に言わせる。
+				const need = a === "Vector" ? 3 : a === "Float" ? 2 : 0;
+				if (need && em.conf.layer !== undefined && em.conf.layer < need) continue;
+				return em.fail(
+					n,
+					`器の構築はまだ出せません（String——文字列に並べられるのは文字と文字列だけです。` +
+						`${a || "型の分からない値"} を綴りへ直す道（10進の文字列にする）はまだ出していません）`
+				);
+			}
+		}
 		// **末尾が器を返す呼び出しなら、そこへ追記する。**
 		//
 		// `(s ' 0) (f (s ' 1~))` は「要素 ＋ 再帰の結果」であり、後者は器なので「並べる
@@ -3903,6 +3986,56 @@ function genExpr(node, env, em, scope, tail = false) {
 				// であり、`~` の有無がその境目である。ここで `stripExpand` を無条件に掛けていたので、
 				// 左辺の `take_while` の結果まで要素ごとに写していた——`words `ab`` が語数 1 では
 				// なく文字数 2 を返したのはこれである。**型は通るのに数が違う**形だった。
+				// **同じ規則が片方の枝にしか無かった。** 上の一文は「撒いていない器は1要素で
+				// ある」と言っているのに、それを実装した枝が `w === 16`（要素が参照で運ばれる
+				// 器）でしか立っていない。要素が `Int`/`Char` のときはこの門を素通りして下の
+				// 写しループへ落ち、`~` を一度も見ずに**相手の要素を全部写す**——`f : l ? l 9`
+				// が `[[5,6,7], 9]`（長さ 2）ではなく `[5,6,7,9]`（長さ 4）を返していたのは
+				// これである。**診断は出ない。長さだけが違う。**
+				//
+				// 要素の幅が 16 未満の器に器を1つ置くには、その `{ptr, len}` を要素の幅へ
+				// 収めなければならない——入れ子の器は未実装なので、**黙って撒くよりは断る**
+				// （原理4 の区分表「ターゲットに存在しない → 停止（命令を出せない）」）。
+				//
+				// 文字列の中の文字列だけは除く。**`String` の μ は強制**（原理7、
+				// `String ≅ List(Char)`）なので、括ろうが名前を通そうが入れ子は生き残らず、
+				// 平らに写すのが正しい——解釈器も `constructValues` の手前で `textAbsorb` を
+				// 通してそう畳んでいる。`List` の μ は任意なので、そちらは1要素のままである。
+				const strAbsorb = n.atomType === "String" && atomOfPart(parts[i]) === "String";
+				if (w !== 16 && !spreadHere && !strAbsorb) {
+					return em.fail(
+						n,
+						`器の構築はまだ出せません（${n.atomType}——撒いていない ${atomOfPart(parts[i]) || "器"} は1要素だが、` +
+							`要素の幅が ${w} byte なので \`{ptr, len}\` が入らない。入れ子の器は未実装）`
+					);
+				}
+				// **撒くなら、相手の要素の幅がこちらの置き場と揃っていなければならない。**
+				// 写しループは `w` byte 刻みで読む。`w === 16` は「要素は `{ptr, len}` で
+				// 運ぶ」という意味なので、相手の要素が `Int` のような値だと**生の番地を
+				// 要素として読む**——`f : l m ? l , m~` の `' 0` が 1090518944 を返していた。
+				//
+				// 撒く相手の要素の型が書いていないことは、それ自体では悪くない（仮引数の
+				// `[~a]` は中身が見えない）。悪いのは**この器の要素の型が、撒く相手の型
+				// そのもの**になっている場合で、それは型の合流が撒いた側を開けずに「器を
+				// 要素と数えた」ということである——`l~ , m~`（どちらも `List(Int)`）が
+				// `List(List)` と型付き、16 byte 刻みで 8 byte の並びを読んでいた。
+				if (spreadHere && w === 16) {
+					const c = cellOfPart(parts[i]);
+					const a = atomOfPart(parts[i]);
+					if (c && c.size !== 16)
+						return em.fail(
+							n,
+							`器の構築はまだ出せません（${n.atomType}——要素を \`{ptr, len}\` で運ぶ器なのに、` +
+								`撒く ${a || "器"} の要素は ${c.size} byte の値です。幅の違う要素は混ぜられません）`
+						);
+					if (!c && (!a || a === n.elementType))
+						return em.fail(
+							n,
+							`器の構築はまだ出せません（${n.atomType}——撒く ${a || "器"} の要素が` +
+								`また ${n.elementType} だと言っている。型の合流が撒いた側を開けていないので要素の幅が決まらない。` +
+								"入れ子の器は未実装）"
+						);
+				}
 				if (w === 16 && !spreadHere) {
 					// 器の `__` は `{0, 0}`（添字の枝が既にそう出している）。1要素として
 					// 置くときも単位元なので、置かずに個数も進めない。
@@ -9131,13 +9264,19 @@ function emitSretCapacityNeed(em, need) {
  *
  * 解釈系の側は `groupedAbsorb` が同じことを言っている。**同じ規則を2箇所で書かない。**
  *
+ * **ただし括った側が `List` なら、器が `String` でも剥がさない。** `groupedAbsorb` の
+ * 1行目（`if (groupedNode.atomType === "List") return null`）がそれで、ブラケットが
+ * 「これは器である」と宣言しているぶんは吸収に負けない——`` `abc` [1 2] `` は
+ * `["abc", [1,2]]` の2要素である。ここが無条件に剥がしていたので、機械だけが
+ * `[a,b,c,1,2]` の5要素を返していた（診断は出ない。長さだけが違う）。
+ *
  * @param flatten 器が `String`（要素が `Char`）なら true。連接まで剥がす。
  */
 function peelGroup(x, flatten) {
 	let v = x;
 	while (v && Array.isArray(v.lines) && v.lines.length === 1 && v.kind !== "abs" && v.kind !== "norm") {
 		const inner = v.lines[0];
-		if (!flatten && inner && inner.type === "operation" && COPRODUCT_BUILD_OPS.has(inner.name)) break;
+		if (inner && inner.type === "operation" && COPRODUCT_BUILD_OPS.has(inner.name) && (!flatten || v.atomType === "List")) break;
 		v = inner;
 	}
 	return v;
