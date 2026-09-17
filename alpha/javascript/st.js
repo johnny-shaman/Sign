@@ -23,6 +23,17 @@
  * 「まだ埋まっていないスロット」の意味で流用する。これは提案であり確定した記法ではない。
  * 未解決を伏せずに出すことが目的である——型システムに消費者が居ないうちは、間違った型も
  * 欠けた型も観測されないままになる。`.st` はその最初の観測手段である。
+ *
+ * ## 割れ方が一意であること（鍵と値の囲い）
+ *
+ * `.st` は**読まれる**（`st_read.js`）。読む側が区切りと中身を取り違えないよう、
+ * 曖昧になりうる所は全てバッククォートで囲む:
+ *
+ * - **スロットの鍵は必ず囲む**——`` Struct{`x` : Int=1 , 0  `+` : Int=2 , 1} ``。
+ * - **String / Char の値はソースの字面のまま**（String は既に囲まれている、Char は `\` +1文字）。
+ *
+ * 例外を作らないのが要点である。`sign.pegjs` の `string` 規則（`` "`" [^`\r\n]* "`" ``）が
+ * 中にバッククォートも改行も許さないので、「`` ` `` から次の `` ` `` まで」に例外が無い。
  */
 
 import { inferLambdaParamTypes, pointfreeSignature, IDENTITY } from "./pass3.js";
@@ -145,7 +156,34 @@ function paramTypeText(entry, usageTypes, fieldReqs) {
 // なお1要素のリストはスカラーと同型なので（`[5]` は `Int`）、`List(T)` が付くのは
 // 2要素以上か構文的にリストと確定している場合だけである。これは設計上の同一視であり
 // 欠落ではない——1要素の連続ブロックとレジスタ上のスカラーは同じビット列を持つ。
-function slotTypeText(node) {
+//
+// **葉には値を載せる**（`型=値`、利用者の決定 2026-09-17）。型だけを書いていた `.st` は
+// 「道が在るか」しか言えず、`.st` だけから起こしたモジュールは**診断0件で黙って違う値を
+// 返す**（実測: `operator_table.sn` は型だけだと 824 行 → 156 行、`.ascii` が 85 本消える）。
+// 値まで書けばソース合流と同じ字面に戻る。落ちていたのは葉の値だけだったからである。
+//
+// 書き写すのは**ソースの字面そのもの**である（`1` / `-1` / `` `abc` `` / `\d` / `0x40011000`）。
+// String の字面は既にバッククォートで囲まれており、`sign.pegjs` の `string` 規則
+// （`` "`" [^`\r\n]* "`" ``）が**中にバッククォートも改行も入れない**ので、
+// 「`` ` `` で始まり次の `` ` `` で終わる」に例外が無い。Char は `\` の直後1文字と決まって
+// いる（`charactor = "\\" [^\r]`）。だから値が区切り（2スペース / `,` / `}`）を含んでも
+// 読む側が飛ばせる——割れ方が一意である。
+function leafValueText(node) {
+  if (!node) return null;
+  // 前置の負号は還元後もノードとして残ることがある（`assoc : -1`）。
+  if (node.type === "operation" && node.name === "negate") {
+    const inner = leafValueText(node.operand);
+    return inner === null ? null : `-${inner}`;
+  }
+  if (node.type !== "atom") return null;
+  // **識別子は値ではない。** `a : b` の右辺は「b という場所」であって字面の値ではないので、
+  // `Int=<b>` と書くと読む側が別物（未定義の名前）を起こす。値が無いことは伏せない
+  // ——読む側はそこで名指しで断る。
+  if (node.kind === "identifier") return null;
+  return typeof node.value === "string" ? node.value : null;
+}
+
+function slotTypeText(node, withValue = false) {
   if (!node) return UNKNOWN;
   // 恒等射（真）も `_` と書く。裸の `_` は Sign 自身の恒等射記法であり（unit.md §378）、
   // 「まだ埋まっていないスロット」＝部分適用のプレースホルダと**同じ概念**である。
@@ -157,8 +195,11 @@ function slotTypeText(node) {
   if (t === "List" || t === "Iterator") return node.elementType ? `${t}(${node.elementType})` : t;
   // `Implicit(T)`（暗黙のアドレス＝場所）も要素型を伴う。前置 `~`（持ち上げ）が生む。
   if (t === "Implicit") return node.elementType ? `Implicit(${node.elementType})` : "Implicit";
-  if (t === "Struct") return structTypeText(node, t);
-  return t;
+  if (t === "Struct") return structTypeText(node, t, withValue);
+  if (t === UNKNOWN) return t;
+  if (!withValue) return t;
+  const v = leafValueText(node);
+  return v === null ? t : `${t}=${v}`;
 }
 
 /**
@@ -198,7 +239,7 @@ function slotTypeText(node) {
  * 測っているだけである（§2、`==` は同一性ではない）。`.st` がソート順しか書かないと
  * この差が消え、「正した」事実だけが残って「何を正したか」が暗黙化してしまう。
  */
-function structTypeText(node, atomType) {
+function structTypeText(node, atomType, withValue = false) {
   if (atomType !== "Struct" || !node) return atomType;
   // **名前付きスロットの出どころは2つ、書き出しは1つ。** マージ済みの表から来ても
   // 宣言の行から来ても、並ぶのは「名前・連番・型」の三つ組みなので、拾い方だけが
@@ -213,16 +254,16 @@ function structTypeText(node, atomType) {
     slots = [...node.mergedSlots].map(([k, v], ordinal) => ({
       name: bareName(k),
       ordinal,
-      type: slotTypeText(v),
+      type: slotTypeText(v, withValue),
     }));
   } else if (node.slotKind === "named") {
     slots = (node.lines || [])
       .map((l, ordinal) => {
         if (isDefineNode(l) && isSlotKeyNode(l.left)) {
-          return { name: bareName(l.left.value), ordinal, type: slotTypeText(l.right) };
+          return { name: bareName(l.left.value), ordinal, type: slotTypeText(l.right, withValue) };
         }
         // フィールド名の省略記法（`x` だけの行）。値はその識別子自身。
-        if (isIdentifierNode(l)) return { name: bareName(l.value), ordinal, type: slotTypeText(l) };
+        if (isIdentifierNode(l)) return { name: bareName(l.value), ordinal, type: slotTypeText(l, withValue) };
         return null;
       })
       .filter(Boolean);
@@ -232,7 +273,14 @@ function structTypeText(node, atomType) {
     // 並び＝物理配置（正規順）、各名前が持つ値＝宣言順。両方が明示される。
     if (slots.length === 0) return "Struct";
     slots.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    return `Struct{${slots.map((s) => `${s.name} : ${s.type} , ${s.ordinal}`).join("  ")}}`;
+    // **鍵は必ずバッククォートで囲む。** 裸で書くと区切り（2スペース）と鍵の中身が
+    // 曖昧になる——`` ` ` ``（空白1つ）を鍵にした器（余積の演算子表がその形である）は、
+    // `Struct{  : Int , 0}` と出て「空の鍵」と区別が付かなかった。`:` や `,` を含む鍵も
+    // 同じく割れ方を壊す。囲めば例外が無くなるのは `sign.pegjs` の `string` 規則が
+    // 「`` ` `` で始まり、`` ` `` でも改行でもない文字が続き、`` ` `` で終わる」と定めて
+    // いるからで、**中にバッククォートも改行も入らない**以上「`` ` `` から次の `` ` `` まで」
+    // に例外が無い。鍵が識別子でも同じに囲む——例外を作らないことが要点である。
+    return `Struct{${slots.map((s) => `\`${s.name}\` : ${s.type} , ${s.ordinal}`).join("  ")}}`;
   }
   if (node.slotKind === "positional") {
     const slots = [];
@@ -254,7 +302,7 @@ function structTypeText(node, atomType) {
         return;
       }
       if (n === node) return;
-      slots.push(slotTypeText(n));
+      slots.push(slotTypeText(n, withValue));
     };
     walk(node);
     if (slots.length === 0) return "Struct";
@@ -335,7 +383,10 @@ function lambdaSignature(rhs) {
     : entries.map((e) => paramTypeText(e, usageTypes, fieldReqs));
   // 返値型は本体ノードの Layer 2 型そのもの。Lambda 自身は Layer 1 のカテゴリであり
   // Layer 2 型を持たないが（§2）、本体は値を作るので型を持つ。
-  const ret = rhs.right && rhs.right.atomType ? slotTypeText(rhs.right) : UNKNOWN;
+  // **ここに値は載せない。** 載せるのはデータ（束縛とスロット）であって、シグネチャの
+  // 返値ではない——`f : x ? 2` の返値を `Int=2` と書くと、呼び出しごとに決まるはずの
+  // ものが1つの字面に固まって見える。`.st` から関数は起こせないので、要りもしない。
+  const ret = rhs.right && rhs.right.atomType ? slotTypeText(rhs.right, false) : UNKNOWN;
   // 恒等射（真）は `_` と書くが**解けている**。未解決と混ぜないよう印を持ち回る。
   const retIdentity = !!(rhs.right && rhs.right.atomType === IDENTITY);
   return { params, ret, retIdentity };
@@ -424,8 +475,9 @@ function entryFor(defineNode, defineByName) {
   if (sig) return signatureText(name, sig.params, sig.ret, sig.retIdentity);
 
   // Atom: 右辺式の Layer 2 型がそのまま識別子の型になる（§5 Pass 1a）。
+  // ここは**データ**なので値まで書く（`型=値`）——読む側が起こせるのはここだけである。
   const t = rhs && rhs.atomType ? rhs.atomType : UNKNOWN;
-  return { name, text: `${name} : ${slotTypeText(rhs)}`, unresolved: t === UNKNOWN ? 1 : 0 };
+  return { name, text: `${name} : ${slotTypeText(rhs, true)}`, unresolved: t === UNKNOWN ? 1 : 0 };
 }
 
 /**

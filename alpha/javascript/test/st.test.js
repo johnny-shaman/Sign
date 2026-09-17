@@ -52,8 +52,8 @@ function check(note, got, want) {
 }
 
 // ---- 書き写せている型 ----
-check("Atom はリテラルの Layer 2 型がそのまま出る", entries("pi : 3.14"), ["pi : Float"]);
-check("String も同様", entries("greeting : `hello`"), ["greeting : String"]);
+check("Atom はリテラルの Layer 2 型がそのまま出る", entries("pi : 3.14"), ["pi : Float=3.14"]);
+check("String も同様", entries("greeting : `hello`"), ["greeting : String=`hello`"]);
 check("本体が式なら返値型が出る", entries("f : x ?\n\tx > 3 : 1\n\t2"), ["f : Int -> Int"]);
 // §7.1 の表がそのまま述べている: `f : x y ? x + y` の `x`/`y` は `+` のシグネチャが
 // 要求する `Scalar` であり、`f` は `Lambda<returns: Scalar>` になる。ここで言う `Scalar` は
@@ -107,15 +107,15 @@ check("ブラケット分割代入は形をそのまま書く", entries("f : [h 
 // 名前が無いので並べ替える鍵が無く、記法上の位置がそのまま連番になる（だから書かない）。
 // 名前付きは名前でソートして並べるため、連番は明示するしかない（`型 , 連番` の直積）。
 check("名前はソート順に並び、各名前が (型, 連番) を持つ", entries("p : [\n\tx : 1\n\ty : 2\n]"), [
-	"p : Struct{x : Int , 0  y : Int , 1}",
+	"p : Struct{`x` : Int=1 , 0  `y` : Int=2 , 1}",
 ]);
 check("宣言順が違えば連番が入れ替わる（ねじれが型に保存される）", entries("p : [\n\ty : 2\n\tx : 1\n]"), [
-	"p : Struct{x : Int , 1  y : Int , 0}",
+	"p : Struct{`x` : Int=1 , 1  `y` : Int=2 , 0}",
 ]);
 // 並びと連番が食い違う例。宣言は CR→SR→DR だが物理配置は CR→DR→SR になる
 // ——名前付きスロットに位置の確約が無いこと（stack_abi.md §7.1）が型に現れている。
 check("ねじれもスロット型も1行で読める", entries("uart : [\n\tCR : 0x40011000\n\tSR : 0\n\tDR : \\d\n]"), [
-	"uart : Struct{CR : Address , 0  DR : Char , 2  SR : Int , 1}",
+	"uart : Struct{`CR` : Address=0x40011000 , 0  `DR` : Char=\\d , 2  `SR` : Int=0 , 1}",
 ]);
 // **スロットの鍵は識別子だけではない。** `layout.js` の `isSlotKeyNode` が唯一の綴りで、
 // 識別子と**文字列**の両方が鍵になれる（記号を鍵にした表——演算子表がその形である）。
@@ -123,20 +123,34 @@ check("ねじれもスロット型も1行で読める", entries("uart : [\n\tCR 
 // **黙って消えていた**（記号だけなら `Struct`、識別子と混ぜると識別子の行だけが残る）。
 // 並びは `layoutOfStruct` と同じ——`*`@0（宣言1）/ `+`@8（宣言0）である。
 check("記号を鍵にした器もスロットを持つ", entries("am : [\n\t`+` : 1\n\t`*` : 2\n]"), [
-	"am : Struct{* : Int , 1  + : Int , 0}",
+	"am : Struct{`*` : Int=2 , 1  `+` : Int=1 , 0}",
 ]);
 check("記号と識別子を混ぜても落ちない", entries("am : [\n\tplus : 1\n\t`*` : 2\n]"), [
-	"am : Struct{* : Int , 1  plus : Int , 0}",
+	"am : Struct{`*` : Int=2 , 1  `plus` : Int=1 , 0}",
+]);
+// **鍵は必ずバッククォートで囲む。** 裸で書くと鍵の中身が区切りと同じ綴りになれる
+// ——`.st` の区切りは「スロット間が2スペース」「型と連番の間が ` , `」「鍵と型の間が
+// ` : `」なので、鍵がそれらを含んだ瞬間に割れ方が2通りになる。囲めば例外が無くなる。
+// `sign.pegjs` の `string` 規則が「`` ` `` で始まり、`` ` `` でも改行でもない文字が
+// 続き、`` ` `` で終わる」なので、**文字列の中にバッククォートも改行も入らない**からである。
+//
+// 下の2本は、囲まなければ確実に割れ方が壊れる鍵である（`st_read.test.js` が同じ器を
+// 読み戻して、鍵と値がそのまま取れることまで見る）。
+check("鍵が区切りの `:` を含んでも一意に割れる", entries("am : [\n\t`a : b` : 1\n]"), [
+	"am : Struct{`a : b` : Int=1 , 0}",
+]);
+check("鍵が `,` と2スペースを含んでも一意に割れる", entries("am : [\n\t`Int , 0  q` : 2\n\tz : 3\n]"), [
+	"am : Struct{`Int , 0  q` : Int=2 , 0  `z` : Int=3 , 1}",
 ]);
 check("連番スロットは順序どおりにスロット型を並べる", entries("t : 1 , `abc` , 2.5"), [
-	"t : Struct(Int String Float)",
+	"t : Struct(Int=1 String=`abc` Float=2.5)",
 ]);
 // List は要素型を伴って `List(T)` と書く。要素型を落とすと「整数のリスト」と「実数の
 // リスト」が同じ `List` になり、単一の実数（`Float`）とも区別が付かなくなる。要素型は
 // Pass 4 が `base + i × sizeof(T)` を出すのに要る情報であり、最も落としてはいけない。
 check("List は要素型を伴う（整数のリスト）", entries("l : [1 2 3]"), ["l : List(Int)"]);
 check("実数のリストは区別される", entries("l : [1.0 2.0]"), ["l : List(Float)"]);
-check("単一の実数とも区別される", entries("r : 5.0"), ["r : Float"]);
+check("単一の実数とも区別される", entries("r : 5.0"), ["r : Float=5.0"]);
 // 前置 `~`（持ち上げ）は**長さ1の器**を作る。`$`/`@` が単体値に対する持ち上げ／持ち下げ
 // であるのと同じ段で、前置 `~`／後置 `~` が列に対するそれを担う。
 //
@@ -151,7 +165,7 @@ check("単一の実数とも区別される", entries("r : 5.0"), ["r : Float"])
 // `List + Float` になり §3.2 で `__` へ潰れるので、`~(@p + 0.0)` と書く。`$` が
 // `$[array ' 0]` のように確定した式へ適用されるのと同じ形。
 check("前置 `~` はスカラーを長さ1の器へ持ち上げる", entries("p : 0x40011000\nlevel : ~(@p + 0.0)"), [
-	"p : Address",
+	"p : Address=0x40011000",
 	"level : List(Float)",
 ]);
 // **器に当てれば恒等。** `~` は η であり `[x] ≅ x` の潰れが効くので、器に当てても何も
@@ -166,11 +180,11 @@ check("持ち上げは冪等", entries("a : ~~5"), ["a : List(Int)"]);
 // 答えが同じで、**可換が保たれる**——`@p + 0` も `0 + @p` も `Int` である。左辺優先が
 // 働くのは「強弱が無いとき」だけで、型を持たないものには主張すべき内容が無い。
 check("読み出しに 0 を足すと Int（Raw は具体型に負ける）", entries("p : 0x40011000\nraw : @p + 0"), [
-	"p : Address",
+	"p : Address=0x40011000",
 	"raw : Int",
 ]);
 check("足す向きを変えても同じ（可換）", entries("p : 0x40011000\nraw : 0 + @p"), [
-	"p : Address",
+	"p : Address=0x40011000",
 	"raw : Int",
 ]);
 // 持ち上げた結果への算術は成立しない。場所は Scalar ではないので射が無く、零射へ落ちる
@@ -192,7 +206,7 @@ check("持ち上げた結果への算術は __ へ落ちる", entries("xs : [1 2
 check("1要素のリストはスカラーと同型", entries("one : [5]"), ["one : Int"]);
 // 入れ子でも要素型が保たれる。
 check("連番スロットの中でも要素型が残る", entries("t : 1 , [1 2] , [1.0 2.0]"), [
-	"t : Struct(Int List(Int) List(Float))",
+	"t : Struct(Int=1 List(Int) List(Float))",
 ]);
 
 // ブロック記法は1行のカンマ形と同じ型になる（list_model.md §3.1 の IMPORTANT）。
@@ -304,13 +318,13 @@ check("`@f x` も同じく解ける", entries("f : x ? x + 1\ncall : x ? @f x"),
 // 要求する」ことを示す。両方あわせて vtable スロットのシグネチャになっている。
 check("構造体フィールド経由の呼び出しは `_`（本物の dyn）", entries("f : x ? x + 1\nt : [\n\th : $f\n\tk : 0\n]\ncall : s ? @(s ' h) 5"), [
 	"f : Int -> Int",
-	"t : Struct{h : Address , 0  k : Int , 1}",
+	"t : Struct{`h` : Address , 0  `k` : Int=0 , 1}",
 	"call : {h} -> _",
 ]);
 // ---- 範囲: `.st` は export されたものだけ ----
 check("`.st` は export されていない識別子を出さない", entries("a : 1\nb : 2", "st"), []);
-check("`.st` は export 記号を保ったまま出す", entries("#a : 1\nb : 2", "st"), ["#a : Int"]);
-check("`.ist` は全識別子を出す", entries("#a : 1\nb : 2", "ist"), ["#a : Int", "b : Int"]);
+check("`.st` は export 記号を保ったまま出す", entries("#a : 1\nb : 2", "st"), ["#a : Int=1"]);
+check("`.ist` は全識別子を出す", entries("#a : 1\nb : 2", "ist"), ["#a : Int=1", "b : Int=2"]);
 
 // ---- 残っている `_` について ----
 //
@@ -662,7 +676,7 @@ check("List(Float) の添字は Float", entries("l : [1.0 2.0]\np : l ' 0"), ["l
 // 添字が `Int` になるのと同じ引き方をする。**器の型を返してはいけない。** 返すと
 // `is_digit : c ? \0 <= c <= \9` の `c` が呼び出しサイト（`s ' 0`）から `String` と
 // 逆算され、レジスタ1本で比べる本体と `{ptr, len}` で受ける入口が食い違う。
-check("String の添字は Char", entries("s : `abc`\np : s ' 0"), ["s : String", "p : Char"]);
+check("String の添字は Char", entries("s : `abc`\np : s ' 0"), ["s : String=`abc`", "p : Char"]);
 // 添字が**部分列**を指す形（後置 `~` と範囲式）のときだけ、結果は器と同じ型になる。
 check("部分列の添字は器の型", entries("l : [1 2 3]\np : l ' 1~"), ["l : List(Int)", "p : List(Int)"]);
 // 名前付きスロットは名前で、連番スロットはリテラルの添字でそのスロットの型を引く
@@ -865,7 +879,7 @@ check("何段渡り歩いても要素型が届く", entries("f : [h ~t] ? h + 0\
 	"h : Int",
 ]);
 check("中身が見えていればスロットの型が出る", entries("t : 1 , 2.5\na : t ' 0\nb : t ' 1"), [
-	"t : Struct(Int Float)",
+	"t : Struct(Int=1 Float=2.5)",
 	"a : Int",
 	"b : Float",
 ]);

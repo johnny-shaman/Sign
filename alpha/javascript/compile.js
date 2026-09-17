@@ -34,6 +34,9 @@ import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./p
 // 規則は同じ——写しを持たず、別名で受ける。
 import { isSlotKeyNode, unparen, isExpandNode, isDefineNode, isDefineNode as isArmNode, isIdentifierNode as isIdentNode } from "./layout.js";
 import { findStreamFunctions, generatePullers, groupStreamFunctions, CURSOR_SUFFIXES } from "./stream_desugar.js";
+// **成果物（`.st`）からも合流できる。** 読み手が何を返したかで決まり、import 行の綴りは
+// 変わらない——どの成果物で答えるかはドライバの仕事である（`readImport` の戻り値）。
+import { readSignType } from "./st_read.js";
 
 // Pass 1b: トップレベルの各ラムダ定義について、ジェネリック仮引数（本体で `@` が
 // 直接かかっている仮引数）を呼び出しサイトの実引数カテゴリで具体化する。
@@ -243,12 +246,27 @@ function resolveImports(lines, options, parseFn, base, state) {
     // なる。トップレベルの定義は順序に依らない（`buildEnv` が先に全部集める）ので、
     // 循環するインポートは**ファイルを跨いだ相互再帰**でしかない——`sep` と `in_quote` が
     // 同じファイルで呼び合えるのと同じ話であり、断る理由が無い（原理4）。
-    let src;
-    try { src = options.readImport(full); } catch { throw new SyntaxError(`インポートが読めません: ${full}`); }
+    let got;
+    try { got = options.readImport(full); } catch { throw new SyntaxError(`インポートが読めません: ${full}`); }
     state.done.add(full);
+    // **読み手は「何を読んだか」まで返してよい。** 文字列だけを返す形は今まで通り `.sn`
+    // として扱う（`import.test.js` はそのまま通る）。`{ text, path }` を返したときは
+    // **拡張子が形式を決める**——`.st` なら型の成果物なので、`.sn` へ起こしてから parse へ
+    // 渡す。import 行の綴り（`` `operator_table.sn`@~ ``）は変えない。どの成果物で答えるかは
+    // ドライバが決めることであって、引く側が書き分けることではない。
+    const named = !!got && typeof got === "object" && typeof got.text === "string";
+    const fromPath = named ? normPath(got.path || full) : full;
+    let src = named ? got.text : got;
+    if (fromPath.endsWith(".st")) {
+      const r = readSignType(src, { path: fromPath });
+      // **断りは黙って飲まない。** `.st` は葉の値まで書いてあれば起こせるが、関数・穴・
+      // 器・知らない綴りは起こせない。埋めて通すと診断0件のまま値だけが違う（黙った誤答）。
+      if (r.diagnostics.length > 0) throw new SyntaxError(r.diagnostics.join("\n"));
+      src = r.text;
+    }
     // **撒くのは束縛だけである。** モジュールの末尾にある実行例まで持ってくると、
     // 最後の式が入れ替わる——`_sign_main` が返すのはそれなので、黙って別の値になる。
-    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(full), state);
+    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state);
     for (const l of inner) if (definedNameOf(l)) out.push(l);
   }
   return out;

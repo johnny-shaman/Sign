@@ -117,6 +117,103 @@ export const REACHED_MNEMONICS = [
 	"negs", "sdiv", "stp", "str", "strb", "sub", "subs",
 ];
 
+/**
+ * **`.st` 経由で合流したときの門の表**（`st_gate.test.js`）。
+ *
+ * `.st` は長らく誰にも読まれていなかった。値を葉に載せて読む側（`st_read.js`）を置いた今、
+ * 見るべきは「**ソースを読まずに `.st` だけで同じ `.s` が出るか**」である。門は2枚あり、
+ * **どちらか一方では足りない**——実測で、片方が緑のままもう片方だけが赤になる壊し方が
+ * 両向きに在った（下の表）。
+ *
+ * ## 自写（`selfCopy`）が成り立つのは1枚だけである
+ *
+ * `X.sn` → `.st` → 起こした `.sn` → `.s` が元と同じ指紋になるのは、**その枚が丸ごとデータ
+ * のとき**に限る。`.st` は関数の本体を持たないからで、6枚のうち `operator_table.sn` だけが
+ * これに当たる。残り5枚は自分の `#` を1つも持たず（`own` が空）、`.st` は
+ * `operator_table` の素通しだけである——だから起こすと**別のプログラム**になる
+ * （`raised` がその指紋。`lexer.sn` と `target_info.sn` は 0 エントリなので空の `.s`）。
+ * `own` を golden に置くのは、**どれかの枚が自分の `#` を持った日に言わせる**ためである。
+ *
+ * ## `.st` 自身も golden にする（`.s` の門だけでは足りない）
+ *
+ * `.st` が黙って痩せたとき、`.s` の門だけでは**どこが痩せたか**が出ない。実測: `.st` から
+ * `#strict_infix` を丸ごと落としても、自写の門も `parser` の門も `emit` の門も**緑のまま**
+ * である（`strict_infix` を読むのは `preprocess.sn` だけ）。逆に `.st` の sha だけを見て
+ * いると、`.st` が同じでも読む側が壊れた場合を見逃す。2つで1組である。
+ *
+ * @property st       `.st` テキストそのものの golden（sha は sha256 の頭16桁）
+ * @property own      その枚が**自分で** `#` した名前。素通しは数えない
+ * @property selfCopy 自写の門（G1）が成り立つか
+ * @property raised   `.st` から起こした `.sn` が出す `.s` の指紋。`selfCopy` なら
+ *                    `CORPUS` の `digest.full` と同じ値になる（同じ事実を2か所に書かない）
+ */
+export const ST_BOUNDARY = [
+	{ rel: "alpha/sign/preprocess.sn", st: { sha: "3829bf13d5de4542", bytes: 8071, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{ rel: "alpha/sign/lexer.sn", st: { sha: "044de038718c7429", bytes: 94, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
+	{ rel: "alpha/sign/parser.sn", st: { sha: "4197802f68865fa6", bytes: 8067, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{
+		rel: "alpha/sign/operator_table.sn",
+		st: { sha: "46a3e2b0f23e2540", bytes: 8075, entries: 14, unresolved: 0 },
+		own: ["infix", "prefix", "postfix", "enclosure", "asm_infix_width", "asm_infix_shape", "asm_infix_signed", "asm_prefix_shape", "asm_prefix_place", "asm_prefix_width", "asm_postfix_shape", "asm_enclosure_signed", "asm_enclosure_shape", "strict_infix"],
+		selfCopy: true,
+		raised: "67d287f67f8b3139",
+	},
+	{ rel: "alpha/sign/emit.sn", st: { sha: "39118e2fcd2bca11", bytes: 8065, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
+];
+
+/**
+ * **境界の門**。`operator_table.sn` を引く3本を、読み手が `.st` **しか**返さない状態で
+ * 合流させる。期待する指紋は `CORPUS` の `digest.full` そのもの——ここに値を写さないのは、
+ * 同じ事実を2か所に置くと片方だけ動いて黙って食い違うからである。
+ *
+ * **`preprocess.sn` はここで初めて `.st` 経由が測られた枚である。** そして実測では、
+ * `strict_infix`（29鍵・全部 Int）を見ている門は**この1本だけ**だった:
+ *
+ * | 壊し方（`operator_table.st` を1か所） | 自写 | parser | emit | preprocess |
+ * |---|---|---|---|---|
+ * | 葉の値（String / Int） | 赤 | 赤 | 赤 | 赤 |
+ * | スロットを1つ落とす | 赤 | 赤 | 赤 | 赤 |
+ * | 鍵の綴りを変える（`parser.sn` が `' 鍵` で引く鍵） | **緑** | 赤 | 緑 | 緑 |
+ * | 鍵の綴りを変える（**それ以外の鍵**） | **緑** | **緑** | **緑** | **緑** |
+ * | 連番を2つ入れ替える | **緑** | 赤 | 緑 | 緑 |
+ * | `strict_infix` の値・スロット・エントリ | **緑** | **緑** | **緑** | 赤 |
+ * | 名前順の並びを崩す | 緑 | 緑 | 緑 | 緑 |
+ * | 型の綴りだけ変える | 緑 | 緑 | 緑 | 緑 |
+ *
+ * 鍵と連番が自写の門から見えないのは、**鍵の名前が機械語に残らない**からである
+ * （スロットは番地の隔たりで引く）。読む側がそれを使う枚——`parser.sn` が `' assoc` で
+ * 引く所——で初めて荷重が出る。
+ *
+ * > [!CAUTION]
+ * > **`.s` の門で赤くなる鍵は、`parser.sn` が静的に `' 鍵` で引く鍵だけである。**
+ * > 鍵を1つずつ 75 通りリネームして4枚へ通すと、**23 通りが4枚とも緑**だった（実測）:
+ * > `prefix` / `postfix` / `enclosure` の外側の鍵 18 本（＝演算子の綴りそのもの）、
+ * > 各表の内側の `name`、asm_* 8枚の内側の `form` 全部、ほか。
+ * > **`.s` は原理的に鍵を運ばない**ので、`.s` の門をいくつ並べてもここは埋まらない。
+ * >
+ * > `ST_BOUNDARY` の `st.sha` は**書く側にしか効かない**——読む側が鍵を化けさせた場合、
+ * > `.st` は素のままなので sha は動かない（実測: `st_read.js` が `form` を `formX` と
+ * > 読むようにしても、4枚の門も sha も全部緑）。だから `st_gate.test.js` の §5 に
+ * > **`.st` → 起こした `.sn` → `.st'` の往復**を置いてある。鍵は `.st` の中に字面で在るので、
+ * > 書く側が落としても読む側が化けさせても、そこで割れる。逆に `strict_infix` は `operator_table.sn` 単独では
+ * 一度も使われず、平らな器なので `.rodata` にも出ない。**自写と境界は包含ではなく相補**
+ * であり、片方だけ置いたら塞がらない穴がそれぞれに在る。
+ *
+ * 最後の2行は**荷重が無いことの記録**である。並びは読む側が連番で並べ直すので起こした
+ * `.sn` がバイト一致する。型の綴りも同じで、起こす側が書くのは**値の字面だけ**——Sign に
+ * 型注釈の構文が無い以上、葉の型はテキストを通ると必ず値から推論し直される。
+ * 綴りが化けたことは `.s` では出ないので、**`ST_BOUNDARY` の `st.sha`（書く側）と
+ * `st_gate.test.js` §5 の往復（読む側）の2つ**がそこを見る。
+ *
+ * @property blind その門が見ない `.st` のエントリ（落としても緑のままになるもの）
+ */
+export const ST_EDGES = [
+	{ rel: "alpha/sign/parser.sn", via: "operator_table.sn", blind: ["strict_infix"] },
+	{ rel: "alpha/sign/emit.sn", via: "operator_table.sn", blind: ["strict_infix"] },
+	{ rel: "alpha/sign/preprocess.sn", via: "operator_table.sn", blind: [] },
+];
+
 export const sourceOf = (entry) => fs.readFileSync(path.join(ROOT, entry.rel), "utf8");
 
 /**
