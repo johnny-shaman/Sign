@@ -176,6 +176,44 @@ function applyBase(node) {
 // 器の型（pass3 の同名の集合と同じ顔ぶれ）。
 const CONTAINER_TYPES = new Set(["String", "List", "Struct", "Iterator", "Implicit"]);
 
+/**
+ * **型の名前だけで引ける事実は、`if` の連鎖ではなく表に置く。**
+ *
+ * 理由は2つある。
+ *
+ * 1. **同じ事実を2度綴らないため。** `passingOf` は「参照で渡すか」を
+ *    `type === "List" || … || type === "Container"` で決め、「何本運ぶか」を別の行の
+ *    `carriesLength = type !== "Struct"` で決めていた。どちらも §4.6 の**同じ1つの事実**
+ *    （型が語らない分だけを参照が運ぶ）の言い換えで、片方だけ直すと黙って割れる。
+ *    表に居ることが「参照で運ぶ」であり、その値が「何本」である——1枚で両方言える。
+ * 2. **門が行を1本ずつ指させるため。** `target_info_sn.test.js` が表の行をずらして
+ *    「その行を誰か問うているか」を数えられるのは、表が `export const` のオブジェクトで
+ *    `put(o, k, v)` で触れるからである。`if` の中に埋めると、`layout.sn` の門は
+ *    同じ測り方ができない。**移植より先にこちらを直すのはそのためである。**
+ *
+ * ここに置くのは**型名（または演算名）だけで引ける行**に限る。`repr` や AST の形を見る
+ * 判断は関数の側に残る——表に混ぜると鍵が2種類になり、引けない行ができる。
+ */
+
+// §4.6 参照で運ぶ型と、その本数。`List` / `String` / `Container` は要素数を型が語らない
+// ので `len` を伴い、`Struct` は形が型に在るので `{ptr}` の1本（stack_abi.md §4.6）。
+const REF_SLOTS = { List: 2, String: 2, Container: 2, Struct: 1 };
+// 参照が運ぶ欄の綴りと型。`slots` の本数だけ先頭から取る。
+const REF_FIELD_NAMES = ["ptr", "len"];
+const REF_FIELD_TYPES = { ptr: "Address", len: "Int" };
+// **入力（`Reader`）は番地そのものを値で運ぶ**（type_system.md §3.5）。要素がメモリに
+// 並んでいないので器ではなく、参照の表には居ない。この表に居ることが「入力である」こと
+// そのものなので、`reader` の印もここから出す。
+const REG_SLOTS = { Reader: 1 };
+// 零対象。**`0` は Sign では真**なので、幅 0 を「決まらない」と見分けるには所属で訊く。
+const UNIT_TYPES = new Set(["Unit"]);
+// 規則（レンジ・イテレータ）の欄。差は `end` 1つだけである（`measureRule` の頭を見よ）。
+// 表に無い型は終端を持つ側に落ちる——曖昧なのは `List` の方で、あちらは場所にも規則にも
+// なるので `repr` で選ばれてここへ来る。
+const RULE_FIELD_NAMES = ["start", "step", "end"];
+const RULE_SLOTS = { Iterator: 2 };
+const DEFAULT_RULE_SLOTS = 3;
+
 function deref(node, env, seen = new Set()) {
   if (!node || !env) return node;
   // 適用の結果は呼び先の返値である。`mk : n ? [1 ~ n]` の `mk 5` が何バイト要るかは
@@ -318,7 +356,7 @@ function measure(node, conf, depth = 0) {
   if (!type) return null;
 
   // 零対象は場所を占めない。
-  if (type === "Unit") return { size: 0, align: 1 };
+  if (UNIT_TYPES.has(type)) return { size: 0, align: 1 };
 
   // **前置 `~`（持ち上げ）は器を1つ作る。型の振り分けより先に見る。**
   //
@@ -480,9 +518,15 @@ function measureRule(node, conf) {
   // 3つ組であり、要素型が分からなくても**何本で運ぶか**は決まる（stack_abi.md §4.6）。
   // 幅だけが未確定なので、そこは GPR 幅を置く——`size` を使う側（アラインメントや
   // オフセット計算）が要素型を要求するなら、そちらで名指しすればよい。
-  const w = el ? sizeOf(el, target) : (widthsOf(target) || {}).gpr || 8;
+  //
+  // **幅は `target_info` の `gpr` そのものである。** ここには `(widthsOf(target) || {}).gpr || 8`
+  // と書いてあったが、`8` は AArch64 の GPR 幅の写しであって、この関数が決めた数ではない。
+  // しかも**その枝は通らない**——この関数の呼び手は `measure` 1つきりで、`measure` は
+  // 頭で `if (!widthsOf(target)) return null` と言っている。未対応ターゲットでは
+  // ここへ来ない。見張りに見えて、実は幅の出所を1つ増やしていただけである。
+  const w = el ? sizeOf(el, target) : widthsOf(target).gpr;
   if (w === null) return null;
-  const fields = node.atomType === "Iterator" ? ["start", "step"] : ["start", "step", "end"];
+  const fields = RULE_FIELD_NAMES.slice(0, RULE_SLOTS[node.atomType] ?? DEFAULT_RULE_SLOTS);
   return {
     size: w * fields.length,
     align: w,
@@ -860,8 +904,12 @@ function slotCellSize(node, conf) {
   //
   // 中身が読めることと、そこに何バイト置かれるかは別の問いである。置かれるのは運ぶ姿の
   // 方なので、参照で運ぶ型はその幅で数える——中身が読めるかどうかに関わらず。
+  //
+  // **境界も `gpr` の写しである。** `8` と書いてあったが、参照が運ぶのは番地なので
+  // 境界を決めているのは GPR 幅である（`passingOf` の参照の枝も `align: w.gpr` を返す）。
+  // ここまで来た時点で `passingOf` が答えを返しているので、幅は必ず決まっている。
   const pass = passingOf(node, conf);
-  if (pass && pass.mode === "reference" && pass.size) return { size: pass.size, align: 8 };
+  if (pass && pass.mode === "reference" && pass.size) return { size: pass.size, align: widthsOf(conf.target).gpr };
   return measure(node, conf);
 }
 
@@ -942,14 +990,15 @@ function passingOf(node, conf) {
   const type = target_.atomType || named.atomType;
   if (!type) return null;
   // 零対象は何も渡らない。
-  if (type === "Unit") return { mode: "register", size: 0, align: 1, slots: 0 };
+  if (UNIT_TYPES.has(type)) return { mode: "register", size: 0, align: 1, slots: 0 };
   // スカラーは値そのものがレジスタに乗る。
   const machine = reduceToMachineType(type, target);
   if (machine) return { mode: "register", size: machine.size, align: machine.size, slots: 1, class: machine.class, signed: machine.signed };
   // **入力は番地そのもの**（即値、type_system.md §3.5）。要素はメモリに並んでいないので
   // 器ではない——規則と同じく値で運び、状態は番地1語だけである。頭は番地から読み、尾は
   // 同じ番地（進むのは機器の側）。
-  if (type === "Reader") return { mode: "register", size: w.gpr, align: w.gpr, slots: 1, reader: true };
+  const regSlots = REG_SLOTS[type];
+  if (regSlots) return { mode: "register", size: w.gpr * regSlots, align: w.gpr, slots: regSlots, reader: true };
   // 規則（レンジ・イテレータ）はメモリ上に無いので、そのままレジスタへ乗る。
   //
   // 測るのは**辿った先**である。識別子そのものは「どう置かれているか」を持たない——
@@ -974,15 +1023,19 @@ function passingOf(node, conf) {
   // `{ptr, len}` の2本という運び方は `List` でも `String` でも同じである——**運ぶ幅は
   // 中身の型を見ていない**。ここに枝が無かったので、器として受けた途端に「返値の渡し方が
   // 決まりません」になっていた。
-  if (type === "List" || type === "String" || type === "Struct" || type === "Container") {
-    const carriesLength = type !== "Struct";
-    const names = carriesLength ? ["ptr", "len"] : ["ptr"];
+  //
+  // **「参照で運ぶか」と「何本運ぶか」は表 1 枚である。** ここは型名の並びで参照かを決め、
+  // 別の行の `carriesLength = type !== "Struct"` で本数を決めていた——同じ事実の2つの綴りで、
+  // 型を1つ足すとき片方だけ直すと黙って割れる。表に居ることが参照であり、値が本数である。
+  const refSlots = REF_SLOTS[type];
+  if (refSlots) {
+    const names = REF_FIELD_NAMES.slice(0, refSlots);
     return {
       mode: "reference",
       size: w.gpr * names.length,
       align: w.gpr,
       slots: names.length,
-      fields: names.map((n, i) => ({ name: n, offset: i * w.gpr, size: w.gpr, type: n === "ptr" ? "Address" : "Int" })),
+      fields: names.map((n, i) => ({ name: n, offset: i * w.gpr, size: w.gpr, type: REF_FIELD_TYPES[n] })),
       pointee: type,
     };
   }
@@ -1022,13 +1075,21 @@ function passingOf(node, conf) {
  * 分かっていないことを分かったことにしない（原理4）。`8 * p` は左辺優先で `Int` の域なので、ここでは見ない。
  */
 const ADDRESS_PARTNERS = new Set(["Int", "Address", "Char", "Raw", "Unit"]);
+// 射の無い演算の綴り。**左シフトは `p * 2^k` そのもの**なので積と同じ表に居る
+// （利用者の決定 2026-09-15）。右シフトは `p / 2^k`（枠の番号）なので射があり、居ない。
+const ADDRESS_OPS = new Set(["mul", "pow", "bit_shift_left"]);
+// 後置の側。番地の階乗は番地の積なので、同じ理由で射が無い。
+const ADDRESS_FACTORIAL_OPS = new Set(["factorial"]);
+// 左辺が `__` か型の無い生の値なら、域は相手が決める（`Unit ⊕ T → T`、`Raw` は最弱）。
+const WEAK_LEFT_TYPES = new Set(["Unit", "Raw"]);
+// 射が無いと言える域。**表に居ることが「番地の域である」ことである**——`=== "Address"` と
+// 書くと、域の名前がここと `addr_is` と診断の3か所に散る。
+const ADDRESS_DOMAIN = new Set(["Address"]);
 function addressWithoutArrow(name, leftType, rightType) {
-  if (name === "factorial") return leftType === "Address";
-  // **左シフトは `p * 2^k` そのもの**なので同じく射が無い（利用者の決定 2026-09-15）。右シフトは `p / 2^k`
-  // （枠の番号）なので射がある。
-  if (name !== "mul" && name !== "pow" && name !== "bit_shift_left") return false;
-  const domain = leftType === "Unit" || leftType === "Raw" ? rightType : leftType;
-  return domain === "Address" && ADDRESS_PARTNERS.has(rightType);
+  if (ADDRESS_FACTORIAL_OPS.has(name)) return ADDRESS_DOMAIN.has(leftType);
+  if (!ADDRESS_OPS.has(name)) return false;
+  const domain = WEAK_LEFT_TYPES.has(leftType) ? rightType : leftType;
+  return ADDRESS_DOMAIN.has(domain) && ADDRESS_PARTNERS.has(rightType);
 }
 
 export {
@@ -1056,4 +1117,20 @@ export {
   bareName,
   unparen,
   addressWithoutArrow,
+  // **表そのものを出す。** 引くのは `layout.js` の中だけだが、外へ出すのは門のためである
+  // ——`target_info_sn.test.js` が表の行を1本ずつずらして「その行を誰か問うているか」を
+  // 数えるのと同じ測り方を、`layout.sn` の門でもできるようにする。`if` の中に埋まって
+  // いるとずらせず、**門が緑のまま Sign 側に何を書いてもよくなる**。
+  REF_SLOTS,
+  REF_FIELD_NAMES,
+  REF_FIELD_TYPES,
+  REG_SLOTS,
+  UNIT_TYPES,
+  RULE_FIELD_NAMES,
+  RULE_SLOTS,
+  ADDRESS_OPS,
+  ADDRESS_FACTORIAL_OPS,
+  ADDRESS_PARTNERS,
+  WEAK_LEFT_TYPES,
+  ADDRESS_DOMAIN,
 };
