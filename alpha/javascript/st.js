@@ -29,9 +29,15 @@ import { inferLambdaParamTypes, pointfreeSignature, IDENTITY } from "./pass3.js"
 // ノードの形を見るだけの述語と、名前の綴りを剥ぐ規則は layout.js が唯一の置き場である
 // （理由はそこの `isDefineNode` のコメント）。`bareName` は `<name>` → `name`——識別子
 // トークンは常に山括弧で囲まれている（pass1 の判定基準と同じ）。ここで渡す名前は
-// 識別子ノードの `value` か、pass3 が `bareKey` で既に剥いだマージ済みスロットの鍵だけ
-// なので、layout.js 側がバッククォートも剥ぐことはここでは観測されない。
-import { isDefineNode, isIdentifierNode, bareName } from "./layout.js";
+// 識別子ノードの `value` か、pass3 が `bareKey` で既に剥いだマージ済みスロットの鍵である。
+//
+// **かつてここに「だから文字列の鍵は観測されない」と書いてあった。嘘だった。**
+// スロットの鍵になれるのは識別子と**文字列**である（`layout.js` の `isSlotKeyNode`）。
+// ここだけがその問いを持たず `isIdentifierNode` で書いていたので、`` `*` : 2 `` のような
+// 記号の鍵を持つ器は `.ist` からスロットが**黙って消えていた**（記号だけなら `Struct`、
+// 識別子と混ぜると識別子の行だけが残る）。`compile` / `interpreter` / `pass3` / `pass4` の
+// 4本は最初から `isSlotKeyNode` を引いていて、**5本目のここだけが写しだった**。
+import { isDefineNode, isIdentifierNode, isSlotKeyNode, bareName } from "./layout.js";
 
 const UNKNOWN = "_";
 
@@ -212,7 +218,7 @@ function structTypeText(node, atomType) {
   } else if (node.slotKind === "named") {
     slots = (node.lines || [])
       .map((l, ordinal) => {
-        if (isDefineNode(l) && isIdentifierNode(l.left)) {
+        if (isDefineNode(l) && isSlotKeyNode(l.left)) {
           return { name: bareName(l.left.value), ordinal, type: slotTypeText(l.right) };
         }
         // フィールド名の省略記法（`x` だけの行）。値はその識別子自身。

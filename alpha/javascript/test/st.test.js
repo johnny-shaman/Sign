@@ -117,6 +117,17 @@ check("宣言順が違えば連番が入れ替わる（ねじれが型に保存�
 check("ねじれもスロット型も1行で読める", entries("uart : [\n\tCR : 0x40011000\n\tSR : 0\n\tDR : \\d\n]"), [
 	"uart : Struct{CR : Address , 0  DR : Char , 2  SR : Int , 1}",
 ]);
+// **スロットの鍵は識別子だけではない。** `layout.js` の `isSlotKeyNode` が唯一の綴りで、
+// 識別子と**文字列**の両方が鍵になれる（記号を鍵にした表——演算子表がその形である）。
+// ここは長らく `isIdentifierNode` で書いてあり、記号の鍵を持つ器は `.ist` からスロットが
+// **黙って消えていた**（記号だけなら `Struct`、識別子と混ぜると識別子の行だけが残る）。
+// 並びは `layoutOfStruct` と同じ——`*`@0（宣言1）/ `+`@8（宣言0）である。
+check("記号を鍵にした器もスロットを持つ", entries("am : [\n\t`+` : 1\n\t`*` : 2\n]"), [
+	"am : Struct{* : Int , 1  + : Int , 0}",
+]);
+check("記号と識別子を混ぜても落ちない", entries("am : [\n\tplus : 1\n\t`*` : 2\n]"), [
+	"am : Struct{* : Int , 1  plus : Int , 0}",
+]);
 check("連番スロットは順序どおりにスロット型を並べる", entries("t : 1 , `abc` , 2.5"), [
 	"t : Struct(Int String Float)",
 ]);
