@@ -1137,6 +1137,13 @@ class Emitter {
 	 * 置き場所の決まりは値のときと同じ——書かれるなら `.data`、読むだけなら `.rodata`。
 	 * 違うのは中身が**行の並び**であることだけなので、名前ごとに1つという性質も、
 	 * 節の振り分けも `internBinding` と共有する。
+	 *
+	 * **`#` の段数はここで引く。呼ぶ側から渡してはいけない。** 印がシンボルの見え方を
+	 * 決めるのは関数と同じだが、データの像は5か所（`bindingLabel` のリテラルと効果、
+	 * `structBindingLabel`、器、トップレベルの書き戻し）から入ってくる。渡す形にすると
+	 * 1つ忘れたときに**黙って落ちる**——実測で、`##once : inc 5` は `runsOnce` の道が
+	 * 先に登録するので `hit` の枝だけを通り、`.global` の無い `.Lbind_once` が診断ゼロで
+	 * 出た。名前から引けば `hit` の枝も同じ答えになる（鍵が名前そのものだから）。
 	 */
 	internBindingImage(name, body, align, writable = false) {
 		const key = `b:${name}`;
@@ -1146,8 +1153,12 @@ class Emitter {
 			if (writable) hit.writable = true;
 			return hit.label;
 		}
-		const label = `.Lbind_${name.replace(/[^\w]/g, "_")}`;
-		this.namedData.set(key, { label, body, align, writable });
+		// 公開する像のラベルは**裸の識別子**である。`.L` で始まる綴りは公開できない
+		// ——実測（clang）: `error: non-local symbol required` / `.global .Lbind_t`。
+		const level = exportLevelOf(name, this.env);
+		const sane = name.replace(/[^\w]/g, "_");
+		const label = level ? sane : `.Lbind_${sane}`;
+		this.namedData.set(key, { label, body, align, writable, level });
 		return label;
 	}
 
@@ -1177,7 +1188,8 @@ class Emitter {
 		const hit = this.namedData.get(key);
 		if (hit) return hit.label;
 		const label = `.Lanon${this.anonSeq++}`;
-		this.namedData.set(key, { label, body, align, writable: false });
+		// 名前が無いのだから印も無い（`#` は書かれた名前に付く）。
+		this.namedData.set(key, { label, body, align, writable: false, level: null });
 		return label;
 	}
 
@@ -1198,23 +1210,32 @@ class Emitter {
 			else out.push(`	${dir} ${cps.map((c) => "0x" + c.toString(16)).join(", ")}`);
 			out.push(`	// ${cps.length} 文字`);
 		}
-		for (const { label, body, align, writable } of this.namedData.values()) {
-			if (writable) continue; // 書かれるものは下の `.data` へ
-			out.push(`	.balign ${align}`);
-			out.push(`${label}:`);
-			out.push(...body);
-		}
+		// 像を1つ置く。公開する印を持つなら、ラベルの直前で見え方を宣言する。
+		const put = (x) => {
+			out.push(...dataSymbolDirectives(x));
+			out.push(`	.balign ${x.align}`);
+			out.push(`${x.label}:`);
+			out.push(...x.body);
+		};
+		const inBucket = (name) => [...this.namedData.values()].filter((x) => dataBucketOf(x) === name);
+		for (const x of inBucket("rodata")) put(x);
 		// **書かれる束縛は `.data` へ。** `$名前 # 値` の書き先が読み取り専用の節に在ると、
 		// 書き込みは黙って落ちる（あるいはフォールトする）。どちらに置くかは「書かれるか」
 		// が決めるのであって、定数として書かれたかどうかではない。
-		const written = [...this.namedData.values()].filter((x) => x.writable);
-		if (written.length > 0) {
-			out.push("", "	.section .data");
-			for (const { label, body, align } of written) {
-				out.push(`	.balign ${align}`);
-				out.push(`${label}:`);
-				out.push(...body);
-			}
+		//
+		// **`###` は自分の節を持つ（`symbolDirectives` の表）。** ただし関数の
+		// `.sign.pinned,"ax"` へデータを混ぜることはできない——1つの節名は1組の属性しか
+		// 持てず、実測（clang）で `error: changed section flags for .sign.pinned, expected: 0x6`。
+		// "ax" は実行可能でもあるので、混ぜれば W^X も壊れる。名前で分ける。
+		for (const [bucket, header] of [
+			["data", "	.section .data"],
+			["pinned.rodata", '	.section .sign.pinned.rodata,"a",%progbits'],
+			["pinned.data", '	.section .sign.pinned.data,"aw",%progbits'],
+		]) {
+			const xs = inBucket(bucket);
+			if (xs.length === 0) continue;
+			out.push("", header);
+			for (const x of xs) put(x);
 		}
 		return out;
 	}
@@ -4557,10 +4578,128 @@ function symbolDirectivesAfter(name, env) {
 	return exportLevelOf(name, env) === "###" ? ["	.text"] : [];
 }
 
+/**
+ * **データの像を置く節。** 決めるのは「書かれるか」と「`###` か」の2つだけである。
+ *
+ * `#` と `##` は節を分けない——見え方はシンボルの側（`.global` / `.hidden`）が持つので、
+ * 節を分ける理由が無い。分けるのは `###` だけで、あれは**配置**を言う印だからである
+ * （system_architecture.md §2.2——住所は option.ms が決める）。
+ */
+function dataBucketOf(x) {
+	if (x.level === "###") return x.writable ? "pinned.data" : "pinned.rodata";
+	return x.writable ? "data" : "rodata";
+}
+
+/** データのラベルの見え方。節は `dataBucketOf` が持つので、ここは `.global` / `.hidden` だけ。 */
+function dataSymbolDirectives(x) {
+	if (!x.level) return [];
+	const g = `	.global ${x.label}`;
+	return x.level === "#" ? [g, `	.hidden ${x.label}`] : [g];
+}
+
+/**
+ * **後段が自分で出す綴りは公開できない。**
+ *
+ * 無印なら名前は `.Lbind_…` か local なので当たらなかった——`#` を書いた瞬間に裸の識別子
+ * になり、後段の出す綴りと同じ棚へ載る。実測で `##_sign_main : 7` の `.s` は
+ * `error: symbol '_sign_main' is already defined` でアセンブラが止まる。
+ *
+ * 載せるのは**この後段と、その入口が自分で出す綴りだけ**である。リンカスクリプトの記号
+ * （`_stack_top` など）は的ごとに違うので、ここではなく配置を決める側が持つ。
+ */
+/**
+ * **公開できない綴り。** 後段と、後段の外側（起動コードとリンカスクリプト）が自分で出す名前である。
+ *
+ * 後段の綴りとぶつかると**アセンブラが止める**（`symbol '_sign_main' is already defined`）が、
+ * **リンカスクリプトの綴りとぶつかっても誰も止めない**——スクリプトの代入が勝ち、診断ゼロ・
+ * `ld` の終了コード 0 のまま、プログラム自身の参照が別の場所へ行く。実測（2026-09-18）:
+ *
+ *   `##_stack_top : 42` を公開して読むと 43 ではなく 9120000090000001（自分の `.text`）
+ *   `##_image_end` は 1、`##_ram_base` は c0dec0dec0dec0df
+ *
+ * **だから断る側がここしか無い。** 一覧は `qemu/link.ld` と `qemu/start.s` から取ったもので、
+ * **同じ事実が2か所に在る**——`test/export_symbol.test.js` が両方を読んで、ここが覆えていない
+ * 綴りが出たら赤くなる。片方を増やしたらもう片方が落ちる、という形にしてある。
+ */
+const RESERVED_SYMBOLS = new Set([
+	// 後段が自分で出す
+	"_sign_main",
+	// qemu/start.s
+	"_start", "put_hex", "vectors",
+	// qemu/link.ld（代入。ぶつかっても誰も言わない側）
+	"_ram_base", "_ram_size", "_stack_size", "_stack_limit", "_stack_top", "_image_end",
+	// --defsym で外から渡す
+	"__ram_size", "__stack_size",
+]);
+
 // 環境の鍵は `<f>` の形（トークンのまま）だが、ラベルは剥がした `f`。両方で引く。
 function exportLevelOf(name, env) {
 	const b = envLookup(env, name) || envLookup(env, `<${bareName(name)}>`);
-	return b ? b.exported || null : null;
+	const level = b ? b.exported || null : null;
+	// 予約された綴りは**公開しない**。名指しは `checkExportedNames` が1度だけする
+	// ——引く側は5か所あるので、ここで黙らせて診断をそちらに置くと同じ言い分が5回出る。
+	if (level && RESERVED_SYMBOLS.has(bareName(name))) return null;
+	return level;
+}
+
+/**
+ * **引く側も定義を公開してしまう。**（2026-09-18、実測。まだ直していない）
+ *
+ * `resolveImports` はインポートをソースのまま展開するので、`#` の印が**引く側にも付いてくる**。
+ * だから印を「公開定義を出す」に繋いだいま、表を使う枚が全部、同じ表の定義を公開する。
+ * 実測：`operator_table.o` と `parser.o` を繋ぐと重複シンボルが **0 件 → 13 件**
+ * （infix / prefix / postfix / enclosure / asm_* 9本）。parser+emit、preprocess+emit、
+ * preprocess+parser も同じ。
+ *
+ * **これは動機（`.h` と `.o` の分け方）と逆を向いている。** ヘッダを include しても定義は
+ * 増えない、が C の形だからである。直し方は「`#` は**定義した枚だけ**が公開する」で、
+ * そのためには束縛が「撒かれてきた」ことを覚えている必要がある——いまは覚えていない
+ * （`compile.js` の `resolveImports` に `selfPath` は在るが、束縛へは渡っていない）。
+ *
+ * 今すぐ足を引っ張らないのは、**2枚を繋ぐ道がまだ無い**からである（両方が `_sign_main` を
+ * 定義するので、印に関わらず繋がらない）。自己ホストで2枚目を繋ぐ日に、ここが先に立つ。
+ */
+
+/**
+ * 予約された綴りの**出どころ**。断るときの言い分に入れる。
+ *
+ * 出どころで壊れ方が違う——後段と起動コードの綴りは**アセンブラが止める**
+ * （`symbol '_sign_main' is already defined`）が、**リンカスクリプトの綴りは誰も止めない**
+ * ——代入が勝って、診断ゼロ・`ld` の終了コード 0 のまま別の場所を指す。
+ * **止まらない方こそ言い分が要る。**
+ */
+const RESERVED_ORIGIN = {
+	_sign_main: "後段が自分で出す",
+	_start: "起動コード（qemu/start.s）が出す",
+	put_hex: "起動コード（qemu/start.s）が出す",
+	vectors: "起動コード（qemu/start.s）が出す",
+	_ram_base: "リンカスクリプト（qemu/link.ld）が決める",
+	_ram_size: "リンカスクリプト（qemu/link.ld）が決める",
+	_stack_size: "リンカスクリプト（qemu/link.ld）が決める",
+	_stack_limit: "リンカスクリプト（qemu/link.ld）が決める",
+	_stack_top: "リンカスクリプト（qemu/link.ld）が決める",
+	_image_end: "リンカスクリプト（qemu/link.ld）が決める",
+	__ram_size: "リンクのときに外から渡す（--defsym）",
+	__stack_size: "リンクのときに外から渡す（--defsym）",
+};
+
+/** 公開できない綴りを名指しする。`exportLevelOf` が黙って下ろした分の言い分である。 */
+function checkExportedNames(nodes, env, em) {
+	if (!env) return;
+	for (const node of nodes) {
+		if (!isDefineNode(node)) continue;
+		const l = unwrap(node.left);
+		if (!isIdentifierNode(l)) continue;
+		const name = bareName(l.value);
+		if (!RESERVED_SYMBOLS.has(name)) continue;
+		const b = envLookup(env, l.value) || envLookup(env, `<${name}>`);
+		if (!b || !b.exported) continue;
+		em.diagnostics.push({
+			severity: "error",
+			message: `\`${name}\` は${RESERVED_ORIGIN[name] || "後段が自分で出す"}綴りなので公開できません（\`${b.exported}\` を外すか、名前を変えてください）`,
+			node,
+		});
+	}
 }
 
 /**
@@ -10387,6 +10526,8 @@ function generateAsm(nodes, env, options = {}) {
 	markAddressTaken(nodes, env);
 	// **効果を持つ束縛は1回だけ走らせる。** 同じく畳む前に印を付ける（上の注記）。
 	markRunOnceBindings(nodes, env);
+	// **公開できない綴りを名指しする。** 印を引く前に言う（引く側は黙って下ろす）。
+	checkExportedNames(nodes, env, em);
 	// **鍵が増えるマージは、鍵の和集合ぶんの場所を取る。** 確保なので layer 1 以上である
 	// （layer_relations.md §3.3.1、option_ms_schema.md §4）。和集合は compile.js が
 	// Pass 3 の前に確定させているので、ここで見るのは「実際に鍵が増えたか」だけ。
@@ -10573,4 +10714,6 @@ function generateAsm(nodes, env, options = {}) {
 	return { text: em.lines.join("\n") + "\n", diagnostics: em.diagnostics };
 }
 
-export { returnSizeBound, generateAsm, ARG_REGS, SCRATCH, MAX_SLOTS };
+// `RESERVED_*` を出すのは門のためである——同じ事実が `qemu/link.ld` と `qemu/start.s` にも
+// 在るので、`test/export_symbol.test.js` が両方を読んでここが覆えているかを見る。
+export { returnSizeBound, generateAsm, ARG_REGS, SCRATCH, MAX_SLOTS, RESERVED_SYMBOLS, RESERVED_ORIGIN };

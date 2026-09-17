@@ -367,13 +367,18 @@ for (const e of ST_BOUNDARY) {
 	checkTrue("往復の軸は鍵の化けを捕まえる", again !== ST_BOUNDARY.find((x) => x.rel === OT).st.sha, String(again));
 }
 
-// **export の印もどの `.s` の門にも見えない。** `resolveImports` は印に関係なく撒くので、
-// 1段では誰も気付かず、次の段で引く側の `.st` が 0 エントリになって初めて出る（実測）。
-// 往復の軸はここも捕まえる——印が落ちれば起こした `.sn` の `#` が消え、取り直した `.st'` が割れる。
+// **export の印は、いまは `.s` に出る。** かつてはどの門にも見えなかった——`resolveImports`
+// は印に関係なく撒くので1段では誰も気付かず、次の段で引く側の `.st` が 0 エントリになって
+// 初めて出ていた。**印がシンボルの見え方になった今は自写の門が直に見る**：印を落とすと
+// ラベルが `infix` から `.Lbind_infix` へ戻り、`.global` / `.hidden` の行も消える。
+//
+// 往復の軸は変わらず要る——`raise` が `#` を落とすような読み手の壊れ方は、`.s` には
+// 「印の無いプログラムを正しく出した」としか見えないからである。ここで見ているのは
+// **どちらの側が気付くか**であって、どちらか一方で足りるという話ではない。
 {
 	const noMark = otSt.split(E_LINE).map((l) => l.replace(/^#+/, "")).join(E_LINE);
 	checkTrue("export の印を落とすと `.st` の字面が動く", noMark !== otSt);
-	check("印を落としても `.s` の門は緑", runGates(noMark)[0], "緑");
+	check("印を落とすと自写の `.s` の門が赤になる（印はシンボルに出る）", runGates(noMark)[0], "赤");
 	let again = null;
 	try {
 		const c = compile(raise(noMark, "ot"), { parse, readImport });

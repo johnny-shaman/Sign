@@ -42,8 +42,15 @@ SECTIONS {
 	. = _stack_top;
 	.text  : { *(.text*) }
 	/* ### (Pin) が出す固定配置セクション。本来は option.ms の `base` が住所を決める
-	   （system_architecture.md §2.2）——ここは検証用なので .text の直後に置くだけ。 */
-	.sign.pinned : { *(.sign.pinned*) }
+	   （system_architecture.md §2.2）——ここは検証用なので .text の直後に置くだけ。
+	 *
+	 * **3本を1本へ束ねてはいけない。** `*(.sign.pinned*)` の1行で受けると、出力節の
+	 * 属性は入力の OR になる——実測で `Flags [ (0x7) SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE`。
+	 * アセンブラまでは "ax" / "a" / "aw" に分かれているのに、リンクで消える（W^X も消える）。
+	 * 名前で分けた以上、受ける側も分ける。 */
+	.sign.pinned        : { *(.sign.pinned) }
+	.sign.pinned.rodata : { *(.sign.pinned.rodata) }
+	.sign.pinned.data   : { *(.sign.pinned.data) }
 	.rodata : { *(.rodata*) }
 	.data  : { *(.data*) }
 	.bss   : { *(.bss*) }

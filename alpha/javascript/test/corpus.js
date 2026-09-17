@@ -46,15 +46,15 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  * @property digest 命令列の指紋（`digestOf`）。命令だけでなくディレクティブとラベルも入る
  */
 export const CORPUS = [
-	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "a464b50d6457398f", plain: "e220344a01e84e67" } },
+	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8b241b2ba8d7c528", plain: "445f4fc5eda2844b" } },
 	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 602, plain: 1004 }, digest: { full: "d0f8e35c843caf67", plain: "74d2762677152598" } },
-	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "d27cebf79590ae8d", plain: "3ee677fddd359b5b" } },
+	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "bb306f7f2e7a39e7", plain: "ee3aebd3fabc22b0" } },
 	// 表だけの1枚。命令は `_sign_main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
 	// 「`ret` が1つ」としか言わない——`asmdiff` がディレクティブを残す理由も、命令数だけの
 	// golden では足りない理由も、そのままこの行に立っている。
-	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "67d287f67f8b3139", plain: "67d287f67f8b3139" } },
-	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "fa2dd3698dc3bbc2", plain: "34d2cebcee03e40e" } },
+	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "d994bea4a392346e", plain: "d994bea4a392346e" } },
+	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "0f14246b204098be", plain: "489f1bfe53790b17" } },
 	// 型システムと Pass 4 の継ぎ目。表が8つと、そこから1つの還元、それに字面のプリフィックスを
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
@@ -148,17 +148,17 @@ export const REACHED_MNEMONICS = [
  *                    `CORPUS` の `digest.full` と同じ値になる（同じ事実を2か所に書かない）
  */
 export const ST_BOUNDARY = [
-	{ rel: "alpha/sign/preprocess.sn", st: { sha: "3829bf13d5de4542", bytes: 8071, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{ rel: "alpha/sign/preprocess.sn", st: { sha: "3829bf13d5de4542", bytes: 8071, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
 	{ rel: "alpha/sign/lexer.sn", st: { sha: "044de038718c7429", bytes: 94, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
-	{ rel: "alpha/sign/parser.sn", st: { sha: "4197802f68865fa6", bytes: 8067, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{ rel: "alpha/sign/parser.sn", st: { sha: "4197802f68865fa6", bytes: 8067, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
 	{
 		rel: "alpha/sign/operator_table.sn",
 		st: { sha: "46a3e2b0f23e2540", bytes: 8075, entries: 14, unresolved: 0 },
 		own: ["infix", "prefix", "postfix", "enclosure", "asm_infix_width", "asm_infix_shape", "asm_infix_signed", "asm_prefix_shape", "asm_prefix_place", "asm_prefix_width", "asm_postfix_shape", "asm_enclosure_signed", "asm_enclosure_shape", "strict_infix"],
 		selfCopy: true,
-		raised: "67d287f67f8b3139",
+		raised: "d994bea4a392346e",
 	},
-	{ rel: "alpha/sign/emit.sn", st: { sha: "39118e2fcd2bca11", bytes: 8065, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "67d287f67f8b3139" },
+	{ rel: "alpha/sign/emit.sn", st: { sha: "39118e2fcd2bca11", bytes: 8065, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
 	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
 ];
 
