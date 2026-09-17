@@ -263,10 +263,6 @@ function structTypeText(node, atomType) {
   return atomType;
 }
 
-/**
- * 1つの定義行から SignType の1エントリを組み立てる。
- * @returns {{ name: string, text: string, unresolved: number } | null}
- */
 function isComposeNode(node) {
   return node && node.type === "operation" && node.name === "compose";
 }
@@ -415,6 +411,10 @@ function signatureOfNode(node, defineByName, seen) {
   return null;
 }
 
+/**
+ * 1つの定義行から SignType の1エントリを組み立てる。
+ * @returns {{ name: string, text: string, unresolved: number } | null}
+ */
 function entryFor(defineNode, defineByName) {
   if (!isDefineNode(defineNode) || !isIdentifierNode(defineNode.left)) return null;
   const name = bareName(defineNode.left.value);
