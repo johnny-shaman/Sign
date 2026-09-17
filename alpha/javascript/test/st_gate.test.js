@@ -34,6 +34,8 @@
 import peggy from "peggy";
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
+import { spawnSync } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
@@ -378,6 +380,38 @@ for (const e of ST_BOUNDARY) {
 		again = sha16(generateSignType(c.nodes, c.env, { scope: "st", source: "operator_table.sn" }).text);
 	} catch (x) { again = "断る"; }
 	checkTrue("往復の軸は export の印の脱落を捕まえる", again !== ST_BOUNDARY.find((x) => x.rel === OT).st.sha, String(again));
+}
+
+// ---- 6. 書く側（ドライバ）----
+//
+// **`.st` を置くのはドライバの仕事である**（`build_system.md` §4.2——`compile.js` は fs に
+// 触らない）。だからここだけが `.st` をディスクへ出す場所で、**出た物が門の見ている物と
+// 同じであること**を見ないと、「書く」は検査されていない。
+//
+// `.ist` も書ける（利用者の決定 2026-09-18）。守る線は「書くな」ではなく**「配るな」**で、
+// 理由は隣に `.sn` が在ること——内部識別子名も欄もソースにそのまま書いてあるので、
+// 普通の配置では `.ist` は新しく漏らすものを持たない。
+{
+	const out = path.join(os.tmpdir(), "sign_st_gate");
+	fs.rmSync(out, { recursive: true, force: true });
+	fs.mkdirSync(out, { recursive: true });
+	const src = path.join(out, "operator_table.sn");
+	fs.writeFileSync(src, srcOf(OT));
+	const drv = path.join(__dirname, "..", "emit_st.mjs");
+	const run = (extra) => spawnSync(process.execPath, [drv, src, ...extra], { encoding: "utf8" });
+	run(["--write"]);
+	const wrote = path.join(out, "operator_table.st");
+	const onDisk = fs.existsSync(wrote) ? fs.readFileSync(wrote, "utf8") : "（書かれていない）";
+	check("ドライバが書いた `.st` は、門が見ている物と同じ", sha16(onDisk), ST_BOUNDARY.find((x) => x.rel === OT).st.sha);
+	check("大きさも同じ", Buffer.byteLength(onDisk), ST_BOUNDARY.find((x) => x.rel === OT).st.bytes);
+	// 書いた `.st` は、そのまま起こして同じ `.s` になること（ディスクを経由しても変わらない）。
+	let dig = null;
+	try { dig = digOf(raise(onDisk, "operator_table.sn"), readImport); } catch (x) { dig = "断る: " + String(x.message).split(String.fromCharCode(10))[0]; }
+	check("ディスクの `.st` から起こしても同じ `.s`", dig, byRel(OT).digest.full);
+	// `.ist` も書ける。**配る物に入れない**という線は、書けることと両立する。
+	run(["ist", "--write"]);
+	checkTrue("`.ist` も書ける（中間物）", fs.existsSync(path.join(out, "operator_table.ist")));
+	fs.rmSync(out, { recursive: true, force: true });
 }
 
 console.log(`\n${passed}/${total} passed`);
