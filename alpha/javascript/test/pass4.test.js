@@ -408,10 +408,10 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 	check("公理の検査は n の分だけ", ls.filter((l) => /^b\.eq \.Lunit/.test(l)).length, 1);
 	// **省略された引数には呼ぶ側が `__` を置く。** AAPCS64 は使わないレジスタを初期化
 	// しないので、伝えないと前の呼び出しの残骸をデフォルトの判定に使うことになる。
-	const main = body(src, "_sign_main");
+	const main = body(src, "_.main");
 	checkTrue("呼ぶ側が __ を置く", main.some((l) => l === "movz x1, #0x8000, lsl #48"), main.join(" / "));
 	// 全部渡せば埋めない。
-	checkTrue("全部渡せば埋めない", !body("f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3 5", "_sign_main").some((l) => /^movz x1,/.test(l)));
+	checkTrue("全部渡せば埋めない", !body("f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3 5", "_.main").some((l) => /^movz x1,/.test(l)));
 }
 // デフォルト式は前の仮引数を読める（`let*`）。
 {
@@ -564,7 +564,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 	checkTrue("中身は .rodata へ置く", r.text.includes(".section .rodata"), r.text);
 	checkTrue("1 byte 幅なら .ascii で書ける", r.text.includes('.ascii "hello"'), r.text);
 	// アドレスは `adrp` + `:lo12:` で作る。PC 相対なので位置独立のまま。
-	const main = body(src, "_sign_main");
+	const main = body(src, "_.main");
 	checkTrue("adrp でラベルの頁を取る", main.some((l) => l === "adrp x9, .Lstr0"), main.join(" / "));
 	checkTrue(":lo12: で下位12ビットを足す", main.some((l) => l === "add x9, x9, :lo12:.Lstr0"));
 	// **`len` は文字数であってバイト数ではない。** `String ≅ List(Char)` の要素数なので、
@@ -776,12 +776,12 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 
 // ---- 全体の形 ----
 //
-// トップレベルの式は `_sign_main` に入る（entry_point.md の生成スタブが `bl _sign_main`
+// トップレベルの式は `_.main` に入る（entry_point.md の生成スタブが `bl _.main`
 // で呼ぶ）。
 {
 	const r = asm("sq : x ? x * x\nsq 7");
-	checkTrue("_sign_main が出る", r.text.includes("_sign_main:"));
-	checkTrue("トップレベルの式は _sign_main の中", r.text.split("_sign_main:")[1].includes("bl sq"));
+	checkTrue("_.main が出る", r.text.includes("_.main:"));
+	checkTrue("トップレベルの式は _.main の中", r.text.split("_.main:")[1].includes("bl sq"));
 }
 
 // **名前が外から見えるかどうかは `#` の段数が決める**（system_architecture.md §2.1 の
@@ -843,7 +843,7 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	checkTrue("layer 0: 合成も呼び出しである", callGated("f : n ? n + 1\ng : n ? n * 2\n(f g) 5"));
 	// **判定は形ではなく要求で行う。** 止めるのは「`?` を書いたこと」ではなく「フレームが
 	// 要ったこと」である。`f : n ? n + 1` の `f` 自身は覗き穴と割り付けの後にフレームが
-	// 消えるので、名指しされるのは呼ぶ側（`_sign_main`）だけになる。
+	// 消えるので、名指しされるのは呼ぶ側（`_.main`）だけになる。
 	checkTrue(
 		"layer 0: フレームの要らない `?` は名指ししない",
 		at("f : n ? n + 1\nf 41", 0).every((m) => !/では f がフレームを/.test(m))
@@ -921,7 +921,7 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	}
 	// 切り出しは layer 0 でも通る。**名指しされるのは呼ぶ側だけ**である——`f` 自身は
 	// フレームを取らない（`s ' 1~` は同じ領域を指し直すだけ）ので、layer 0 で出るのは
-	// `_sign_main` の呼び出しに対する診断1件だけになる（`layer_relations.md` §4.1）。
+	// `_.main` の呼び出しに対する診断1件だけになる（`layer_relations.md` §4.1）。
 	check("切り出し自体は確保を要求しない", at("f : s ?\n\ts ' 1~\nf `abc`", 0).filter((m) => /では f が/.test(m)).length, 0);
 	// layer を渡さなければ検査しない（他の門番と同じ方針）。
 	checkTrue("layer 未指定なら layer の話をしない", !at(build, undefined).some((m) => /layer: /.test(m)), JSON.stringify(at(build, undefined)));
@@ -1256,7 +1256,7 @@ f 1`, "f") || [];
 	checkTrue("Address / 非負のリテラル は udiv 1命令", divPk.includes("udiv x9, x9, x10") && !divPk.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPk.join(" / "));
 
 	// 2^64 を超える番地の字面は存在しない番地なので、niche を置く（下の 64 ビットを置かない）
-	const bigLit = body("0x10000000000000010", "_sign_main") || [];
+	const bigLit = body("0x10000000000000010", "_.main") || [];
 	checkTrue("2^64 を超える番地の字面は niche を置く", bigLit.includes("movz x9, #0x8000, lsl #48") && !bigLit.some((l) => /#0x10\b|#16\b/.test(l)), bigLit.join(" / "));
 
 	// 番地の規則の n 番目は番地の算術：`madd` 1命令ではなく、128 ビットの積の上の語を見る

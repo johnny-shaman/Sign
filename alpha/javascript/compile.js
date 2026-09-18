@@ -266,7 +266,7 @@ function resolveImports(lines, options, parseFn, base, state) {
     }
     const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state);
     // **撒くのは束縛だけである。** モジュールの末尾にある実行例まで持ってくると、
-    // 最後の式が入れ替わる——`_sign_main` が返すのはそれなので、黙って別の値になる。
+    // 最後の式が入れ替わる——`_.main` が返すのはそれなので、黙って別の値になる。
     //
     // **公開の印は、定義した枚のものである。** 撒かれてきた行の `#`/`##`/`###` は落とす。
     // 落とさないと、展開がソースのままである以上、**引く側も同じ定義を公開する**——実測で
@@ -1223,7 +1223,7 @@ function compile(source, options = {}) {
     if (folds.length > 0) {
       // **前に置く。** ストリームの糖衣は元の名前を上書きするので後ろだったが、畳み込みは
       // 新しい名前を足すだけなので、使う場所より先に定義が要る。元の最後の式が最後のまま
-      // 残る、という点でも前置きが正しい——`_sign_main` はそれを返す。
+      // 残る、という点でも前置きが正しい——`_.main` はそれを返す。
       return compile([...folds, source].join("\n"), { ...options, __pfFolded: true });
     }
   } else {

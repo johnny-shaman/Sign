@@ -32,7 +32,7 @@ _start:
 1:	str x1, [x0], #8
 	subs x2, x2, #1
 	b.ne 1b
-	bl _sign_main
+	bl _.main
 	mov x20, x0
 	mov x21, x1
 	mov x22, x2

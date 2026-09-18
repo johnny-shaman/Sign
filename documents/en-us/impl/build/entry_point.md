@@ -53,7 +53,7 @@ _start:
     mov ss, ax
     mov sp, 0x7BFF
     sti
-    jmp _sign_main
+    jmp _.main
 ```
 
 ### 3.2 `x86_firmware` Stub: Transition from Reset Vector to Long Mode

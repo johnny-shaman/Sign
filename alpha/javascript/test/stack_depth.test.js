@@ -58,7 +58,7 @@ function check(note, ok, detail) {
 	}
 }
 
-// 機械側の答え。`_sign_main` の x0 を符号付き64ビットで読む。踏み抜きは `runAsm` が
+// 機械側の答え。`_.main` の x0 を符号付き64ビットで読む。踏み抜きは `runAsm` が
 // 例外にして投げてくる（start.s の合図を読む）ので、ここでは素通しする。
 function machine(source, opts = {}) {
 	const { nodes, env } = compile(source, { readImport });

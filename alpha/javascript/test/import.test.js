@@ -51,7 +51,7 @@ const names = (src, self) =>
 	compile(src, opts(self)).nodes.map((n) => (n && n.name === "define" && n.left ? String(n.left.value) : "(式)"));
 
 // **撒かれるのは束縛である。** モジュールの末尾にある実行例まで持ってくると、最後の式が
-// 入れ替わる——`_sign_main` が返すのはそれなので、**黙って別の値になる**。
+// 入れ替わる——`_.main` が返すのはそれなので、**黙って別の値になる**。
 check("束縛が撒かれる", names("`lib.sn`@~\ninc (double 20)\n", "m/main.sn"), ["<double>", "<inc>", "(式)"]);
 
 // **同じファイルは一度だけ撒く。** 定義が2つになると後の定義が勝つので、黙って別物になる。

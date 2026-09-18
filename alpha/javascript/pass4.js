@@ -28,7 +28,7 @@
  *   - 整数リテラル（16ビットまでの即値）
  *   - `+` `-` `*` `/`（GPR 幅の整数）
  *   - 裸の仮引数を持つ関数定義と、その飽和した呼び出し
- *   - トップレベルの式（`_sign_main` へ入る）
+ *   - トップレベルの式（`_.main` へ入る）
  *   - 2文字以上の文字列（`.rodata` へ置いて `{ptr, len}` を積む）
  *
  * 集約値・浮動小数・分岐・再帰はまだ出さない。出せないものは黙って落とさず診断として
@@ -4601,8 +4601,8 @@ function dataSymbolDirectives(x) {
  * **後段が自分で出す綴りは公開できない。**
  *
  * 無印なら名前は `.Lbind_…` か local なので当たらなかった——`#` を書いた瞬間に裸の識別子
- * になり、後段の出す綴りと同じ棚へ載る。実測で `##_sign_main : 7` の `.s` は
- * `error: symbol '_sign_main' is already defined` でアセンブラが止まる。
+ * になり、後段の出す綴りと同じ棚へ載る。実測で `##_.main : 7` の `.s` は
+ * `error: symbol '_.main' is already defined` でアセンブラが止まる。
  *
  * 載せるのは**この後段と、その入口が自分で出す綴りだけ**である。リンカスクリプトの記号
  * （`_stack_top` など）は的ごとに違うので、ここではなく配置を決める側が持つ。
@@ -4610,7 +4610,7 @@ function dataSymbolDirectives(x) {
 /**
  * **公開できない綴り。** 後段と、後段の外側（起動コードとリンカスクリプト）が自分で出す名前である。
  *
- * 後段の綴りとぶつかると**アセンブラが止める**（`symbol '_sign_main' is already defined`）が、
+ * 後段の綴りとぶつかると**アセンブラが止める**（`symbol '_.main' is already defined`）が、
  * **リンカスクリプトの綴りとぶつかっても誰も止めない**——スクリプトの代入が勝ち、診断ゼロ・
  * `ld` の終了コード 0 のまま、プログラム自身の参照が別の場所へ行く。実測（2026-09-18）:
  *
@@ -4622,8 +4622,9 @@ function dataSymbolDirectives(x) {
  * 綴りが出たら赤くなる。片方を増やしたらもう片方が落ちる、という形にしてある。
  */
 const RESERVED_SYMBOLS = new Set([
-	// 後段が自分で出す
-	"_sign_main",
+	// **入口の綴りはここに要らない。** `_.main` は `.` を含むので、Sign の識別子の字集合
+	// （`[a-zA-Z][a-zA-Z0-9_]*` か `_[a-zA-Z0-9_]+`）では**書けない**——構文が先に落とす。
+	// 予約するのは「利用者が書けてしまう綴り」だけでよい（下の2つは書ける）。
 	// qemu/start.s
 	"_start", "put_hex", "vectors",
 	// qemu/link.ld（代入。ぶつかっても誰も言わない側）
@@ -4673,12 +4674,11 @@ function exportLevelOf(name, env) {
  * 予約された綴りの**出どころ**。断るときの言い分に入れる。
  *
  * 出どころで壊れ方が違う——後段と起動コードの綴りは**アセンブラが止める**
- * （`symbol '_sign_main' is already defined`）が、**リンカスクリプトの綴りは誰も止めない**
+ * （`symbol '_.main' is already defined`）が、**リンカスクリプトの綴りは誰も止めない**
  * ——代入が勝って、診断ゼロ・`ld` の終了コード 0 のまま別の場所を指す。
  * **止まらない方こそ言い分が要る。**
  */
 const RESERVED_ORIGIN = {
-	_sign_main: "後段が自分で出す",
 	_start: "起動コード（qemu/start.s）が出す",
 	put_hex: "起動コード（qemu/start.s）が出す",
 	vectors: "起動コード（qemu/start.s）が出す",
@@ -4702,10 +4702,19 @@ function checkExportedNames(nodes, env, em) {
 		const name = bareName(l.value);
 		if (!RESERVED_SYMBOLS.has(name)) continue;
 		const b = envLookup(env, l.value) || envLookup(env, `<${name}>`);
-		if (!b || !b.exported) continue;
+		if (!b) continue;
+		// **関数は印に関わらず裸のラベルを出す。** だから予約された綴りを関数の名前にすると、
+		// 後段や起動コードが出す同じ綴りと**二重定義**になる（実測: `put_hex : n ? n + 1` で
+		// `put_hex:` が2つ）。アセンブラは止めるが、言い分は綴りの話しかしない——ここで名指しする。
+		// データは `.Lbind_…` のローカルラベルなのでぶつからない（実測）。だから関数だけを見る。
+		if (!b.exported && b.category !== "Lambda") continue;
 		em.diagnostics.push({
 			severity: "error",
-			message: `\`${name}\` は${RESERVED_ORIGIN[name] || "後段が自分で出す"}綴りなので公開できません（\`${b.exported}\` を外すか、名前を変えてください）`,
+			message: b.exported
+				? `\`${name}\` は${RESERVED_ORIGIN[name] || "後段が自分で出す"}綴りなので公開できません` +
+					`（\`${b.exported}\` を外すか、名前を変えてください）`
+				: `\`${name}\` は${RESERVED_ORIGIN[name] || "後段が自分で出す"}綴りなので、関数の名前には使えません` +
+					`（後段が出す同じ綴りと二重定義になります。名前を変えてください）`,
 			node,
 		});
 	}
@@ -5019,7 +5028,7 @@ function genLoadBinding(node, b, env, em) {
  * デフォルト引数（`f : / p / s : @p / ? …`）は最初から1回で、そちらは正しい
  * ——**同じ「束縛」という事実が、置かれた場所で2通りに決まっていた**。
  *
- * 定義の行は `_sign_main` で既に値を出している（`isDefineNode(node) ? node.right : node`）
+ * 定義の行は `_.main` で既に値を出している（`isDefineNode(node) ? node.right : node`）
  * ので、**捨てずに場所へ書けば済む**。使う側はその場所を読む（`genLoadBinding`）。
  *
  * **走査が先に要る理由は順序である。** 関数定義のほうが先に出るので、本体の中の `a` は
@@ -7437,8 +7446,8 @@ function markEscapes(nodes, returnedParams) {
 		if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
 		visit(rhs.right, true); // 本体そのものが返値である
 	}
-	// **トップレベルは返さない。** ここに置いた器は `_sign_main` のフレームに在り、
-	// 呼び出し元はエントリのスタブだけである——`bl _sign_main` の次は `wfe` で、返値を
+	// **トップレベルは返さない。** ここに置いた器は `_.main` のフレームに在り、
+	// 呼び出し元はエントリのスタブだけである——`bl _.main` の次は `wfe` で、返値を
 	// 辿らない（entry_point.md）。フレームより長生きする先が無いので `sub sp` で置ける。
 	//
 	// ここを訪れていなかったため `escapesFrame` が `undefined` のまま残り、`!== false`
@@ -10367,7 +10376,7 @@ function genFunction(name, lambdaNode, env, em, mono) {
 		}
 		// **出したときの本数を表へ書き戻す。** 静的な見積もり（型）が答えられない形——
 		// 具体化した `@p` を末尾で飛ぶ関数——でも、出し終えれば本数は決まっている。呼ぶ側
-		// （`_sign_main` は最後に出る）はここを読む。**書く側と読む側が同じ表を引く**のが
+		// （`_.main` は最後に出る）はここを読む。**書く側と読む側が同じ表を引く**のが
 		// 要点で、片方だけが既定の1本に落ちると `{ptr, len}` の len が黙って落ちる。
 		if (em.returnWidths) em.returnWidths.set(name, width);
 		if (ok !== TAIL) {
@@ -10558,8 +10567,8 @@ function generateAsm(nodes, env, options = {}) {
 	em.lines.push("\t.text");
 	em.blank();
 
-	// 関数定義を先に出す。トップレベルの式は `_sign_main` に入る
-	// （entry_point.md の生成スタブが `bl _sign_main` で呼ぶ）。
+	// 関数定義を先に出す。トップレベルの式は `_.main` に入る
+	// （entry_point.md の生成スタブが `bl _.main` で呼ぶ）。
 	const exprs = [];
 	for (const node of nodes) {
 		// 糖衣が置き換えた元の定義は出さない。同じ列を2通りに出すだけである
@@ -10662,7 +10671,7 @@ function generateAsm(nodes, env, options = {}) {
 	em.slot = 0;
 	em.maxSlot = 0;
 	em.movedSp = false; // 本体が `sp` を動かしたか（エピローグの戻し方が変わる）
-	// **`_sign_main` は sret の受け手ではない。** 直前に出した関数が残した印を
+	// **`_.main` は sret の受け手ではない。** 直前に出した関数が残した印を
 	// そのまま持ち込むと、トップレベルで作った器が**死んだ他人のスロット**へ書かれる
 	// ——トップレベルは返さないので `escapesFrame` が付いておらず、素通りしてしまう。
 	// **印は一式で捨てる。** 底・合計・上限はスロットの番号であって、他人のフレームの
@@ -10671,7 +10680,7 @@ function generateAsm(nodes, env, options = {}) {
 	em.sretTotal = null;
 	em.sretLimit = null;
 	em.sretLooped = false;
-	let last = null; // 最後に値を出した式の置き場所（`_sign_main` の返値になる）
+	let last = null; // 最後に値を出した式の置き場所（`_.main` の返値になる）
 	for (const node of exprs) {
 		// **裸の文字列リテラルはコメントである**（string_and_comment.md）。Sign の
 		// コメントはバッククォート文字列そのものなので AST に残るが、値として使われて
@@ -10698,7 +10707,7 @@ function generateAsm(nodes, env, options = {}) {
 				em.emit(`str ${SCRATCH[0]}, [${SCRATCH[1]}]`, "置く。以降の読みはここを辿る");
 			}
 		}
-		// **最後の式の値が `_sign_main` の返値である。** ここまでは値をスロットへ置いた
+		// **最後の式の値が `_.main` の返値である。** ここまでは値をスロットへ置いた
 		// まま `ret` していた——x0 に残っていたのは直前の `bl` の戻り値であって、式の値
 		// ではない。`f 1 2` の形で終わるプログラムだけが偶然正しく、`1 + 2` や `42` は
 		// 番地を返していた。qemu のテストが全て呼び出しで終わる書き方だったため、
@@ -10713,9 +10722,9 @@ function generateAsm(nodes, env, options = {}) {
 	}
 	const body = em.lines;
 	em.lines = outer;
-	em.lines.push("\t.global _sign_main");
-	const wrappedMain = wrapFrame(body, em.maxSlot, "_sign_main", em.movedSp, em.conf.regAlloc !== false, em.conf.peepholes !== false);
-	checkStackFree(em, wrappedMain, "_sign_main", null);
+	em.lines.push("\t.global _.main");
+	const wrappedMain = wrapFrame(body, em.maxSlot, "_.main", em.movedSp, em.conf.regAlloc !== false, em.conf.peepholes !== false);
+	checkStackFree(em, wrappedMain, "_.main", null);
 	em.lines.push(...wrappedMain);
 	// 文字列の中身は最後に置く。`.text` と混ぜないのは、書き換えない領域だからである。
 	em.lines.push(...em.rodataLines());

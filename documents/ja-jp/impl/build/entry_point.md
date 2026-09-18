@@ -86,9 +86,9 @@ _start:
     mov ss, ax
     mov sp, 0x7BFF          ; スタックポインタ設定（option.ms の stack 値）
     sti                     ; 割り込み許可
-    jmp _sign_main          ; Sign の main.sn へ
+    jmp _.main          ; Sign の main.sn へ
 
-_sign_main:
+_.main:
     ; main.sn のコードがここに展開される
     ...
     hlt                     ; main 終了後はハルト
@@ -101,9 +101,9 @@ _sign_main:
 _start:
     ldr x30, =0x80000       // スタックポインタ設定
     mov sp, x30
-    bl _sign_main           // Sign の main.sn へ
+    bl _.main           // Sign の main.sn へ
 
-_sign_main:
+_.main:
     // main.sn のコードがここに展開される
     ...
     wfe                     // main 終了後は省電力待機

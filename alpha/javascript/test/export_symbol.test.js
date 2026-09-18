@@ -17,7 +17,7 @@
  *   3. `.L` で始まるラベルは公開できないこと（実測: `error: non-local symbol required`）
  *   4. `###` のデータは関数の `.sign.pinned,"ax"` へは行けないこと
  *      （実測: `error: changed section flags for .sign.pinned, expected: 0x6`）
- *   5. 後段が自分で出す綴り（`_sign_main` / `_start`）は公開を断ること
+ *   5. 後段が自分で出す綴り（`_.main` / `_start`）は公開を断ること
  *
  * 実行: node test/export_symbol.test.js
  */
@@ -199,27 +199,31 @@ for (const [form, mk] of Object.entries(FORMS)) {
 	check("書かれる `###` は `.sign.pinned.data`", symbolOf(text, "rw"), '.sign.pinned.data,"aw",%progbits | .global rw | rw');
 }
 
-// --- 5. 後段が自分で出す綴りは公開できない ---------------------------------
+// --- 5. 入口の綴りはぶつからない（書けないから）-----------------------------
 //
-// 無印なら `.Lbind__sign_main` なので当たらなかった。公開が**広げる**穴で、実測の
-// `.s` は `error: symbol '_sign_main' is already defined` でアセンブラが止まる。
+// 入口は `_.main` である。`.` は Sign の識別子の字集合
+// （`[a-zA-Z][a-zA-Z0-9_]*` か `_[a-zA-Z0-9_]+`）に無いので、**利用者は同じ綴りを書けない**
+// ——構文が先に落とす。だから予約語が要らない。**門で見張る代わりに、書けなくする。**
+//
+// 以前は `_sign_main` で、これは正当な識別子だった（`_` 始まり）。つまり**見栄えで
+// 守っていただけ**で、`_sign_main : x ? x + 1` と書けば前から二重定義だった。
+// `main` にする案も測ったが、`emit.sn` に既に `main : x ?` が居て実際にぶつかった。
 {
-	const src = "##_sign_main : 7\n$_sign_main\n_sign_main + 1\n";
-	const r = asmOf(src);
-	check(
-		"`_sign_main` の公開を断る",
-		r.diagnostics.map((d) => `${d.severity}: ${d.message}`),
-		["error: `_sign_main` は後段が自分で出す綴りなので公開できません（`##` を外すか、名前を変えてください）"],
-	);
-	// `_sign_main` はもともと後段が出すラベルなので `symbolOf` では区別が付かない。
-	// 見るのは**定義行が何本あるか**で、公開していれば2本（`_sign_main:` が2回）になる。
-	const defs = r.text.split("\n").map((l) => l.trim()).filter((l) => /^[.\w$]+:$/.test(l));
-	check("断ったので二重定義にならない", defs.filter((l) => l === "_sign_main:").length, 1);
-	check("像はローカルラベルのまま", defs.includes(".Lbind__sign_main:"), true);
+	let threw = null;
+	try { asmOf("_.main : 7\n"); } catch (e) { threw = String(e.message).split(String.fromCharCode(10))[0]; }
+	check("入口の綴りは書けない（構文で落ちる）", threw !== null, true);
+	// `main` はもう普通の名前である。関数でも公開でも通り、入口とぶつからない。
+	const m = asmOf("main : n ? n + 1\nmain 1\n");
+	check("`main` は普通の名前として通る", m.diagnostics, []);
+	const defs = (t) => t.split(String.fromCharCode(10)).map((l) => l.trim()).filter((l) => /^[.\w$]+:$/.test(l));
+	check("`main` と入口が別々のラベルになる", defs(m.text).filter((l) => l === "main:" || l === "_.main:").sort(), ["_.main:", "main:"]);
+	const me = asmOf("#main : n ? n + 1\nmain 1\n");
+	check("`main` は公開もできる", me.diagnostics, []);
+	// 一方、**利用者が書ける**予約名は今までどおり断る（`_start` は `_` 始まりで正当な識別子）。
 	const s2 = asmOf("##_start : 7\n$_start\n_start + 1\n");
-	check("`_start` も同じ", s2.diagnostics.map((d) => d.severity), ["error"]);
-	// 印が無ければ何も言わない（名前そのものを禁じてはいない）。
-	check("無印の `_sign_main` には何も言わない", asmOf("_sign_main : 7\n$_sign_main\n_sign_main + 1\n").diagnostics, []);
+	check("`_start` の公開は断る", s2.diagnostics.map((d) => d.severity), ["error"]);
+	const s3 = asmOf("put_hex : n ? n + 1\nput_hex 1\n");
+	check("起動コードの綴りは関数の名前にもできない", s3.diagnostics.map((d) => d.severity), ["error"]);
 }
 
 // ---- 予約された綴りは、配置側を読んで覆えているか ----
@@ -276,8 +280,8 @@ for (const [form, mk] of Object.entries(FORMS)) {
  */
 const ownExportsOf = (src) => parse(preprocess(src)).map(definedNameOf).filter((d) => d && d.exported).map((d) => d.name.slice(1, -1));
 
-/** `.s` に出た `.global` の綴り。`_sign_main` は後段が自分で出すので別に数える。 */
-const globalsOf = (text) => [...text.matchAll(/^[\t ]*\.global[\t ]+(\S+)$/gm)].map((m) => m[1]).filter((n) => n !== "_sign_main").sort();
+/** `.s` に出た `.global` の綴り。`_.main` は後段が自分で出すので別に数える。 */
+const globalsOf = (text) => [...text.matchAll(/^[\t ]*\.global[\t ]+(\S+)$/gm)].map((m) => m[1]).filter((n) => n !== "_.main").sort();
 
 const asmOfFile = (name) => {
 	const c = compile(readImport(name), { readImport });
@@ -454,10 +458,10 @@ const asmOfFile = (name) => {
 //
 // §6 は「`.s` に `.global` が出ない」しか言わない。**繋いで重複しない**のは別の主張で、
 // 節・可視性・`.o` の中の綴りまで通した後でしか確かめられない。直す前の実測は
-// **重複 14 件**（13 個の表＋`_sign_main`）で、5対とも同じだった。
+// **重複 14 件**（13 個の表＋`_.main`）で、5対とも同じだった。
 //
-// `_sign_main` は**別問題**として数える——2枚とも入口を定義する、という話であり、
-// 印とは関わらない（無印でも `_sign_main` は出る）。
+// `_.main` は**別問題**として数える——2枚とも入口を定義する、という話であり、
+// 印とは関わらない（無印でも `_.main` は出る）。
 {
 	const clang = toolPath("clang");
 	const lld = toolPath("lld");
@@ -487,7 +491,7 @@ const asmOfFile = (name) => {
 			try { execFileSync(lld, ["-o", path.join(dir, "out.elf"), objs[a], objs[b]], { stdio: "pipe" }); }
 			catch (e) { err = String(e.stderr || "") + String(e.stdout || ""); }
 			const dup = [...err.matchAll(/duplicate symbol: (\S+)/g)].map((m) => m[1]);
-			check(`${a} + ${b}: 重複は \`_sign_main\` だけ`, dup, ["_sign_main"]);
+			check(`${a} + ${b}: 重複は \`_.main\` だけ`, dup, ["_.main"]);
 		}
 		// 同名の衝突は**印では直らない**（§7）。アセンブラの断りを原文のまま見る。
 		const dupSrc = compile("`m.sn`@~\n#foo : x ? x + 2\nfoo 1\n", {

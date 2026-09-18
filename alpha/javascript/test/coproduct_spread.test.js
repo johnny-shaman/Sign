@@ -69,7 +69,7 @@ function interp(source) {
 	return String(o);
 }
 
-// 機械の答え。`_sign_main` の x0 を符号付き64ビットで読む。
+// 機械の答え。`_.main` の x0 を符号付き64ビットで読む。
 function machine(source) {
 	const { nodes, env } = compile(source, { charset: "ascii" });
 	const r = generateAsm(nodes, env, ASM);

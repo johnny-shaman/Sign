@@ -23,12 +23,12 @@ Sign の後段を Sign で書くための土台である。
 | 移植の門 | 同じ入力を `{regAlloc:false, peepholes:false}` でも出す。**別形** と呼ぶ（本書の「別形」の数は `{regAlloc:false}` だけで測ったもので、両方切った数は `alpha/javascript/test/corpus.js` に記録がある） |
 | 門を走らせる | `node alpha/javascript/test/asm_gate.test.js`。比べる道具は `alpha/javascript/asmdiff.mjs`（`node asmdiff.mjs a.s b.s` でも使える） |
 | 静的な命令数 | 1行から `//` 以降を落として両端を削る。空行・`.` で始まる行（ディレクティブ、`.L…:` を含む）・`名前:` だけの行を捨て、残りを1命令と数える |
-| 実行した命令数 | `qemu-system-aarch64 -M virt -cpu cortex-a57 -accel tcg,one-insn-per-tb=on -d exec,nochain` のトレースを読み、pc が `_sign_main` 以上の行だけ数える（`start.s` はそこまで）。既定のスタック（16MiB）なら `0x41000bb8`——**image の住所はスタックの大きさで動く**ので、`llvm-nm -n` で引くこと（§2.3）。`0` という原文が静的3・実行3で一致することで較正した |
+| 実行した命令数 | `qemu-system-aarch64 -M virt -cpu cortex-a57 -accel tcg,one-insn-per-tb=on -d exec,nochain` のトレースを読み、pc が `_.main` 以上の行だけ数える（`start.s` はそこまで）。既定のスタック（16MiB）なら `0x41000bb8`——**image の住所はスタックの大きさで動く**ので、`llvm-nm -n` で引くこと（§2.3）。`0` という原文が静的3・実行3で一致することで較正した |
 | 値 | 実機（qemu）とインタプリタの両方へ通し、観測境界（`Char` は符号位置、`!__` は 0）を揃えて突き合わせる |
 | 手書きとの比較 | 手書きの AArch64 も同じ clang・同じ `link.ld`・同じ qemu に通し、**同じ値が出ることを確かめてから** 命令数を比べる |
 
 **別形（`regAlloc:false`）は中立な観測ではない。** 中間値がスロットになり、スロットはフレームを要求するので、
-layer 0 のコードは別形では出せなくなる（`layer: 0 では _sign_main がフレームを要求します`）。
+layer 0 のコードは別形では出せなくなる（`layer: 0 では _.main がフレームを要求します`）。
 移植の門は layer 1 以上のコードにしか当てられない。
 
 ### アンカー（毎回ここから始める）
@@ -199,7 +199,7 @@ seq2: 仮引数 b の渡し方が決まりません（直和か族）
 ## 2. 字面 → 機械 → 代金
 
 「命令」はプログラム全体の既定の出力、「別形」は `regAlloc:false`。
-**フレームは測っている関数自身の `stp x29, x30` の有無**である（`_sign_main` は呼び出しがあれば必ず取るので、
+**フレームは測っている関数自身の `stp x29, x30` の有無**である（`_.main` は呼び出しがあれば必ず取るので、
 そちらは数えない）。実行/回 は qemu のトレースから。すべて実測。
 
 ### 2.1 束縛と呼び出し

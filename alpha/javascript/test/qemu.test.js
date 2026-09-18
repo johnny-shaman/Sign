@@ -58,7 +58,7 @@ function interp(source, charset = "ascii") {
 	return String(o);
 }
 
-// 機械側の答え。`_sign_main` の x0 を符号付き64ビットで読む。
+// 機械側の答え。`_.main` の x0 を符号付き64ビットで読む。
 // **層は指定できる。** 既定は 1（RAM が開通した層）だが、MMIO の番地を算術する形は
 // layer 0 の特権なので、そこだけ 0 で回す（上の層では番地の捏造になるため門番が止める）。
 function machine(source, charset = "ascii", layer = 1) {
@@ -1065,8 +1065,8 @@ agree("入れ子の枝（内側が尽きる）", "f : x y ?\n\tx < 0 :\n\t\ty > 
 	agree("番地の束縛を読む", "y : 0x1234\nf : p ? @p\nf $y");
 	agree("$x を渡して読む", "x : 7\nf : p ? @p\nf $x");
 
-	// **トップレベルは返さない。** ここに置いた器は `_sign_main` のフレームに在り、
-	// 呼び出し元はエントリのスタブだけである——`bl _sign_main` の次は `wfe` で返値を
+	// **トップレベルは返さない。** ここに置いた器は `_.main` のフレームに在り、
+	// 呼び出し元はエントリのスタブだけである——`bl _.main` の次は `wfe` で返値を
 	// 辿らない（entry_point.md）。フレームより長生きする先が無いので `sub sp` で置ける。
 	//
 	// 脱出解析はラムダの本体しか歩いていなかったので、ここの `escapesFrame` は

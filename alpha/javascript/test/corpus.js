@@ -64,26 +64,26 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  * **数が動かないまま指紋だけが動いた実例**がこの3枚である。
  */
 export const CORPUS = [
-	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "a464b50d6457398f", plain: "e220344a01e84e67" } },
-	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 602, plain: 1004 }, digest: { full: "d0f8e35c843caf67", plain: "74d2762677152598" } },
-	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "d27cebf79590ae8d", plain: "3ee677fddd359b5b" } },
-	// 表だけの1枚。命令は `_sign_main` の `ret` 1つきりで、正規化後 824 行のうち
+	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8e35f8d0a07dc74a", plain: "2494ff932efb4e17" } },
+	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 602, plain: 1004 }, digest: { full: "85319fb8742fb2ad", plain: "66f750abde5d0a1a" } },
+	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "7616b47db9dce7c1", plain: "04f2d2defe573048" } },
+	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
 	// 「`ret` が1つ」としか言わない——`asmdiff` がディレクティブを残す理由も、命令数だけの
 	// golden では足りない理由も、そのままこの行に立っている。
-	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "d994bea4a392346e", plain: "d994bea4a392346e" } },
-	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "fa2dd3698dc3bbc2", plain: "34d2cebcee03e40e" } },
+	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "0a54415ea5f080d3", plain: "0a54415ea5f080d3" } },
+	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "f4688041c2f40252", plain: "458fded99a28e667" } },
 	// 型システムと Pass 4 の継ぎ目。表が8つと、そこから1つの還元、それに字面のプリフィックスを
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
 	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
-	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1293, plain: 2053 }, digest: { full: "db010fbe9c735c49", plain: "cc5d8a20de8e5ca5" } },
+	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1293, plain: 2053 }, digest: { full: "3a65da735ee395b6", plain: "c89a5656d8ec5a3f" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,
 		asm: [{ severity: "error", includes: "器の構築はまだ出せません" }],
 		insn: { full: 226, plain: 391 },
-		digest: { full: "e88b013f73de12f5", plain: "f51bbfd101245e54" },
+		digest: { full: "f40e1e70a03df736", plain: "6841c046561dfe3e" },
 	},
 	// 注釈を落とした版。**同じ命令列が出るはず**で、比べる側（`asmdiff`）が注釈を落とす
 	// 根拠そのものである（注釈は命令を出さない）。指紋も同じ値になる。
@@ -92,7 +92,7 @@ export const CORPUS = [
 		front: 0,
 		asm: [{ severity: "error", includes: "器の構築はまだ出せません" }],
 		insn: { full: 226, plain: 391 },
-		digest: { full: "e88b013f73de12f5", plain: "f51bbfd101245e54" },
+		digest: { full: "f40e1e70a03df736", plain: "6841c046561dfe3e" },
 	},
 ];
 
@@ -148,7 +148,7 @@ export const REACHED_MNEMONICS = [
  * `X.sn` → `.st` → 起こした `.sn` → `.s` が元と同じ指紋になるのは、**その枚が丸ごとデータ
  * のとき**に限る。`.st` は関数の本体を持たないからで、6枚のうち `operator_table.sn` だけが
  * これに当たる。残り5枚は自分の `#` を1つも持たない（`own` が空）ので `.st` は見出しだけ
- * になり、起こすと**空のプログラム**になる（`raised` がその指紋＝`b3c778608d2fc782`）。
+ * になり、起こすと**空のプログラム**になる（`raised` がその指紋＝`7be35452c61194ea`）。
  * `own` を golden に置くのは、**どれかの枚が自分の `#` を持った日に言わせる**ためである。
  *
  * ## 引く側の `.st` が 14 → 0 になった（2026-09-18）
@@ -182,18 +182,18 @@ export const REACHED_MNEMONICS = [
  *                    `CORPUS` の `digest.full` と同じ値になる（同じ事実を2か所に書かない）
  */
 export const ST_BOUNDARY = [
-	{ rel: "alpha/sign/preprocess.sn", st: { sha: "ccedc347ea8256f7", bytes: 99, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
-	{ rel: "alpha/sign/lexer.sn", st: { sha: "044de038718c7429", bytes: 94, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
-	{ rel: "alpha/sign/parser.sn", st: { sha: "5e73c5151d3d9647", bytes: 95, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
+	{ rel: "alpha/sign/preprocess.sn", st: { sha: "ccedc347ea8256f7", bytes: 99, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
+	{ rel: "alpha/sign/lexer.sn", st: { sha: "044de038718c7429", bytes: 94, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
+	{ rel: "alpha/sign/parser.sn", st: { sha: "5e73c5151d3d9647", bytes: 95, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
 	{
 		rel: "alpha/sign/operator_table.sn",
 		st: { sha: "46a3e2b0f23e2540", bytes: 8075, entries: 14, unresolved: 0 },
 		own: ["infix", "prefix", "postfix", "enclosure", "asm_infix_width", "asm_infix_shape", "asm_infix_signed", "asm_prefix_shape", "asm_prefix_place", "asm_prefix_width", "asm_postfix_shape", "asm_enclosure_signed", "asm_enclosure_shape", "strict_infix"],
 		selfCopy: true,
-		raised: "d994bea4a392346e",
+		raised: "0a54415ea5f080d3",
 	},
-	{ rel: "alpha/sign/emit.sn", st: { sha: "85cbca180facc0b9", bytes: 93, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
-	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
+	{ rel: "alpha/sign/emit.sn", st: { sha: "85cbca180facc0b9", bytes: 93, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
+	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
 ];
 
 /**
