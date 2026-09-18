@@ -36,3 +36,15 @@ Passes 1–3 (Accounting) reduce user-defined types into "how many bytes wide is
 
 - **`.ist` (Internal Symbol Table)**: Holds all type information managed during Passes 1–3. Exists **exclusively in compiler process memory** (never written to disk) for security and simplicity.
 - **`.st` (Public Symbol Type File)**: Stores type signatures for symbols exported via `#`/`##`/`###`. Written to disk upon build completion.
+
+> [!IMPORTANT]
+> **An export mark only applies to lines the `.sn` wrote itself.**
+>
+> Imports are merged by expanding the source at compile time, but **marks on the
+> definitions that came in are dropped** — they appear neither in the importer's `.st`
+> nor as `.global` in its `.s`. This mirrors C's `.h` / `.o` split: **including a header
+> must not add definitions**. Before this rule, linking two units that read the same
+> table produced duplicate symbols (13 measured).
+>
+> Expansion itself is unchanged, so the **image (data) still lands in the importer**, under
+> a local label. Only the symbol duplication disappears; the data duplication remains.
