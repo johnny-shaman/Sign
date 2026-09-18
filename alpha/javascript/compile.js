@@ -264,10 +264,37 @@ function resolveImports(lines, options, parseFn, base, state) {
       if (r.diagnostics.length > 0) throw new SyntaxError(r.diagnostics.join("\n"));
       src = r.text;
     }
+    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state);
     // **撒くのは束縛だけである。** モジュールの末尾にある実行例まで持ってくると、
     // 最後の式が入れ替わる——`_sign_main` が返すのはそれなので、黙って別の値になる。
-    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state);
-    for (const l of inner) if (definedNameOf(l)) out.push(l);
+    //
+    // **公開の印は、定義した枚のものである。** 撒かれてきた行の `#`/`##`/`###` は落とす。
+    // 落とさないと、展開がソースのままである以上、**引く側も同じ定義を公開する**——実測で
+    // `operator_table.o` と `parser.o` を繋ぐと重複シンボルが 13 件出ていた
+    // （infix / prefix / postfix / enclosure / asm_* 9本）。動機は C の `.h` と `.o` の分け方で、
+    // **ヘッダを include しても定義は増えない**のがその形である。
+    //
+    // 落とすのは**字句の段**である。印は「行頭の `#_` トークン」1つが元で、そこから
+    // 導く所が4つ（この `definedNameOf`、`pass1` の `buildEnv` が置く `binding.exported`、
+    // `pass2` がラムダと非ラムダの2か所で置く `node.exported`）、読む所が6つある
+    // （`pass3` の総称の道、`pass1b` の具体化、`st.js` の `generateSignType`、下の
+    // `specializeRefCalls` の死んだ総称落とし、`pass4` の `exportLevelOf` と
+    // `checkExportedNames`）。**トークンを落とせば10か所とも構造的に同じ答えになる**
+    // ——後段へ「撒かれてきた」旗を渡す作りだと、読む側のどれか1本を忘れたときに
+    // 黙って落ちる（c37e4bce で踏んだ形。あのときは `runsOnce` の道だけが印を落とした）。
+    //
+    // **像までは消えない。** 展開は今までどおりなので、引く側の `.o` には表の像が
+    // `.Lbind_…` というローカルラベルで残る——消えるのは**シンボルの重複だけ**で、
+    // データの重複は残る。そちらはソース展開そのものをやめる話である。
+    //
+    // `###`（置き場所の印）も一緒に落ちる。`###` は「公開」と「置き場所」の2つを
+    // 言っているので、引いた `###` の像は `.sign.pinned` へは行かない——置き場所は
+    // **定義した枚**が持つ、という読みである（`test/export_symbol.test.js` がこの形を見る）。
+    for (const l of inner) {
+      const d = definedNameOf(l);
+      if (!d) continue;
+      out.push(d.exported ? l.slice(1) : l);
+    }
   }
   return out;
 }
@@ -1703,4 +1730,7 @@ function synthesizePointfreeIn(node, scope) {
   }
 }
 
-export { compile };
+// `definedNameOf` は、**印がどの行に付いているかを決める唯一の場所**である。門
+// （`test/export_symbol.test.js`）が「その枚が自分で公開した名前」を数えるのに要るので
+// 出す——門が自前の正規表現を持つと、同じ事実が2か所になって片方だけ動く。
+export { compile, definedNameOf };

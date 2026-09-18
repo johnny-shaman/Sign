@@ -44,17 +44,35 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  *                  並び・重さ・言い分をそのまま見る（数だけでは理由の入れ替わりを見逃す）
  * @property insn   命令数。`full` は既定、`plain` は `{regAlloc:false, peepholes:false}`
  * @property digest 命令列の指紋（`digestOf`）。命令だけでなくディレクティブとラベルも入る
+ *
+ * ## 2026-09-18、引く側3枚の指紋が動いた。命令は1つも動いていない
+ *
+ * `resolveImports` が撒かれてきた定義の `#` を落とすようになった（`compile.js`）。
+ * 実測の差は `.s` の 12822 行のうち **128 行だけ**で、内訳は:
+ *
+ *   消えた 80 行  `.global` 40 ＋ `.hidden` 40（引く側が引いた表を公開していた分）
+ *   動いた 48 行  ラベルの綴りが `infix` から `.Lbind_infix` へ戻った分
+ *                 （定義行と、それを指す `adrp` / `add :lo12:`）
+ *
+ * **命令は1つも動いていない**——`insn` は 6枚とも前後で同じ値で、`mnemonicCounts` を
+ * 種別ごとに比べても**動いたのはディレクティブ2種だけ**である:
+ * preprocess `.global` 15→1・`.hidden` 14→0、parser と emit は `.global` 14→1・`.hidden` 13→0、
+ * 残り3枚は違い 0。**命令の綴りの差は 6枚とも 0**。
+ *
+ * 指紋だけが動くのは `digestOf` が正規化後の行を**ディレクティブとラベルごと**束ねるからで、
+ * まさにそのために置いてある（頭の注記の「数と指紋は別の物を見ている」）。
+ * **数が動かないまま指紋だけが動いた実例**がこの3枚である。
  */
 export const CORPUS = [
-	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8b241b2ba8d7c528", plain: "445f4fc5eda2844b" } },
+	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "a464b50d6457398f", plain: "e220344a01e84e67" } },
 	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 602, plain: 1004 }, digest: { full: "d0f8e35c843caf67", plain: "74d2762677152598" } },
-	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "bb306f7f2e7a39e7", plain: "ee3aebd3fabc22b0" } },
+	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "d27cebf79590ae8d", plain: "3ee677fddd359b5b" } },
 	// 表だけの1枚。命令は `_sign_main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
 	// 「`ret` が1つ」としか言わない——`asmdiff` がディレクティブを残す理由も、命令数だけの
 	// golden では足りない理由も、そのままこの行に立っている。
 	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "d994bea4a392346e", plain: "d994bea4a392346e" } },
-	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "0f14246b204098be", plain: "489f1bfe53790b17" } },
+	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "fa2dd3698dc3bbc2", plain: "34d2cebcee03e40e" } },
 	// 型システムと Pass 4 の継ぎ目。表が8つと、そこから1つの還元、それに字面のプリフィックスを
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
@@ -129,10 +147,26 @@ export const REACHED_MNEMONICS = [
  *
  * `X.sn` → `.st` → 起こした `.sn` → `.s` が元と同じ指紋になるのは、**その枚が丸ごとデータ
  * のとき**に限る。`.st` は関数の本体を持たないからで、6枚のうち `operator_table.sn` だけが
- * これに当たる。残り5枚は自分の `#` を1つも持たず（`own` が空）、`.st` は
- * `operator_table` の素通しだけである——だから起こすと**別のプログラム**になる
- * （`raised` がその指紋。`lexer.sn` と `target_info.sn` は 0 エントリなので空の `.s`）。
+ * これに当たる。残り5枚は自分の `#` を1つも持たない（`own` が空）ので `.st` は見出しだけ
+ * になり、起こすと**空のプログラム**になる（`raised` がその指紋＝`b3c778608d2fc782`）。
  * `own` を golden に置くのは、**どれかの枚が自分の `#` を持った日に言わせる**ためである。
+ *
+ * ## 引く側の `.st` が 14 → 0 になった（2026-09-18）
+ *
+ * それまで `preprocess` / `parser` / `emit` の `.st` は 14 エントリ・8千バイト台を持っていたが、
+ * **中身は1つも自分のものではなく、`operator_table` の表の素通し**だった（`own` が空、という
+ * 欄が既にそれを言っている）。`resolveImports` が撒かれてきた `#` を落とすようにしたので、
+ * 素通しは消えて 0 になった。`.s` の側で `.global` が消えたのと**同じ1つの事実**である
+ * ——「この枚が公開するもの」が `.s` と `.st` で食い違わない、という形にした。
+ *
+ * > [!CAUTION]
+ * > **落ちた性質がある。** 素通しが在った頃は、第三の枚が `parser.st` **だけ**を読んで
+ * > `infix` の表を引けた（実測で通っていた）。いまは同じ形が
+ * > `error: まだ出せない識別子です（infix）` で落ちる——しかも**前段の診断は 0 件**で、
+ * > 名指しするのは pass4 だけである。「この `.st` では足りない、`operator_table.st` も要る」
+ * > と言える綴り（C の `#include` に当たるもの）も、前段の診断も、まだ無い。
+ * > **黙った誤答ではなく遅い断り**なので通しているが、穴として名前を付けて残す
+ * > （`test/export_symbol.test.js` の §8 がこの形そのものを見ている）。
  *
  * ## `.st` 自身も golden にする（`.s` の門だけでは足りない）
  *
@@ -148,9 +182,9 @@ export const REACHED_MNEMONICS = [
  *                    `CORPUS` の `digest.full` と同じ値になる（同じ事実を2か所に書かない）
  */
 export const ST_BOUNDARY = [
-	{ rel: "alpha/sign/preprocess.sn", st: { sha: "3829bf13d5de4542", bytes: 8071, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
+	{ rel: "alpha/sign/preprocess.sn", st: { sha: "ccedc347ea8256f7", bytes: 99, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
 	{ rel: "alpha/sign/lexer.sn", st: { sha: "044de038718c7429", bytes: 94, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
-	{ rel: "alpha/sign/parser.sn", st: { sha: "4197802f68865fa6", bytes: 8067, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
+	{ rel: "alpha/sign/parser.sn", st: { sha: "5e73c5151d3d9647", bytes: 95, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
 	{
 		rel: "alpha/sign/operator_table.sn",
 		st: { sha: "46a3e2b0f23e2540", bytes: 8075, entries: 14, unresolved: 0 },
@@ -158,7 +192,7 @@ export const ST_BOUNDARY = [
 		selfCopy: true,
 		raised: "d994bea4a392346e",
 	},
-	{ rel: "alpha/sign/emit.sn", st: { sha: "39118e2fcd2bca11", bytes: 8065, entries: 14, unresolved: 0 }, own: [], selfCopy: false, raised: "d994bea4a392346e" },
+	{ rel: "alpha/sign/emit.sn", st: { sha: "85cbca180facc0b9", bytes: 93, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
 	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "b3c778608d2fc782" },
 ];
 

@@ -58,6 +58,18 @@ export function toolReport() {
 }
 
 /**
+ * 道具1つの実体（無ければ `null`）。**探し方の写しを作らせないために出す。**
+ *
+ * リンクの門（`test/export_symbol.test.js` の §9）は clang と ld.lld しか要らない
+ * ——`available()` は qemu も揃っていることを求めるので、あれを使うと qemu の無い機械で
+ * リンクの門まで一緒に飛んでしまう。Windows の既定の置き場所（`CANDIDATES`）は
+ * ここ1か所にしか無い、という形を保つ。
+ */
+export function toolPath(kind) {
+	return tools()[kind] || null;
+}
+
+/**
  * 外部の道具を1つ走らせる。**失敗したら中身を見せる。**
  *
  * `stdio: "pipe"` で握り潰すと「Command failed」しか残らず、本物の失敗と一時的な失敗の
