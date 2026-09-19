@@ -48,3 +48,27 @@ Passes 1–3 (Accounting) reduce user-defined types into "how many bytes wide is
 >
 > Expansion itself is unchanged, so the **image (data) still lands in the importer**, under
 > a local label. Only the symbol duplication disappears; the data duplication remains.
+
+> [!IMPORTANT]
+> **When the same name is defined twice, the one written first wins.**
+>
+> If two definitions of the same name end up side by side in the expanded stream, the
+> **second one is not used**. Nothing stops — one `information` is emitted, naming the
+> originating file and statement index for both the winner and the refused one. (Line
+> numbers are not available: the parser drops comments and tokens carry no position.)
+>
+> The motivation is the diamond. A imports B and C, and B and C each define the same
+> name themselves; under last-wins, **changing the import order changes the answer**.
+>
+> **Ordering still matters, though.** An import line is where the spread definitions land,
+> so writing your own definition first makes yours win. It is not an importer/imported
+> distinction — it is written order. The export mark (`#`) belongs to the winner too.
+>
+> This does not conflict with §1's "top-level declarations are order-independent"
+> ([`1_definition.md`](../1_definition.md)): order-independence is about **when a reference
+> resolves**, first-wins is about **which of two definitions of one name applies**.
+>
+> What is dropped is **the line itself**. Making only the binding table first-wins leaves
+> the two engines split, because Pass 3 writes values back from the node list into the
+> bindings (measured: interpreter 12 / machine 14). Dropping the line makes the
+> interpreter and Pass 4 read the same list.
