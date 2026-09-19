@@ -23,9 +23,12 @@ if (!file) {
 const conf = readOptionMs(msFile ? fs.readFileSync(msFile, "utf8") : "");
 // **前段で止まったものも、名指しで出す。** compile は静的に分かる違反を例外で返すので、
 // 受けずに書き出すと Node のスタックだけが出て、どこが悪いのか言わないことになる。
-let nodes, env;
+//
+// **前段の診断もここへ出す。** 先勝ちで断った定義（information）は前段でしか分からない
+// ——受け取らずに捨てると、`.s` を作る道では誰も気付けない。止めはしない（level で分ける）。
+let nodes, env, front = [];
 try {
-	({ nodes, env } = compile(fs.readFileSync(file, "utf8"), { layer: conf.layer, charset: conf.charset, sourcePath: file, readImport: (f) => fs.readFileSync(f, "utf8") }));
+	({ nodes, env, diagnostics: front } = compile(fs.readFileSync(file, "utf8"), { layer: conf.layer, charset: conf.charset, sourcePath: file, readImport: (f) => fs.readFileSync(f, "utf8") }));
 } catch (e) {
 	console.error(`error: ${e.message}`);
 	if (e.reason) console.error(`（${e.reason}${e.spec ? " / " + e.spec : ""}）`);
@@ -34,6 +37,7 @@ try {
 const r = generateAsm(nodes, env, { target: conf.target, charset: conf.charset, layer: conf.layer, source: file });
 
 process.stdout.write(r.text);
+for (const d of front) console.error(`${d.level}: ${d.message}`);
 for (const d of r.diagnostics) console.error(`${d.severity}: ${d.message}`);
 console.error(`${r.diagnostics.length} 件が出せませんでした`);
 process.exit(r.diagnostics.length === 0 ? 0 : 1);

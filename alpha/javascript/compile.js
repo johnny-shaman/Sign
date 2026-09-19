@@ -231,16 +231,20 @@ function joinPath(base, rel) {
   return (abs ? "/" : "") + seg.join("/");
 }
 
-function resolveImports(lines, options, parseFn, base, state) {
+function resolveImports(lines, options, parseFn, base, state, self) {
   const out = [];
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const rel = importPathOf(line);
-    if (rel === null) { out.push(line); continue; }
+    // **どの枚の何番目の文か**を覚える。先勝ちで断った定義を名指しするのに要る。
+    // 行番号は言えない（パーサーはコメントを落とし、字句は位置を持たない）が、
+    // **出所の枚**は言える——ひし形では「どちらの枚か」がまさに知りたいことである。
+    if (rel === null) { state.from.set(line, { path: self, index: i + 1 }); out.push(line); continue; }
     if (!options.readImport)
       throw new SyntaxError(`インポートを解決する手段がありません（${rel}——compile に readImport を渡してください）`);
     const full = joinPath(base, rel);
     // **同じファイルは一度だけ撒く。** 2つのモジュールが同じものを読んでいても定義が2つに
-    // なってはいけない——後の定義が勝つので、黙って別物になる。
+    // なってはいけない——2つ目は先勝ちで断られるので、引いた意味が information 1件に化ける。
     if (state.done.has(full)) continue;
     // **循環は通してよい。** 同じファイルは一度しか撒かないので、定義はそれぞれ1つに
     // なる。トップレベルの定義は順序に依らない（`buildEnv` が先に全部集める）ので、
@@ -264,7 +268,7 @@ function resolveImports(lines, options, parseFn, base, state) {
       if (r.diagnostics.length > 0) throw new SyntaxError(r.diagnostics.join("\n"));
       src = r.text;
     }
-    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state);
+    const inner = resolveImports(parseFn(preprocess(src)), options, parseFn, dirOf(fromPath), state, fromPath);
     // **撒くのは束縛だけである。** モジュールの末尾にある実行例まで持ってくると、
     // 最後の式が入れ替わる——`_.main` が返すのはそれなので、黙って別の値になる。
     //
@@ -293,8 +297,53 @@ function resolveImports(lines, options, parseFn, base, state) {
     for (const l of inner) {
       const d = definedNameOf(l);
       if (!d) continue;
-      out.push(d.exported ? l.slice(1) : l);
+      // 印を落とすと別の配列になる。出所は引き継ぐ（同じ1つの文である）。
+      const kept = d.exported ? l.slice(1) : l;
+      if (kept !== l) state.from.set(kept, state.from.get(l));
+      out.push(kept);
     }
+  }
+  return out;
+}
+
+/**
+ * **同じ名前の定義は、先に書いた方が勝つ**（利用者の決定 2026-09-19）。
+ *
+ * 動機はひし形である。A が B と C を引き、B も C も同じ枚 D を引く——D は一度しか撒かない
+ * （`state.done`）ので定義は1つだが、**B と C が同じ名前を自分で定義している**形では
+ * 展開された列に同じ名前が2つ並ぶ。そこを後勝ちにすると、引く順番を変えただけで答えが
+ * 変わる。先勝ちなら、並べ方に依らず「最初に見えた定義」で決まる。
+ *
+ * **落とすのは行である。** 束縛表（pass1）だけを先勝ちにしても機械は直らない——pass3 が
+ * ノード列を歩いて `binding.valueNode` を書き戻すので、表と列で答えが割れる。実測で
+ * `a : 1 / b : a + 10 / a : 2 / b + a` が 解釈 12 / 機械 14 のまま残った。列から落とせば
+ * 解釈器と Pass 4 が**同じ列**を読むので、割れようが無い（インタプリタは無改造で済む）。
+ *
+ * **断りは information で出す**（利用者：「後からのものは infomation だけ出す」）。
+ * 止めはしない——書けるが、気付ける。
+ *
+ * **糖衣が置き換えた名前は除く。** ストリームの均し（`stream_desugar.js`）は元の名前を
+ * わざと再定義して、後の方をカーソルの入口にする（`markCursorEntries`）。そこは
+ * 「2つ書かれた」のではなく「1つを書き換えた」のであり、先勝ちで落とすと均しが効かない。
+ */
+function refuseRedefinitions(lines, state, exempt, diagnostics) {
+  const where = (a) => (a && a.path ? `${a.path} の ${a.index} 番目の文` : "前の文");
+  const seen = new Map();
+  const out = [];
+  for (const line of lines) {
+    const d = definedNameOf(line);
+    const name = d ? d.name.slice(1, -1) : null;
+    if (!d || exempt.has(name)) { out.push(line); continue; }
+    const at = state.from.get(line);
+    if (!seen.has(name)) { seen.set(name, at); out.push(line); continue; }
+    diagnostics.push({
+      level: "information",
+      reason: "redefinition-refused",
+      spec: "compiler_pipeline.md §4",
+      message:
+        `'${name}' は ${where(seen.get(name))} で既に定義されています——` +
+        `${where(at)} の定義は使われません（同じ名前は先に書いた方が勝ちます）`,
+    });
   }
   return out;
 }
@@ -1189,14 +1238,24 @@ function checkDefineLeftSides(nodes) {
 function compile(source, options = {}) {
   const parseFn = options.parse || parse;
   // **入口のファイル自身も「撒き済み」として数える。** 循環したときに入口が自分を撒き直し、
-  // 同じ定義が2つになる——後の定義が勝つので、黙って別物になりうる。
+  // 同じ定義が2つになる——先勝ちで断りはするが、自分自身を引いたという事実が
+  // information の山に化けるだけで、誰の得にもならない。
   const selfPath = options.sourcePath ? joinPath("", options.sourcePath) : null;
-  const lines = resolveImports(
-    parseFn(preprocess(source)),
-    options,
-    parseFn,
-    options.importBase !== undefined ? options.importBase : selfPath ? dirOf(selfPath) : "",
-    { done: new Set(selfPath ? [selfPath] : []) }
+  // 診断はここで作る——先勝ちの断りは束縛表より前に出るので、Pass 3 の箱では遅い。
+  const diagnostics = [];
+  const state = { done: new Set(selfPath ? [selfPath] : []), from: new Map() };
+  const lines = refuseRedefinitions(
+    resolveImports(
+      parseFn(preprocess(source)),
+      options,
+      parseFn,
+      options.importBase !== undefined ? options.importBase : selfPath ? dirOf(selfPath) : "",
+      state,
+      selfPath || "入力"
+    ),
+    state,
+    new Set((options.__cursorGroups || []).flatMap((g) => g.entries)),
+    diagnostics
   ).map(inlineSoloLambdaBlocks);
   const env = buildEnv(lines);
   // 中身の見える器に並べた関数は、撒けば・取り出せば呼べる（字句の段でスロットへ置き換える）
@@ -1262,7 +1321,6 @@ function compile(source, options = {}) {
   // を `layoutOfStruct` のスナップショットとして焼くので、後から和集合を足すとそこだけ
   // 古い並びが残り、`f p` の中の `this ' foo` が隣のスロットを読む。
   // Pass 3 の型注釈と Pass 3b（`__` へ収束する経路の静的記録）は同じ走査で行う。
-  const diagnostics = [];
   annotateAll(nodes, env, diagnostics, options.fixpointStats);
   // layer による使用可能リテラル型の門番（option_ms_schema.md §4）。型が確定した後でないと
   // 判定できないのでここに置く。`options.layer` を渡さなければ検査しない——`option.ms` を
