@@ -348,6 +348,108 @@ function refuseRedefinitions(lines, state, exempt, diagnostics) {
   return out;
 }
 
+/**
+ * **トップレベルの定義を、使う行より先へ並べ直す**（前方参照の解決）。
+ *
+ * `1_definition.md` §6.3 は「関数本体・トップレベル宣言は Pass 1 の前方参照解決
+ * （順序非依存）により真に宣言的である」と言う。機械はこれを満たしている——束縛を名前で
+ * 遅く解くので、`b : a + 10` を `a : 1` より先に書いても後に書いても同じ値になる。
+ *
+ * **解釈器だけが満たしていなかった。** 上から1文ずつ走らせるので、`b` を作る時点で `a` は
+ * まだ束縛されておらず、`envGet` が `__` を返す（しかも「未定義識別子」と名乗る——`a` は
+ * 2行下に在るので、言っていることが嘘である）。実測:
+ *
+ *   b : a + 10 / a : 1 / b        解釈器 10 / 機械 11
+ *   p : [q 2 3] / q : 1 / p ' 0   解釈器 2  / 機械 1   ← 器の**長さ**が割れる
+ *
+ * 後者が重い。`q` が `__` になると構築がそれを落とすので、同じ器が長さ 2 と 3 になる。
+ *
+ * **ラムダは元から無事である**（相互再帰も後ろの値を引く形も一致する）。閉包が環境を参照で
+ * 捕まえ、名前を呼び出し時に解くからで、割れるのは**値の定義だけ**である。
+ *
+ * ## 直す場所は、先勝ちと同じ「両方に同じ列を読ませる」である
+ *
+ * 解釈器の束縛を遅延にする手もあるが、`evaluate` を回すループはテストと playground に
+ * 写しで散らばっているので、直す場所が1つにならない。`compile` が並べ直せば、解釈器も
+ * Pass 4 も並べ直した後の列を読む——`interpreter.js` は無改造で済む。
+ *
+ * ## 動かさないもの
+ *
+ *   最後の行          プログラムの値である（`_.main` が返す）。実測で両方の実装が
+ *                     「最後の文の値」を返しているので、ここを動かすと値が変わる
+ *   2回定義された名前  ストリームの糖衣が置き換えた対（`__cursorGroups`）。入口は
+ *                     **後ろの方**だと決まっているので、入れ替わると均しが壊れる
+ *
+ * 引っぱり上げるのは**定義だけ**である。式（定義でない行）は誰からも指されないので、
+ * 互いの順序はそのまま残る——順序依存が本当に在る所（`#` の書き込みなど）は動かない。
+ *
+ * 循環（`a : b + 1` と `b : a + 1`）は元の順のままにする。機械はそこを断るので、
+ * 並べ替えで何かを繕う話ではない。
+ *
+ * ## ラムダの本体は辺を作らない
+ *
+ * **要るのは値の定義だけ**である。ラムダは両方の実装で名前を呼び出し時に解くので、
+ * どこに書いても割れない。辺を作ると、相互再帰の対（`sep` と `in_quote`）がただ入れ替わる
+ * ——循環でも深さ優先は「先に見た依存」を先に積むからである。
+ *
+ * **入れ替えると壊れる所が在った。** ストリームの糖衣は群の名前を `funcs[0].name`、
+ * つまり**並びの先頭の仲間**から採る（`stream_desugar.js`）。`sep` と `in_quote` が入れ替わると
+ * 生成される名前が `sep_adv` から `in_quote_adv` へ動き、呼ぶ側（`cursorGroup` から組み立てる
+ * pass3）と食い違って、リンクが `undefined symbol: p_adv` で落ちた（実測 qemu 5件）。
+ *
+ * だからラムダの定義は**辺の出どころにも、辿る先にもしない**。引っぱり上げの対象には
+ * 残す——`k : f 1` のような値の定義は `f` が束縛されていないと困るからである。
+ *
+ * この絞り込みで、**コーパス8枚は1行も動かなくなった**（指紋も命令数も前と同じ値）。
+ * 実際に書かれているコードで値の定義が後ろの名前を引く形は無い、ということでもある。
+ * 広く張った版では preprocess・parser・n_queens の3枚で関数の並びが入れ替わっていた
+ * （中身は同じで、動いたのは並びとローカルラベルの通し番号だけだった）。
+ */
+function orderDefinitions(lines) {
+  const last = lines.length - 1;
+  // その行はラムダの定義か。トップレベルに `?` が在れば関数である（`pasteVisiblePipelines`
+  // と同じ見方）。`inlineSoloLambdaBlocks` を通した後なので、字下げブロックで書いた形も
+  // ここで `?` を持っている。
+  const isLambdaDef = (l) => !!definedNameOf(l) && Array.isArray(l) && l.includes("?");
+  // 名前 → その定義が在る行。**1度しか定義されていない名前だけ**が引っぱり上げの対象である。
+  const defAt = new Map();
+  const dup = new Set();
+  lines.forEach((l, i) => {
+    const d = definedNameOf(l);
+    if (!d) return;
+    if (defAt.has(d.name)) dup.add(d.name);
+    else defAt.set(d.name, i);
+  });
+  for (const n of dup) defAt.delete(n);
+  defAt.forEach((i, n) => { if (i === last) defAt.delete(n); });
+  if (defAt.size === 0) return lines;
+  // その行が触れている識別子（入れ子の奥まで）。仮引数で隠れた名前まで拾う**多めの見積もり**
+  // である——余計な辺は「使う所より前」をさらに前へ動かすだけで、読みを変えない。
+  const idsIn = (x, out) => {
+    if (Array.isArray(x)) for (const y of x) idsIn(y, out);
+    else if (isId(x) && defAt.has(x)) out.add(x);
+    return out;
+  };
+  const order = [];
+  const state = new Array(lines.length).fill(0);   // 0=未 1=訪問中（循環） 2=済
+  const visit = (i) => {
+    if (state[i]) return;
+    state[i] = 1;
+    // ラムダの定義からは辿らない（本体は呼び出し時に解ける）
+    if (!isLambdaDef(lines[i])) {
+      for (const name of idsIn(lines[i], new Set())) {
+        const j = defAt.get(name);
+        if (j !== undefined && j !== i) visit(j);
+      }
+    }
+    state[i] = 2;
+    order.push(i);
+  };
+  for (let i = 0; i < lines.length; i++) if (i !== last) visit(i);
+  order.push(last);
+  return order.map((i) => lines[i]);
+}
+
 // 呼び出しの実引数を読むときに「ここで式が切れる」と判る字句の頭文字（演算子）。
 const OPERATOR_HEADS = new Set([..."?:#;|&=<>!+*/%^~@$,", "-"]);
 
@@ -1244,7 +1346,7 @@ function compile(source, options = {}) {
   // 診断はここで作る——先勝ちの断りは束縛表より前に出るので、Pass 3 の箱では遅い。
   const diagnostics = [];
   const state = { done: new Set(selfPath ? [selfPath] : []), from: new Map() };
-  const lines = refuseRedefinitions(
+  const kept = refuseRedefinitions(
     resolveImports(
       parseFn(preprocess(source)),
       options,
@@ -1256,7 +1358,12 @@ function compile(source, options = {}) {
     state,
     new Set((options.__cursorGroups || []).flatMap((g) => g.entries)),
     diagnostics
-  ).map(inlineSoloLambdaBlocks);
+  );
+  // **トップレベルの定義は順序に依らない**（`1_definition.md` §6.3）。解釈器は上から
+  // 走らせるので、その事実を列の側で作る——使う行より先へ定義を並べ直す。
+  // **`inlineSoloLambdaBlocks` の後で見る**——字下げブロックで書いたラムダは、剥がして
+  // 初めてトップレベルに `?` を持つ。ラムダかどうかで辺の張り方が変わるので、順番が要る。
+  const lines = orderDefinitions(kept.map(inlineSoloLambdaBlocks));
   const env = buildEnv(lines);
   // 中身の見える器に並べた関数は、撒けば・取り出せば呼べる（字句の段でスロットへ置き換える）
   const pastedAway = pasteVisiblePipelines(lines, env);

@@ -1,5 +1,15 @@
 /**
- * **同じ名前の定義は、先に書いた方が勝つ**——その1つの規則を、2つの実装で見る門。
+ * **トップレベルの定義の「順序」の規則を、2つの実装で見る門。**
+ *
+ * 規則は2つで、どちらも「**同じ列を両方に読ませる**」ことで揃えてある:
+ *
+ *   先勝ち      同じ名前が2つ定義されたら、先に書いた方が勝つ（§1〜§4）
+ *   順序非依存  定義は使う行より先へ並べ直される（§5。`1_definition.md` §6.3）
+ *
+ * 2つは衝突しない。順序非依存は**参照がいつ解けるか**の話で、先勝ちは**同じ名前が2つ
+ * 書かれたときどちらか**の話である。
+ *
+ * ## 先勝ち
  *
  * 利用者の決定（2026-09-19）：「include のひし形は、先勝ちルールに統一。後からのものは
  * infomation だけ出す」。動機はひし形である——A が B と C を引き、B と C が同じ名前を
@@ -34,7 +44,7 @@
  *   糖衣が置き換える名前は除外               ストリームの均しは元の名前をわざと再定義して
  *                                            後の方を入口にする（`markCursorEntries`）
  *
- * 実行: node test/first_wins.test.js
+ * 実行: node test/definition_order.test.js
  */
 import peggy from "peggy";
 import fs from "fs";
@@ -58,6 +68,8 @@ const HW = available();
 if (!HW) console.log(`実機は飛ばす（${toolReport()}）——診断だけ見る`);
 
 const ASM = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
+const T = String.fromCharCode(9);
+const L = (...xs) => xs.join(String.fromCharCode(10)) + String.fromCharCode(10);
 const modsReader = (mods) => (full) => {
 	const b = path.basename(full);
 	if (!(b in mods)) throw new Error(`知らない枚: ${b}`);
@@ -191,6 +203,62 @@ check("否定対照：同じ枚を2回引いても断らない（撒くのは1�
 	// いたらここが 1 になり、入口が消える。
 	check("糖衣：均すと定義は2つ残る（除外が効いている）", defsOf(sugar, "sep") > 1, true);
 	check("糖衣：除外した名前は断らない", sugar.diagnostics.filter((d) => d.reason === "redefinition-refused").length, 0);
+}
+
+// --- 5. 定義は使う行より先へ並べ直される -----------------------------------
+//
+// `1_definition.md` §6.3：「関数本体・トップレベル宣言は Pass 1 の前方参照解決
+// （順序非依存）により真に宣言的である」。機械は元から満たしていた——束縛を名前で遅く
+// 解くからである。**解釈器だけが満たしていなかった**：上から1文ずつ走らせるので、
+// `b : a + 10` を評価する時点で `a` がまだ束縛されておらず `__` を読む。しかも
+// 「未定義識別子」と名乗る——`a` は2行下に在るので、言っていることが嘘だった。
+//
+//   b : a + 10 / a : 1 / b        解釈器 10 / 機械 11
+//   p : [q 2 3] / q : 1 / p ' 0   解釈器 2  / 機械 1   ← 器の**長さ**が割れる
+//
+// 後者が重い。`q` が `__` になると構築がそれを落とすので、同じ器が長さ 2 と 3 になる。
+// 直したのは `compile` の `orderDefinitions`——列の側で並べ直すので、解釈器も Pass 4 も
+// 同じ列を読む（`interpreter.js` は無改造）。
+
+agree("前方参照：値", L("b : a + 10", "a : 1", "b"));
+agree("前方参照：器は要素まで揃う", L("p : [q 2 3]", "q : 1", "p ' 0"));
+agree("前方参照：器の長さそのもの", L("p : [q 2 3]", "q : 1", "||p||"));
+agree("前方参照：2段", L("c : b + 1", "b : a + 1", "a : 1", "c"));
+agree("前方参照：ラムダは元から無事（相互再帰）", L("even : n ?", T + "n = 0 : 1", T + "odd (n - 1)", "odd : n ?", T + "n = 0 : 0", T + "even (n - 1)", "even 4"));
+agree("前方参照：ラムダが後ろの値を引く", L("f : x ? x + k", "k : 5", "f 1"));
+
+// **最後の文は動かさない。** プログラムの値だからである（`_.main` が返す）。
+// 引っぱり上げの対象から外してあることを、その最後の文が参照される形で見る。
+agree("並べ直し：最後の文が定義でも値は変わらない", L("b : a + 1", "b", "a : 1"));
+agree("並べ直し：順に書いた形は今までどおり", L("a : 1", "b : a + 10", "b + a"));
+
+// **ラムダの並びは動かない。** 辺を張るのは値の定義と式からだけで、ラムダの本体からは
+// 辿らない——ラムダは両方の実装で名前を呼び出し時に解くので、動かす必要がそもそも無い。
+//
+// **動かすと壊れる所が在った。** ストリームの糖衣は群の名前を `funcs[0].name`、つまり
+// **並びの先頭の仲間**から採る（`stream_desugar.js`）。相互再帰の対が入れ替わると
+// 生成される名前が `p_adv` から `q_adv` へ動き、呼ぶ側（pass3 が `cursorGroup` から
+// 組み立てる）と食い違って、リンクが `undefined symbol: p_adv` で落ちた（実測 qemu 5件）。
+{
+	// `k` は値の定義なので `p` を引っぱり上げる。そこで `p` の本体まで辿ると `q` が
+	// 先に積まれ、対が入れ替わる——辿らないので入れ替わらない。
+	const src = L("k : p 1", "p : n ?", T + "n = 0 : 1", T + "q (n - 1)", "q : n ?", T + "n = 0 : 0", T + "p (n - 1)", "k");
+	const c = compile(src, { charset: "ascii" });
+	const names = c.nodes
+		.filter((n) => n && n.type === "operation" && n.name === "define" && n.left && n.left.value)
+		.map((n) => n.left.value)
+		.filter((x) => x === "<p>" || x === "<q>");
+	check("並べ直し：相互再帰の対は並びが変わらない", names, ["<p>", "<q>"]);
+	check("並べ直し：値の定義は引っぱり上げられている", c.nodes[0].left.value !== "<k>", true);
+}
+agree("並べ直し：ラムダを引く値も揃う", L("k : p 1", "p : n ?", T + "n = 0 : 1", T + "q (n - 1)", "q : n ?", T + "n = 0 : 0", T + "p (n - 1)", "k"));
+
+// **循環は繕わない**（`a : b + 1` と `b : a + 1`）。並べ直しでは決着しないので元の順に
+// 任せる。機械はそこを断るので、値の一致ではなく「断られること」で覆う。
+{
+	const cyc = compile(L("a : b + 1", "b : a + 1", "a"), { charset: "ascii" });
+	const r = generateAsm(cyc.nodes, cyc.env, ASM);
+	check("循環：機械は断る（並べ直しは手を出さない）", r.diagnostics.length > 0, true);
 }
 
 if (skipped > 0) console.log(`（実機の ${skipped} 件は飛ばした）`);
