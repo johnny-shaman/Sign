@@ -1,5 +1,12 @@
 # `option.ms` Configuration Schema Specification
 
+> [!NOTE]
+> **The canonical source is the Japanese document [option_ms_schema.md](../../../ja-jp/impl/build/option_ms_schema.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 1. Overview
 
 `option.ms` is the official configuration format for the Sign compiler build system. It uses the standard `.ms` format (indentation-based map syntax) to define layers, target architectures, memory layouts, and optimization flags.

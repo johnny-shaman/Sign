@@ -1,5 +1,12 @@
 # Sign Execution Model: Every Function is an Inlined Inner Function of `main`
 
+> [!NOTE]
+> **The canonical source is the Japanese document [execution_model.md](../../../ja-jp/impl/core/execution_model.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## Core Principle
 
 > **Every function in Sign is statically inlined as an inner function of a single top-level entry function: `main.sn`.**

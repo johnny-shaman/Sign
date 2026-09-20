@@ -1,5 +1,12 @@
 # Complete Specification of Unit (`__`) in Sign
 
+> [!NOTE]
+> **The canonical source is the Japanese document [unit.md](../../../ja-jp/impl/core/unit.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 0. Quick Reference & Core Invariants
 
 ### 0.1 Convergence of Undefined Identifiers to Unit (Zero Reserved Words)

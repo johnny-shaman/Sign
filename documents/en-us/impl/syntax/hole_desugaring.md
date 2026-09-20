@@ -1,5 +1,12 @@
 # Partial Application (Hole `_`) Static Desugaring Specification
 
+> [!NOTE]
+> **The canonical source is the Japanese document [hole_desugaring.md](../../../ja-jp/impl/syntax/hole_desugaring.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 1. Background & Purpose
 
 In early Sign iterations, `_` served a dual role:

@@ -1,5 +1,12 @@
 # Sign Compiler Pipeline: Design Motivation & Multi-Pass Architecture
 
+> [!NOTE]
+> **The canonical source is the Japanese document [compiler_pipeline.md](../../../ja-jp/impl/core/compiler_pipeline.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 1. Design Motivation: As-Is Compiler for RISC Processors
 
 The symbol selections in Sign's operator table ([operator_table.md](../../guide/operator_table.md)) are chosen to map **as-is** to target RISC processors (AArch64, RISC-V, AVR, SPARC) without intermediate representation normalization layers.

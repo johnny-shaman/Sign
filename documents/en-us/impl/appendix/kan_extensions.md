@@ -1,5 +1,12 @@
 # Unified Verification Specification of Sign Operators & Lambdas via Kan Extensions
 
+> [!NOTE]
+> **The canonical source is the Japanese document [kan_extensions.md](../../../ja-jp/impl/appendix/kan_extensions.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 1. Overview
 
 In Sign's language design, built-in operators (`+`, `*`, `<`, `&`, `,`) and user-defined lambdas (`?`) are not distinguished. Through cumulative implementation, it has been **inductively confirmed** that all operational behaviors structurally correspond to a single universal concept in Category Theory: **Kan Extensions**.

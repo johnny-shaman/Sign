@@ -1,5 +1,12 @@
 # Sign Preprocessor Architecture & Transformations
 
+> [!NOTE]
+> **The canonical source is the Japanese document [preprocessor.md](../../../ja-jp/impl/build/preprocessor.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 0. The Two Roles of a Newline (the First Pass)
 
 A newline has two roles: the **processing boundary** (an operator meaning "this line may now be evaluated"; see the basic principles of [`operator_table.md`](../syntax/operator_table.md)) and the **newline character** (the one character right after `\`). Making one byte carry both roles leaves the later stages guessing from context. So the preprocessor makes one left-to-right pass first and splits the two into different codes (the user's decision, 2026-09-15).

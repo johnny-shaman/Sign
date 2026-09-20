@@ -1,5 +1,12 @@
 # Coproduct Resolver Specification
 
+> [!NOTE]
+> **The canonical source is the Japanese document [coproduct_resolver.md](../../../ja-jp/impl/core/coproduct_resolver.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 This document defines the deterministic algorithm that reduces flat space-separated token sequences (`coproduct_block`) into binary AST trees immediately after parsing, based on type category precedence.
 
 ---

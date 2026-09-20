@@ -1,5 +1,12 @@
 # Mathematical Foundation of Categorical Truth in Sign
 
+> [!NOTE]
+> **The canonical source is the Japanese document [categorical_truth.md](../../../ja-jp/impl/appendix/categorical_truth.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## 1. Overview
 
 This specification details the mathematical foundation of truth values in Sign:

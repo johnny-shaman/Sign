@@ -1,5 +1,12 @@
 # Sign Language Design Notes: Monadic and Comonadic Features in Function Definition & Evaluation
 
+> [!NOTE]
+> **The canonical source is the Japanese document [pattern_guide.md](../../ja-jp/guide/pattern_guide.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 ## Maybe (Equivalent to `if ~ then ~ else` in Conventional Languages)
 
 - When `Unit` is implicitly passed to an argument, the function is not executed. (Note: Explicitly passing `Unit` acts as a placeholder and carries a distinct semantic).

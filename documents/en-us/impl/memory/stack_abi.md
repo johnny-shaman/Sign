@@ -1,5 +1,12 @@
 # Range List Allocation & Stack ABI Specification
 
+> [!NOTE]
+> **The canonical source is the Japanese document [stack_abi.md](../../../ja-jp/impl/memory/stack_abi.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 This document defines how range list expressions (`[start ~ end]`, `[start ~+ step ~ end]`), function applications, and partial applications lower into pure stack allocations (`alloca`) and zero-overhead System V register calls without dynamic heap usage.
 
 ---

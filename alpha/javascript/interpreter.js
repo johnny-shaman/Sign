@@ -1296,8 +1296,10 @@ function evalArith(node, env) {
   // `__` が単位元になった以上その前提が消えた。
   //
   // 結果が番地なら `__` は吸収するので（`absorbsUnit`）、左辺の `__` だけで値は決まる。
-  // それでも右辺は評価している——そこで短絡するかは仕様が未決としている（operator_table.md
-  // の継続の規則）。決まるまでは `Int` と同じ道を通し、機械（両辺を積んでから `csel`）と揃える。
+  // **それでも右辺は評価する**（利用者の裁定 2026-09-21。仕様が「未決」としていた欄で、
+  // `operator_table.md` の継続の節はこの裁定で埋まった）。番地の算術だけ短絡すると、
+  // **同じ綴りが結果の型で評価の回数を変える**ことになる。`Int` と同じ道を通し、機械
+  // （両辺を積んでから `csel`、短絡の分岐は1本も出さない）と揃える。
   if (typeof l === "string" && [...l].length !== 1) return arithOnValues(name, l, undefined, node.atomType);
   const r = unspreadScalar(evaluate(node.right, env));
   // **型が `String` と言う辺は、1文字でも `Char` ではない**（type_system.md §2 の書き方の表、§3.2）。

@@ -1,5 +1,12 @@
 # Sign Design Principles
 
+> [!NOTE]
+> **The canonical source is the Japanese document [0_design_principles.md](../../ja-jp/impl/0_design_principles.md).**
+> This English copy is a *derived translation* and is **behind** the canonical text
+> (user ruling, 2026-09-21: "en-us is the older one"). Where the two disagree, the
+> Japanese side wins — including against this file. Do not cite this file as the
+> specification; read it as a reading aid, and fix the Japanese side when you find a gap.
+
 > [!IMPORTANT]
 > This document should be read prior to `1_definition.md`. Individual specifications (operator tables, type systems, compiler pipelines, etc.) are concrete instantiations of the principles declared herein. When reading specific rules and asking "why is it designed this way?", return to this document first.
 
