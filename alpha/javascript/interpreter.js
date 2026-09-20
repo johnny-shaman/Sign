@@ -2921,4 +2921,8 @@ function observe(v) {
   return isIterator(v) && Array.isArray(d) && v.spread ? collapseSlice(d) : d;
 }
 
-export { evaluate, newRuntimeEnv, envDefine, envGet, UNIT, isUnit, observe };
+// `structuralEqual` を外へ出すのは**検査が言語の `==` を使えるようにする**ためである。
+// 門がホストの等価（JSON の字面など）で比べると、`[x] ≅ x` や `String ≅ List(Char)` を
+// 門の側でもう一度書くことになり、同じ事実が2箇所で決まる——実測で、言語が等しいと言う
+// `` `abc` `` と `a ,  , c` を `isomorphism.test.js` が等しくないと言っていた。
+export { evaluate, newRuntimeEnv, envDefine, envGet, UNIT, isUnit, observe, structuralEqual };

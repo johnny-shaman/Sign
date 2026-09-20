@@ -1,10 +1,22 @@
 /**
- * **同型は機械語で無償でなければならない。**
+ * **同型は型では無償、表現では有償**（`0_design_principles.md` 原理8）。
  *
- * `$__ = __ = @__` が機械語の不動点であるように——型の上では別のものでも、機械の上では
- * 同じビットでなければならない——仕様が同型だと言っているものは、値も型も命令列も一致する
- * はずである。一致しないなら、**型が値より広い**か、**問いになっていない問いを実行時に
- * 訊いている**かのどちらかである。実際どちらも見つかった。
+ * 仕様が同型だと言っているものは、**値と型**が一致するはずである。一致しないなら、
+ * **型が値より広い**か、**問いになっていない問いを実行時に訊いている**かのどちらかである。
+ * 実際どちらも見つかった。
+ *
+ * > **命令列の一致は同型の要件ではない。** 利用者の裁定（2026-09-20）——「圏論的な同値関係
+ * > ってのは抽象度の違いによる階層がある。isomorphism は完全に同値関係」「**iso であることは、
+ * > 比較が走ったときだけ**だからね。文字列については、最適化できるととらえておく。」
+ * >
+ * > 同型は互いに逆な射があることであって、表現にいくら払うかは別の水準の話である。
+ * > 以前ここは「**同型は機械語で無償でなければならない**」と宣言していたが、それは
+ * > 同値関係ではなく**表現の同一性**を要求していた。しかもその根拠に引いていた
+ * > `$__ = __ = @__` 自身が等式ではない——`+ 0` の文脈で3つは区別され、命令数も 3/3/9 である。
+ *
+ * それでも `iso()` が命令列を見るのは、**Sign がいくつかの同型を「表現ごと同じ」に実現して
+ * ある**からで（`[x] ≅ x` は `7 ' 0` → 7 がそのまま成り立つ）、そこが崩れたことに気づく
+ * ための見張りである。**「無償にしてある」と「無償でなければならない」は別。**
  *
  * ここは同型の表そのものである。成り立つものだけでなく、**わざと成り立たないもの**も
  * 理由つきで置く——「同型に見えるが違う」ことこそ、あとで踏みやすい。
@@ -17,7 +29,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
 import { generateAsm } from "../pass4.js";
-import { evaluate, newRuntimeEnv, UNIT, observe, isUnit } from "../interpreter.js";
+import { evaluate, newRuntimeEnv, UNIT, observe, isUnit, structuralEqual } from "../interpreter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const parser = peggy.generate(fs.readFileSync(path.join(__dirname, "..", "sign.pegjs"), "utf8"));
@@ -43,6 +55,18 @@ function value(source) {
 	if (o && typeof o === "object" && o.__identity__) return "0";
 	return JSON.stringify(o);
 }
+// **観測を通した姿そのもの。** `iso()` は言語の `==` で比べるので、ここで文字列へ潰さない
+// ——潰すと比べ方がホスト側（JSON の字面）になり、言語が等しいと言うものを門が拒む。
+function rawValue(source) {
+	const { nodes } = compile(source, { parse: parser.parse });
+	const env = newRuntimeEnv(null);
+	let r = UNIT;
+	for (const node of nodes) r = evaluate(node, env);
+	return isUnit(r) ? UNIT : observe(r);
+}
+// 言語の `==` そのもの。`[x] ≅ x` も `String ≅ List(Char)` もこちらが知っている。
+const sameValue = (a, b) => structuralEqual(a, b);
+const show = (v) => (isUnit(v) ? "__" : JSON.stringify(v));
 function type(source) {
 	const { nodes } = compile(source, { charset: "ascii" });
 	return String(nodes[nodes.length - 1].atomType);
@@ -61,27 +85,59 @@ function paramType(source) {
 	for (const n of nodes) walk(n);
 	return String(t);
 }
+// **出せなかったことと、書き方が関数でないことは別である。**
+//
+// 以前はどちらも `null` で返しており、`iso()` が両方とも「素通し＝一致」と読んでいた。
+// そのせいで**後段が断るほどこの門は緑に近づいて**いた——実測で、`genExpr` の前置 `@` の
+// 枝を「命令を1本増やす」へ壊すと 58/60 で赤くなるのに、同じ枝を `em.fail` で**断る**ように
+// 壊すと **60/60 のまま緑**だった。回帰が門を通る向きの穴である。
+//
+// 理由を持って返し、断りは「未測定」として**数える**。数は golden に置く（下の節）ので、
+// 覆いが痩せた日にも太った日にも赤くなる。
 function body(source) {
 	const { nodes, env } = compile(source, { charset: "ascii" });
 	const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-	if (r.diagnostics.length) return null;
+	// **断られた。** 命令列が無いのは「同じ」だからではない。
+	if (r.diagnostics.length) return { unmeasured: "断り", why: r.diagnostics[0].message.replace(/（.*/, "") };
 	const t = r.text.split("\n");
 	const i = t.findIndex((l) => l.startsWith("f:"));
-	if (i < 0) return null;
+	// **関数の形で書かれていない。** `[5]` と `5` のように値そのものを並べた対はここへ来る。
+	// 命令列を比べる対象が無いだけなので、断りとは別に数える。
+	if (i < 0) return { unmeasured: "関数の形でない" };
 	const j = t.findIndex((l, k) => k > i && l.trim() === "ret");
-	return t.slice(i, j + 1).map((l) => l.replace(/\/\/.*/, "").trim()).filter(Boolean);
+	return { lines: t.slice(i, j + 1).map((l) => l.replace(/\/\/.*/, "").trim()).filter(Boolean) };
 }
 
-/** 同型：値・型・命令列のすべてが一致する。命令列は関数の形で書かれたときだけ見る。 */
+// 命令列を比べられなかった対を、理由つきで控える。`iso()` は「一致」とは言わない。
+const unmeasured = [];
+
+/**
+ * **同型：値と型が一致する。**
+ *
+ * 命令列は同型の**要件ではない**（利用者の裁定 2026-09-20——「iso であることは、比較が
+ * 走ったときだけ」）。同型は互いに逆な射があることで、表現にいくら払うかは別の水準の話で
+ * ある。それでも命令列を見るのは、**Sign がいくつかの同型を「表現ごと同じ」に実現して
+ * あるから**で（`[x] ≅ x` は `7 ' 0` → 7 がそのまま成り立つ）、そこが崩れたことに気づく
+ * ための見張りである。**「無償にしてある」と「無償でなければならない」は別**——落ちたら
+ * 「同型が壊れた」ではなく「畳みが効かなくなった」と読むこと。
+ *
+ * 値は**言語の `==`** で見る（`structuralEqual`）。ホストの JSON の字面で比べていたので、
+ * `` `abc` `` と `\a , \b , \c` が値のところで既に食い違っていた——言語が等しいと言うものを
+ * 門が等しくないと言う形で、**同じ事実を2箇所で決めていた**。
+ */
 function iso(note, a, b) {
-	const [va, vb] = [value(a), value(b)];
+	const [va, vb] = [rawValue(a), rawValue(b)];
 	const [ta, tb] = [type(a), type(b)];
 	const [ba, bb] = [body(a), body(b)];
-	const insSame = !ba || !bb ? true : JSON.stringify(ba) === JSON.stringify(bb);
 	const why = [];
-	if (va !== vb) why.push(`値 ${va} / ${vb}`);
+	if (!sameValue(va, vb)) why.push(`値 ${show(va)} / ${show(vb)}`);
 	if (ta !== tb) why.push(`型 ${ta} / ${tb}`);
-	if (!insSame) why.push(`命令 ${ba.length} / ${bb.length}`);
+	if (ba.unmeasured || bb.unmeasured) {
+		const r = [ba, bb].filter((x) => x.unmeasured).map((x) => `${x.unmeasured}${x.why ? `：${x.why}` : ""}`);
+		unmeasured.push(`${note}（${[...new Set(r)].join(" ／ ")}）`);
+	} else if (JSON.stringify(ba.lines) !== JSON.stringify(bb.lines)) {
+		why.push(`命令 ${ba.lines.length} / ${bb.lines.length}`);
+	}
 	checkTrue(note, why.length === 0, why.join(" · "));
 }
 
@@ -269,18 +325,53 @@ checkTrue("数の並びは文字列と等しくない", value("||((1 , 2 , 3) ==
 // 1要素は元から通っていた道（`[x] ≅ x` がここより先に効く）。壊していないことの証拠。
 checkTrue("1要素は今までどおり", value("||((" + C + "a) == `a`)||") === "1");
 
-// **同型はまだ無償ではない。** この節は「直ったら落ちる」ために置く（`corpus.js` の
-// 「既知を除外せず記録して覆う」と同じ作法）。等値は揃ったが、型も命令列もまだ違う:
+// **まだ揃っていないのは型だけである。** 前はここに「22 対 6 の命令が残っている限り
+// `iso()` は当てられない」と書いていたが、**それは理由ではなかった**:
 //
-//   x : \\a , \\b , \\c   →  値 ["a","b","c"] ／ 型 List（要素 Char） ／ 22 命令
-//   x : `abc`          →  値 "abc"           ／ 型 String            ／  6 命令
+//   x : \a , \b , \c   値 ["a","b","c"] ／ 型 List   ／ 22 命令（確保）
+//   x : \a \b \c       値 "abc"         ／ 型 String ／ 22 命令（確保）   ← **型は同じで命令も同じ**
+//   x : `abc`          値 "abc"         ／ 型 String ／  6 命令（.rodata）
 //
-// このファイルの主張は「**同型は機械語で無償でなければならない**」なので、22 対 6 が
-// 残っている限り `iso()` は当てられない。**揃った日にこの2本が落ちて、`iso()` へ移せと言う。**
+// 2行目と3行目は**値も型も一致していて命令だけ 22 対 6** である。つまり命令の差は
+// `List` と `String` の差ではなく、**字面が `` `…` `` かどうか**——`.rodata` へ置くか
+// その場で確保するか、という表現の選び方でしかない。
+//
+// 利用者の裁定（2026-09-20）：「**iso であることは、比較が走ったときだけ**だからね。
+// 文字列については、最適化できるととらえておく。」**表現の費用は同型の欠陥ではない。**
+// だから残っている宿題は「積の綴り（`,`）が `List` のままであること」1つだけで、
+// 命令数はここでは条件にしない。**型が揃った日にこの1本が落ちて、`iso()` へ移せと言う。**
 checkTrue(
-	"まだ：型が List と String で違う",
+	"まだ：積の綴りだけ型が List のまま",
 	type("x : " + SEQ + String.fromCharCode(10) + "x") !== type("x : `abc`" + String.fromCharCode(10) + "x"),
-	"揃ったら iso() へ移すこと"
+	"揃ったら iso() へ移すこと（命令数は条件ではない）"
+);
+// **並置の綴りは既に揃っている。** 同じ主張の通っている側で、上の1本が「カリー化が丸ごと
+// 無い」ではなく「積の綴りだけ」を見ていることの証拠になる。
+checkTrue(
+	"並置の綴りは型まで揃っている",
+	type("x : " + C + "a " + C + "b " + C + "c" + String.fromCharCode(10) + "x") === type("x : `abc`" + String.fromCharCode(10) + "x"),
+);
+
+// ---- **命令列を比べられなかった対を数える** ----
+//
+// `body()` が理由つきで返すようになったので、ここで控えを突き合わせる。**数を golden に
+// 置く**のは、覆いが痩せた日にも太った日にも言わせるためである（`corpus.js` の「既知を
+// 除外せず記録して覆う」と同じ作法）。
+//
+// 以前は「出せなかった」も「関数の形でない」も等しく**一致**に数えていたので、
+// **後段が断るほどこの門は緑に近づいて**いた。実測で、`pass4.js` の前置 `@` の枝を
+// 「命令を1本増やす」へ壊すと 58/60 で赤くなるのに、同じ枝を `em.fail` で**断る**ように
+// 壊すと **60/60 のまま緑**だった。いまは断りが1本増えればこの節が落ちる。
+const UNMEASURED_GOLDEN = [
+	"[x] ≅ x（関数の形でない）",
+	"__ x ≅ x（断り：まだ出せない式です）",
+	"x __ ≅ x（断り：まだ出せない式です）",
+	"scalar~ ≅ scalar（断り：f: 撒いただけのものは返せません）",
+];
+checkTrue(
+	`命令列が未測定なのは ${UNMEASURED_GOLDEN.length} 本`,
+	JSON.stringify(unmeasured) === JSON.stringify(UNMEASURED_GOLDEN),
+	`いま: ${JSON.stringify(unmeasured, null, 1)}`,
 );
 
 console.log(`\n${passed}/${total} passed`);
