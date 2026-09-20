@@ -325,6 +325,31 @@ function flattenProduct(node) {
 }
 
 /**
+ * **積の連番スロットの並び。単位元は場所を取らない。**
+ *
+ * `,` の単位元は `__` であり、`[1 , __ , 2]` は `[1 2]` で要素数は 2 である
+ * （`operator_table.md` ※3、**決着済み**）。ところが `flattenProduct` は書かれた綴りを
+ * そのまま割るので、**型が `Unit` と言っているノードがスロットとして残って**いた
+ * ——幅 0 のスロットへ値を1本積むことになり、機械は「スロット N の幅が合いません
+ * （値は 1 本、スロットは 0 byte）」で断っていた。仕様が決めている形なので、断るのではなく落とす。
+ *
+ * **落とすのは静的に `Unit` と分かるものだけである。** 実行時に `__` になった値は
+ * 機械が既に落としている（`negs xzr, xN` で niche を見て `b.vs` で飛ばし、書けたバイト数を
+ * 数えて `len` を出す）——実測で `f : x ? ||[1 , (x < 2) , 2]||` は `f 3` が 2、`f 1` が 3 で
+ * 両エンジン一致する。ここで重ねて考えない。
+ *
+ * **名前付きスロットは落とさない。** `b : __` は「b というフィールドがあり、今は空」を
+ * 表せる（同 ※3）。だから呼ぶのは `slotKind === "positional"` の道だけである。
+ *
+ * 置く側（`layoutOfStruct`）と組む側（`pass4` の product の枝）が**同じ並び**を見なければ
+ * ならない——2か所で別々に割ると、置いた場所と書く場所がずれる。だから並びを作る所を
+ * ここ1つにする。
+ */
+function productSlotNodes(node) {
+  return flattenProduct(node).filter((n) => !(n && UNIT_TYPES.has(n.atomType)));
+}
+
+/**
  * ノード1つ分の大きさと境界を返す。決まらなければ null。
  *
  * @returns {{ size: number, align: number }|null}
@@ -867,7 +892,7 @@ function layoutOfStructInner(node, conf) {
 
   // 連番: 宣言順がそのまま物理配置。ソートの鍵となる名前が無いためである。
   if (node.slotKind === "positional") {
-    const slots = flattenProduct(node);
+    const slots = productSlotNodes(node);
     // 分解できなければオフセットは出ない。**自分自身を1スロットとして数えない**
     // ——数えると `measure` が同じノードへ戻ってきて無限に回る。
     if (slots.length === 1 && slots[0] === node) return null;
@@ -1102,6 +1127,7 @@ export {
   passingOf,
   stringLength,
   flattenProduct,
+  productSlotNodes,
   flattenByFamily,
   isExpandNode,
   mergeBaseIdentifier,

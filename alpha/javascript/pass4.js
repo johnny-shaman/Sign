@@ -38,7 +38,7 @@
 import { reduceToMachineType, widthsOf, UNIT_NICHE_ASM, charSizeOf, charLimitOf, DEFAULT_CHARSET, SIGNEDNESS, literalDigits, literalParts } from "./target_info.js";
 import { envLookup } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
-import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName, addressWithoutArrow } from "./layout.js";
+import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, productSlotNodes, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName, addressWithoutArrow } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 import { asmOf } from "./operator_table.js";
 
@@ -3277,7 +3277,7 @@ function genExpr(node, env, em, scope, tail = false) {
 	// 書かれた形だけである。
 	if (n.name === "product" && n.atomType === "Struct" && n.slotKind === "positional" && !sretHere && n.escapesFrame === false) {
 		const lay = layoutOfStruct(n, { target: em.conf.target, charset: em.conf.charset, env });
-		const slotNodes = flattenProduct(n);
+		const slotNodes = productSlotNodes(n);
 		if (lay && lay.slots && slotNodes && lay.slots.length === slotNodes.length && slotNodes.length > 1) {
 			if (!allocaAllowed(em, n, "Struct を組み立てる")) return false;
 			// **先に全スロットを評価する。** 確保してから評価すると、`sp` が動いた後で
