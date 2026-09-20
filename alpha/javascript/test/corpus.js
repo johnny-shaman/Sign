@@ -62,6 +62,21 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  * 指紋だけが動くのは `digestOf` が正規化後の行を**ディレクティブとラベルごと**束ねるからで、
  * まさにそのために置いてある（頭の注記の「数と指紋は別の物を見ている」）。
  * **数が動かないまま指紋だけが動いた実例**がこの3枚である。
+ *
+ * ## 2026-09-21、`target_info.sn` が +2 命令。**6枚のうち1枚だけが動いた**
+ *
+ * `Int` の算術も溢れて `__`（niche）になる、と `cannotBeUnit` に認めさせた
+ * （`pass4.js` の `OVERFLOWS_TO_NICHE`）。機械は自分が出した niche を次の算術で数として
+ * 扱っており、`(max + 1) + 5` が**解釈 5 ／ 機械 -9223372036854775803、診断ゼロ**で割れていた。
+ *
+ * **この直しは「吸収」ではない。** 選ぶのは niche ではなく残った辺、つまり完全性公理を
+ * 機械にも出させる側である。吸収にすると `1 + (d rest)` で終端する畳み込みが全部 `__` へ
+ * 潰れ、`preprocess.sn` が 88/88 → 38/88 になる（実測）。
+ *
+ * **動いたのが1枚だけなのが、この直しの狭さの証拠である。** 検査が出るのは「溢れうる算術を
+ * 辺に持つ所」だけで、素の `Int + Int` は今までどおり `add` 1命令である
+ * （`project_sign_critical_overflow` の「critical か否かで検査を払う」はそのまま）。
+ * 残り5枚は命令数も指紋も1つも動いていない。
  */
 export const CORPUS = [
 	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8e35f8d0a07dc74a", plain: "2494ff932efb4e17" } },
@@ -77,7 +92,7 @@ export const CORPUS = [
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
 	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
-	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1293, plain: 2053 }, digest: { full: "3a65da735ee395b6", plain: "c89a5656d8ec5a3f" } },
+	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1295, plain: 2055 }, digest: { full: "69375f472b243370", plain: "fa42d490d1e02f89" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,

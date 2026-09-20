@@ -5315,6 +5315,8 @@ function isUnitAtom(node) {
 // **数のリテラルでも、ビットが niche なら `__` である**（integer_overflow.md §1.2）。
 // `-9223372036854775808` と `0x8000000000000000` は、`0u0000` と同じく綴りが違うだけの `__`
 // であり、置く命令は niche をそのまま作る。
+// 溢れて niche（`__`）になりうる `Int` の算術。割り算は溢れない（`MIN / -1` は別の道で断る）。
+const OVERFLOWS_TO_NICHE = new Set(["add", "sub", "mul", "pow", "bit_shift_left", "factorial"]);
 function cannotBeUnit(node, env, scope, critical = false) {
 	const n = unwrap(node);
 	if (!n) return false;
@@ -5335,6 +5337,26 @@ function cannotBeUnit(node, env, scope, critical = false) {
 		// 辺が `__` になり得ないことからは何も言えない——ここを辺で答えると、外の `Int` の算術が
 		// niche を数として足していた（`(0x10 * 2) + 1` が解釈器 1、機械 0x8000000000000001）。
 		if (critical || n.atomType === "Unit" || n.atomType === "Char" || n.atomType === "Address" || n.name === "div") return false;
+		// **`Int` の算術も溢れて `__` になる**（利用者の裁定 2026-09-21）。
+		//
+		// 上の行は `Unit` と型付けされた算術（番地の射の無い積）を見ていたが、**溢れた `Int` は
+		// `Int` のままである**。`Int` の域は `INT64_MIN` を含まない（そのビットが niche）ので、
+		// 溢れた結果は `__` であって数ではない。ところが辺を再帰で見ると `max` も `1` も
+		// `__` になり得ないので「この辺は `__` にならない」と答え、**外の算術が検査を出さずに
+		// niche をそのまま足していた**:
+		//
+		//   max + 1         解釈 __ ／ 機械 __            ← 1段目は元から一致
+		//   (max + 1) + 5   解釈  5 ／ 機械 -9223372036854775803  ← **診断ゼロで割れる**
+		//   (max + 1) * 2   解釈  2 ／ 機械 0
+		//
+		// 直すのは**完全性公理を機械にも出させる**ことであって、`__` を吸収させることではない。
+		// 吸収させると `1 + (d rest)` で終端する畳み込みが全部 `__` に潰れる（実測：`preprocess.sn`
+		// が 88/88 → 38/88）。利用者：「**`||rest|| = 0 : x` という match_case を書くのは滑稽**」
+		// ——基底は公理が与えるものであって、手で書き直すものではない。
+		//
+		// 代価はコーパス全体で **+2 命令**。検査が出るのは「溢れうる算術を辺に持つ所」だけで、
+		// 素の `Int + Int` は今までどおり `add` 1命令である（`critical か否かで検査を払う`）。
+		if (n.atomType === "Int" && OVERFLOWS_TO_NICHE.has(n.name)) return false;
 		return cannotBeUnit(n.left, env, scope) && cannotBeUnit(n.right, env, scope);
 	}
 	// **スカラーへの `' 0` は恒等射である**（`[x] ≅ x`——スカラーは1要素の器として引ける）。

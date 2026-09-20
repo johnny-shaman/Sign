@@ -1361,8 +1361,20 @@ f 1`, "f") || [];
 	// だけなら見ない（integer_overflow.md §1.2）が、番地の辺に来たら見る（同 §1.3）。
 	const addrSum = body("f : p a b ? p - (a + b)\nf 0x1000 1 2", "f") || [];
 	checkTrue("Address - (Int + Int)：右辺の和が niche かを見て niche を選ぶ", seq(addrSum, ["csel x11, x12, x11, ne", "cmp x10, x12", "csel x11, x12, x11, eq"]), addrSum.join(" / "));
+	// **`Int` の和も見る**（利用者の裁定 2026-09-21）。ここはかつて「`Int` の算術が続くだけなら
+	// 見ない」と書いてあり、**黙った誤答をそのまま門に記録していた**——内側の `a + b` は溢れて
+	// `__`（niche）になりうるので、外の `-` が見ないと niche をそのまま引く:
+	//
+	//   (max + 1) + 5   解釈 5 ／ 機械 **-9223372036854775803**（診断ゼロ）
+	//
+	// 選ぶのは niche ではなく**残った辺**である（完全性公理、`csel x11, x9, x11, eq`）。
+	// 吸収させてはいけない——`1 + (d rest)` で終端する畳み込みが全部 `__` に潰れる。
 	const intSum = body("f : c a b ? c - (a + b)\nf 1 1 2", "f") || [];
-	checkTrue("Int - (Int + Int)：和を見ない（sub 1命令で csel 無し）", intSum.includes("sub x9, x9, x10") && !intSum.some((l) => /^(cmp x10, x12$|csel )/.test(l)), intSum.join(" / "));
+	checkTrue("Int - (Int + Int)：和が niche かを見て、残った辺を選ぶ", seq(intSum, ["cmp x10, x12", "csel x11, x9, x11, eq"]), intSum.join(" / "));
+	checkTrue("Int - (Int + Int)：niche は選ばない（吸収ではない）", !intSum.includes("csel x11, x12, x11, eq"), intSum.join(" / "));
+	// 対照。**素の `Int + Int` は今までどおり `add` 1命令**である（辺が溢れうる算術でなければ見ない）。
+	const intPlain = body("f : a b ? a + b\nf 1 2", "f") || [];
+	checkTrue("Int + Int：辺が素なら今までどおり csel 無し", intPlain.includes("add x9, x9, x10") && !intPlain.some((l) => /^csel /.test(l)), intPlain.join(" / "));
 }
 
 // ---- 実行時の鍵で、参照で運ぶスロット（文字列）を引く ----
