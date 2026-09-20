@@ -1117,9 +1117,55 @@ const anonRefs = (t) => (t.match(/\.quad \.Lanon\d+/g) || []).map((x) => x.slice
 	// 同じ内容は1つに畳む。**鍵は内容そのもの**なので、内容が違えば必ず別の像になる。
 	const same = asm("t :\n\ta :\n\t\tx : 1\n\t\ty : 2\n\tb :\n\t\tx : 1\n\t\ty : 2\nt ' a");
 	checkTrue("入れ子：同じ内容は1つに畳む", anonLabels(same.text).length === 1, anonLabels(same.text).join(","));
-	// 32 ビット FNV-1a では衝突していた組（実際に踏んだ）。要約で畳むと 1 本になる。
-	const clash = asm("t :\n\tesc :\n\t\ta : 1\n\t\tb : 48\n\t\tc : 54\n\tsep :\n\t\ta : 3\n\t\tb : 210\n\t\tc : 80\nt ' esc");
-	checkTrue("入れ子：内容が違えば畳まない（衝突した組）", anonLabels(clash.text).length === 2, anonLabels(clash.text).join(","));
+	// **衝突する組は、書き置かずにここで探す。**
+	//
+	// ここにはかつて「実際に踏んだ 32 ビット FNV-1a の衝突組」が値で書いてあった。ところが
+	// その後 `internAnonImage` の鍵の綴りが変わり（整列が前に付いた）、**書き置いた組は今の
+	// 綴りではもう衝突しない**。実測で、鍵を 32 ビット FNV-1a の要約へ差し替えても 42 本
+	// 全部が緑だった——**記憶に残っている黙った誤答そのものの変更が、今日入れても通る**。
+	//
+	// 証人を書き置くと腐る。だから**その場で探す**。しかも探した組が本当に衝突することを
+	// 先に確かめる（下の1本目）ので、鍵の綴りがまた変わったらそこが落ちて「証人を作り直せ」と
+	// 言う。**黙って牙が抜けることが無い。**
+	const fnv1a32 = (s) => {
+		let h = 0x811c9dc5;
+		for (let i = 0; i < s.length; i++) {
+			h ^= s.charCodeAt(i);
+			h = Math.imul(h, 0x01000193) >>> 0;
+		}
+		return h >>> 0;
+	};
+	// `internAnonImage` が組み立てる鍵と同じ形（`pass4.js` の `a:${align}:${body.join("\n")}`）。
+	// **ここだけは同じ事実を2箇所に書いている**が、下の1本目が「この形で本当に衝突するか」を
+	// 毎回確かめるので、食い違えば黙らずに落ちる。
+	const anonKey = (vals) => `a:8:${vals.map((v) => `\t.quad ${v}`).join("\n")}`;
+	let clashPair = null;
+	{
+		const seen = new Map();
+		search: for (let a = 0; a < 300 && !clashPair; a++)
+			for (let b = 0; b < 300; b++)
+				for (let c = 0; c < 300; c++) {
+					const k = anonKey([a, b, c]);
+					const h = fnv1a32(k);
+					const hit = seen.get(h);
+					if (hit && hit.k !== k) { clashPair = [hit.v, [a, b, c]]; break search; }
+					if (!hit) seen.set(h, { k, v: [a, b, c] });
+				}
+	}
+	checkTrue(
+		"入れ子：要約で畳めば衝突する組を見つけられる（証人の前提）",
+		!!clashPair && anonKey(clashPair[0]) !== anonKey(clashPair[1]) && fnv1a32(anonKey(clashPair[0])) === fnv1a32(anonKey(clashPair[1])),
+		clashPair ? `${JSON.stringify(clashPair)} の digest が一致しない——鍵の綴りが変わった。証人を作り直すこと` : "300^3 の範囲で衝突が見つからない",
+	);
+	if (clashPair) {
+		const st = (n, v) => `\t${n} :\n\t\ta : ${v[0]}\n\t\tb : ${v[1]}\n\t\tc : ${v[2]}`;
+		const clash = asm(`t :\n${st("p", clashPair[0])}\n${st("q", clashPair[1])}\nt ' p`);
+		checkTrue(
+			"入れ子：内容が違えば畳まない（要約なら衝突する組）",
+			anonLabels(clash.text).length === 2,
+			`${JSON.stringify(clashPair)} → ${anonLabels(clash.text).join(",")}`,
+		);
+	}
 	// 幅が違えば別の像である（整列も鍵に入っている）。
 	const width = asm("n :\n\ta :\n\t\tp : 477\n\t\tq : 259\n\tb :\n\t\tp : 0\n\t\tq : 60\n\t\tr : 84\nn ' a");
 	checkTrue("入れ子：幅が違えば畳まない", anonLabels(width.text).length === 2, anonLabels(width.text).join(","));
