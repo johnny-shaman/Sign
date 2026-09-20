@@ -1678,6 +1678,24 @@ function structuralEqual(l, r) {
   // **1要素の器とその要素は構造として等しい**（`[x] ≅ x`、原理8）。機械も狭い側を1要素へ広げて比べる。
   if (Array.isArray(l) && l.length === 1) return structuralEqual(l[0], r);
   if (Array.isArray(r) && r.length === 1) return structuralEqual(l, r[0]);
+  // **`String ≅ List(Char)` である**（利用者の裁定 2026-09-20）。文字の並びと文字列は
+  // 同じものであって、書き方が違うだけである——`\\a , \\b , \\c` も `` `abc` `` も、
+  // 書き手は**文字を並べた**だけである。
+  //
+  // ここが無条件に false を返していたので、`` ||(\\a , \\b , \\c == `abc`)|| `` が
+  // **解釈 0 / 機械 3、診断ゼロ**で割れていた。バッククォートを1つも書かない
+  // `a : \\a , \\b , \\c` と `b : \\a \\b \\c` でも同じ割れが出る——作っているのは
+  // pass3 の2か所（積の均質 → `List(Char)` ／ 余積の文字吸収 → `String`）で、
+  // **どちらの綴りを書くかは書き手の意図ではない**。
+  //
+  // 機械は元から「同じ」と答えている（`{ptr,len}` と要素幅1で比べる）ので、寄せるのは
+  // 解釈器の側である。1要素の規則（`[x] ≅ x`、上の2行）はここより先に効くので、
+  // 長さ2以上の並びだけがここへ落ちてきていた。
+  //
+  // **符号位置で割る**（`[...r]`）。`split("")` だとサロゲート対が壊れる——
+  // `` `𐀀𐀁𐀂` `` を解釈器が 6 と数えていた件と同じ形である。
+  if (Array.isArray(l) && typeof r === "string") return structuralEqual(l, [...r]);
+  if (typeof l === "string" && Array.isArray(r)) return structuralEqual([...l], r);
   if (Array.isArray(l) || Array.isArray(r)) return false;
   const lIsPlainObject = l !== null && typeof l === "object" && !l.__lambda__;
   const rIsPlainObject = r !== null && typeof r === "object" && !r.__lambda__;
