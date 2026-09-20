@@ -79,6 +79,10 @@ function machine(source, charset = "ascii", layer = 1) {
  * 期待値は書かない——`law("a + __ == a", "7 + __", "7")` ではなく、両方を走らせて
  * 突き合わせる。解釈器と実機は**別々に**判定する（片方が拒否ならその側は数えない）。
  */
+// 側ごとの「試した数」と「拒否で飛ばした数」。**覆いの広さそのものを golden にする。**
+const attempted = {};
+const skipped = {};
+
 function law(note, lhs, rhs, opts = {}) {
 	const { charset = "ascii", wrap = (e) => e } = opts;
 	const sides = [["解釈", (s) => interp(wrap(s), charset)]];
@@ -90,7 +94,17 @@ function law(note, lhs, rhs, opts = {}) {
 		// **出せないことと間違うことは別である。** 片方でも「拒否」なら、その側は法則に
 		// ついて何も言っていない（「まだ」と言えている）ので数えない。ここを失敗に数えると、
 		// 実装の穴と設計の誤りが混ざって、直したいものが見えなくなる。
-		if (a === "拒否" || b === "拒否") continue;
+		//
+		// **ただし数えないことと見ないことは別である。** ここを素通しにしていたので、
+		// `pass4` が広い範囲で出せなくなっても**この門は緑のまま**だった——実測で、機械側を
+		// 全部「拒否」にしても 252/252 で通る。点数は「法則が成り立った回数」と「まだと
+		// 言えている回数」を区別しないので、覆いが痩せたことが数字に出ない。
+		// 側ごとに**試した数と飛ばした数**を控え、下で golden に突き合わせる。
+		attempted[who] = (attempted[who] || 0) + 1;
+		if (a === "拒否" || b === "拒否") {
+			skipped[who] = (skipped[who] || 0) + 1;
+			continue;
+		}
 		total++;
 		if (a === b) {
 			passed++;
@@ -623,6 +637,39 @@ for (const p of ["0x10", "0x1000", "0xFFFFFFFFFFFFFFF0"]) {
 for (const [p, k] of [["0x1000", "16"], ["0x10", "16"], ["0xFFFFFFFFFFFFFFE0", "16"]]) {
 	law(`(p + k) - k == p（p = ${p}、k = ${k}）`, `f : p k ? (p + k) - k\nf ${p} ${k}`, `f : p k ? p\nf ${p} ${k}`);
 	law(`(p - k) + k == p（p = ${p}、k = ${k}）`, `f : p k ? (p - k) + k\nf ${p} ${k}`, `f : p k ? p\nf ${p} ${k}`);
+}
+
+// ---------------------------------------------------------------------------
+// 覆いの広さ（**「まだ」と言えている回数そのもの**）
+// ---------------------------------------------------------------------------
+//
+// 上の点数は「法則が成り立った回数」しか数えていない。拒否は素通しなので、**後段が
+// 出せなくなっても点数は下がらない**——実測で、機械側を全部「拒否」に潰しても
+// 252/252 で緑だった。`corpus.js` の「既知を除外せず**記録して覆う**」と同じ作法で、
+// 飛ばした数そのものを golden に置く。
+//
+// **2方向に効く。** 後段が出せる範囲を広げれば飛ばす数が減って落ち、出せなくなれば
+// 増えて落ちる。どちらの日も「表を書き換えろ」と言わせるためにここに在る。
+//
+// 解釈器が飛ばすのは、解釈器自身が値を出せない形（層の門番に止められる形）だけである。
+console.log("--- 覆いの広さ ---");
+// **機械が 71 本を「まだ」と言っている**（248 本中 28.6%）。ここが減れば後段が広がった日で、
+// 増えれば狭まった日である。解釈器の側が 0 なのは、層の門番に止められる形をこのファイルが
+// 一本も書いていないからで、**0 のままであることにも意味がある**（解釈器が出せなくなったら
+// ここが動く）。
+const COVERAGE_GOLDEN = { 解釈: { attempted: 248, skipped: 0 }, 機械: { attempted: 248, skipped: 71 } };
+for (const who of ["解釈", "機械"]) {
+	if (who === "機械" && !HAS_QEMU) continue;
+	const got = { attempted: attempted[who] || 0, skipped: skipped[who] || 0 };
+	const want = COVERAGE_GOLDEN[who];
+	total++;
+	const ok = got.attempted === want.attempted && got.skipped === want.skipped;
+	if (ok) {
+		passed++;
+		console.log(`ok   ${who} 試した ${got.attempted} ／ 拒否で飛ばした ${got.skipped}`);
+	} else {
+		console.log(`FAIL ${who} 試した ${got.attempted}（表は ${want.attempted}）／ 拒否で飛ばした ${got.skipped}（表は ${want.skipped}）`);
+	}
 }
 
 console.log(`\n${passed}/${total} passed`);
