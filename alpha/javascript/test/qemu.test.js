@@ -98,12 +98,13 @@ function agree(note, source, charset = "ascii", layer = 1) {
  */
 // `reason` を渡すと、名指しの**理由**も見る。別の理由で断っていても「名指しされた」には
 // なるので、止まった場所が違うことを見逃す。
-function checkNamed(note, source, charset = "ascii", reason = null) {
+// **層は指定できる。** 既定は 1 だが、層で断り方が変わる形（生の番地）は上の層で見る。
+function checkNamed(note, source, charset = "ascii", reason = null, layer = 1) {
 	total++;
 	let msg = "（診断が出なかった）";
 	try {
 		const { nodes, env } = compile(source, { charset, readImport });
-		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset, layer: 1 });
+		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset, layer });
 		if (r.diagnostics.length > 0 && reason && !r.diagnostics[0].message.includes(reason)) {
 			msg = "別の理由：" + r.diagnostics[0].message;
 		} else if (r.diagnostics.length > 0) {
@@ -1474,6 +1475,36 @@ agree("入れ子の枝（内側が尽きる）", "f : x y ?\n\tx < 0 :\n\t\ty > 
 	agree("真の比較は落ちない（対照）", "g : s ? `<` ((s ' 0) = (s ' 0)) `>`\n||g `ab`||");
 	agree("既定の引数が __", "g :\n\t\ts\n\t\tc : s ' 9\n\t? `<` c `>`\n||g `ab`||");
 	agree("既定の引数が範囲内（対照）", "g :\n\t\ts\n\t\tc : s ' 0\n\t? `<` c `>`\n||g `ab`||");
+}
+
+// ---- **生の番地の字面は、層2以上では書けない** ----
+//
+// 利用者の裁定（2026-09-21）：「任意のアドレスからの読み込みと書き込みは一考する必要が
+// あるが、無ければ IO が全く動かなくなる。**セルフホストで必要が無いなら一先ず断る**」。
+//
+// 門は算術（layer > 0）と書き込み（layer > 1）には在ったが、**読み（`@p`）には無く、
+// しかも仮引数を1つ挟むと2つとも素通りしていた**——`f : n ? n # 5` に `f 0x40810000` は
+// layer 4 で**診断ゼロ**、出る命令は `str x14, [x0]` 1本だった。`rawAddressNode` は名前を
+// 辿るが、仮引数は値ノードを持たないので辿れない。
+//
+// **層0・層1は無傷である。** `emit.sn` の `out : 0x9000000`（UART）はコーパスが層1で
+// 回しているので、そこは通り続けなければならない——下の対照がそれを見る。
+{
+	const RAW = "p : 0x40810000\n";
+	// 断る側（層2以上）。**理由まで照合する**——別の門で止まっていたら、この門は無くても緑になる。
+	checkNamed("層2：生の番地へ書く", RAW + "p # 5", "ascii", "生の番地の字面を書けません", 2);
+	checkNamed("層2：生の番地を読む（門が無かった）", RAW + "@p", "ascii", "生の番地の字面を書けません", 2);
+	checkNamed("層2：仮引数を通した書き（素通りしていた）", "f : n ? n # 5\nf 0x40810000", "ascii", "生の番地の字面を書けません", 2);
+	checkNamed("層2：仮引数を通した読み（素通りしていた）", "f : n ? @n\nf 0x40810000", "ascii", "生の番地の字面を書けません", 2);
+	checkNamed("層4でも同じ", "f : n ? n # 5\nf 0x40810000", "ascii", "生の番地の字面を書けません", 4);
+	// **対照。層1までは通る。** ここが赤いと、上の5本は「番地が丸ごと書けない」を見ているだけになる。
+	//
+	// **`agree` は使えない。** 解釈器は生の番地を参照セルとしてモデルしており `@p` が `p`
+	// そのものを返す（実測 1082130432 ＝ 0x40800000）——機械と同じものをモデルしていない
+	// ので、このファイルの注記どおり `machineIs` で期待値を書く。
+	machineIs("層1：生の番地へ書いて読む", "0x40800000 # 65\n@0x40800000", "65", 1);
+	machineIs("層1：仮引数を通しても通る", "f : n ? @n\n0x40800000 # 66\nf 0x40800000", "66", 1);
+	machineIs("層0：MMIO はそのまま", "0x40800000 # 77\n@0x40800000", "77", 0);
 }
 
 // ---- **積（`,`）でも単位元は場所を取らない** ----
