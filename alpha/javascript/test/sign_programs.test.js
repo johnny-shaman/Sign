@@ -231,18 +231,35 @@ check("parser.sn: 単項（7 のみ）", sexpr("expr " + "[`7`]"), "7");
 // 段は 11（表の 10.x）で、**算術より弱い**。`1 + f 1` は `(1 + f) 1` であって `1 + (f 1)`
 // ではない。ここを取り違えて「並置が一番強い」と置くと、規則そのものを作り変えてしまう
 // ——実測で解釈器と割れて気づいた（解釈器 1 ／ 作り変えた側 3）。
+//
+// **同じ段の中の結び方は Sign に任せ、連なりは平らなまま出す。** 最初は左結合で2つずつ括って
+// いた（`h 5 2` → `((h 5) 2)`）。関数の適用ならそれで同じ値だが、値どうしの並置は**構築**で
+// 平らな器になる——`1 2 3` が `((1 2) 3)` = `[[1 2] 3]` に、`1 d 2` が `[10 2]`（中置は
+// `[1 20]`）に化けていた。Sign の並置は連なりごと型とアリティで解くので、`(h 5 2)` と
+// そのまま渡せば中置と同じになる。
 {
-	const D = "f : x ? x + 1\nh : x y ? x - y\n";
+	const D = "f : x ? x + 1\nh : x y ? x - y\nd : n ? n * 10\n";
 	const pj = (note, toks, want, infix) => {
 		const got = sexpr("expr " + toks);
 		check(note, got, want);
 		check(note + "：走らせると中置と同じ", evalSign(D + String(got)), evalSign(D + infix));
 	};
 	pj("parser.sn: 適用 f 1", "[`f` , `1`]", "(f 1)", "f 1");
-	pj("parser.sn: 左結合のカリー化 h 5 2", "[`h` , `5` , `2`]", "((h 5) 2)", "h 5 2");
+	pj("parser.sn: 連なりは平らに h 5 2", "[`h` , `5` , `2`]", "(h 5 2)", "h 5 2");
+	pj("parser.sn: 値の並置は構築 1 2 3", "[`1` , `2` , `3`]", "(1 2 3)", "1 2 3");
+	pj("parser.sn: 型で決まる並置 1 d 2", "[`1` , `d` , `2`]", "(1 d 2)", "1 d 2");
 	pj("parser.sn: 算術は適用より強い f 1 + 1", "[`f` , `1` , `+` , `1`]", "(f [[+] 1 1])", "f 1 + 1");
 	pj("parser.sn: 括りは1語のまま項になる", "[`f` , `(h 5 2)`]", "(f (h 5 2))", "f (h 5 2)");
 }
+
+// **止まること、読めない演算子を項にしないこと。**
+//
+// 末尾が演算子（`1 +`・`a :`）だと、並置の段が長さを跨いで回り続けていた（両エンジンとも
+// 停止しない）。演算子の字だけでできた語（`===`・`!`・`><`）は、表に中置として無ければ読めない
+// 演算子であって項ではない——項として数えると `((1 ===) 2)` という誤った木が黙って出た。
+check("parser.sn: 末尾の演算子で止まる 1 +", isUnit(sexpr("expr [`1` , `+`]")), true);
+check("parser.sn: 廃止された綴りを項にしない 1 === 2", isUnit(sexpr("expr [`1` , `===` , `2`]")), true);
+check("parser.sn: 前置だけの ! を項にしない a ! b", isUnit(sexpr("expr [`a` , `!` , `b`]")), true);
 
 // **`[[op] L R]` ≡ `L op R`——区間は位置で被演算子を取る。**
 //
@@ -274,6 +291,43 @@ check("parser.sn: 単項（7 のみ）", sexpr("expr " + "[`7`]"), "7");
 	same("[?] x y B は2引数（部分適用）", "f : [?] x y (x - y)", "f : x y ? x - y", "g : f 10\ng 3");
 	same("[?] [x y] B は器1つ（部分適用）", "f : [?] [x y] (x - y)", "f : [x y] ? x - y", "g : f 10\ng 3");
 	same("[:] の右辺のラムダ", "[:] f ([?] x (x + 1))", "f : x ? x + 1", "f 5");
+}
+
+// ---- 字句 → 構文 → S式 → 走らせる：定義とラムダ ----
+//
+// **S式は構文木の表現で、そのまま走る。** `[:] f [[?] x y [[-] x y]]` は
+// `(define f (lambda (x y) (- x y)))` と同じ木である（`kan_extensions.md` §3.7——`[:]` は環境を
+// 拡張する射、`[?]` はカリー化の随伴）。
+//
+// 出し方の決まりは2つ：**文の頭の定義は外括りを付けない**（Sign の括りはスコープなので、
+// `[[:] x 20]` は構造体の欄 `{x: 20}` になって外から見えない）。**`?` の仮引数は並べて出す**
+// （`(x y)` と `[x y]` は字句で区別されず、括ると器を分解する仮引数に変わる——`x y ?` は
+// 2引数、`[x y] ?` は器1つで、部分適用の値が違う）。
+//
+// 往復した値が、ソースを直に走らせた値と同じことを見る。部分適用で2引数と器1つが割れる形まで。
+{
+	const BQ = String.fromCharCode(96);
+	const noExample = (name, re) => fs.readFileSync(path.join(signDir, name), "utf8").replace(/\r\n/g, "\n").split("\n").filter((l) => !re.test(l)).join("\n");
+	const CHAIN = noExample("lexer.sn", new RegExp("^tokens " + BQ)) + "\n" + noExample("parser.sn", /^expr \[/) + "\n";
+	const run = (src) => {
+		const { nodes } = compile(src, { parse: parser.parse, readImport });
+		const env = newRuntimeEnv(null);
+		let r = UNIT;
+		for (const node of nodes) r = evaluate(node, env);
+		const o = observe(r);
+		return isUnit(r) || o === undefined || o === null ? "__" : typeof o === "object" ? (o.__lambda__ ? "(関数)" : JSON.stringify(o)) : String(o);
+	};
+	const toSexpr = (src) => run(CHAIN + "expr (tokens " + BQ + src + BQ + ")");
+	check("字句→構文：定義は外括り無しで出す", toSexpr("x : 20"), "[:] x 20");
+	check("字句→構文：2引数のラムダは仮引数を並べる", toSexpr("f : x y ? x - y"), "[:] f [[?] x y [[-] x y]]");
+	check("字句→構文：器1つの仮引数はそのまま", toSexpr("f : [x y] ? x - y"), "[:] f [[?] [x y] [[-] x y]]");
+	const roundTrip = (note, src, use) => check(note, run(toSexpr(src) + "\n" + use), run(src + "\n" + use));
+	roundTrip("往復：定義", "x : 20", "x + 1");
+	roundTrip("往復：1引数", "f : x ? x + 1", "f (f 1)");
+	roundTrip("往復：2引数", "f : x y ? x - y", "f 10 3");
+	roundTrip("往復：2引数の部分適用", "f : x y ? x - y", "g : f 10\ng 3");
+	roundTrip("往復：器1つの部分適用", "f : [x y] ? x - y", "g : f 10\ng 3");
+	roundTrip("往復：部分適用を束ねる", "g : 1 + 2", "g");
 }
 
 // ---- 8-Queens（guide の例） ----

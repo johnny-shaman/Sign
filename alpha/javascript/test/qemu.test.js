@@ -1988,6 +1988,11 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("字句→構文：適用の長さ", CHAIN + "||expr (tokens `f 1`)||");
 	agreeText("字句→構文：カリー化の綴り", CHAIN, `expr (tokens \`h 5 2\`)`);
 	agreeText("字句→構文：算術は適用より強い", CHAIN, `expr (tokens \`f 1 + 1\`)`);
+	// **定義とラムダも走る木で出す。** 文の頭の `:` は外括り無し（Sign の括りはスコープ）、`?` の
+	// 仮引数は並べる（括ると器を分解する仮引数に変わる）。実機でも綴りが端から端まで同じこと。
+	agreeText("字句→構文：定義の綴り", CHAIN, `expr (tokens \`x : 20\`)`);
+	agreeText("字句→構文：2引数のラムダの綴り", CHAIN, `expr (tokens \`f : x y ? x - y\`)`);
+	agreeText("字句→構文：器1つの仮引数の綴り", CHAIN, `expr (tokens \`f : [x y] ? x - y\`)`);
 	agree("字句→構文：複数文字", CHAIN + "||expr (tokens `10 + 2`)||");
 	// **器が2つ以上ある構築でも、確保は増えない。**
 	//
