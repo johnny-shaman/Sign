@@ -2491,6 +2491,9 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 呼び出しの結果をそのまま返す関数（`mark : s ? strip_head (walk s bottom 0 0)`）
 		// も、その器は**どこかのフレームに取られている**——自分のなら、返した先では死んで
 		// いる。x8 をもらっていれば下へ渡せるので、もらう側に回す。
+		// **旗は呼び出しごとに消す。** 同じ木から2度出すことがあるので、前回の判断が
+		// 残っていると、場所を取らなかった回にまで断りが出る。
+		n._sretFreshSlot = null;
 		const sp0raw = em.sretPlan ? em.sretPlan.get(callee) || em.sretPlan.get(baseName) : null;
 		const sp = sp0raw && sp0raw.needsSlot ? sp0raw : null;
 		// **追記なら、場所は既に決まっている。** `(s ' 0) (f (s ' 1~))` の `f` は自分の
@@ -2530,6 +2533,13 @@ function genExpr(node, env, em, scope, tail = false) {
 			// 場所ごと渡すのだから、残りもそのまま渡る。
 			const mine = em.sretLimit;
 			if (mine !== null && mine !== undefined) limit = () => em.load(SRET_LIMIT, mine, "残りももらったまま渡す");
+		} else if (sp && n._sretContentInto !== undefined && n._sretContentInto !== null) {
+			// **中身は呼び手のスロットの続きへ書く。** 自分の枠に取ると、返った先では
+			// `mov sp, x29` が捨てた場所を器が指す。残りはバイト数で渡す（要素が値の並び
+			// なので、呼ばれた側の照合はそのまま効く）。
+			em.load("x8", n._sretContentInto, "中身の置き場（呼び手のスロットの続き）");
+			const room = n._sretContentRoom;
+			limit = () => em.load(SRET_LIMIT, room, "置き場の残り（バイト）");
 		} else if (sp) {
 			// 返値スロットも `sub sp` で取る場所である（門番）。
 			if (!allocaAllowed(em, n, callee + " の返値スロット（sret）")) return false;
@@ -2541,6 +2551,41 @@ function genExpr(node, env, em, scope, tail = false) {
 				// れていて渡らないので（`drop`）、計画表が言う仮引数の位置と、ここで実際に
 				// 積んだ位置は同じではない。`take_while $is_digit s` の `s` は仮引数では
 				// 2番目だが、渡すのは1本目である。
+				// **中身の置き場も同じスロットに取る。**
+				//
+				// 要素を `{ptr, len}` で運ぶ器は、記述子の並びだけでは足りない——指す先の中身が
+				// 器と同じだけ生きなければ、返った先で番地だけが残る。記述子の**後ろ**に置き場を
+				// 付け、その頭に「次に書く場所」と「終わり」を2語で置く:
+				//
+				//   [ 記述子 16L ][ 次に書く場所 ][ 終わり ][ 中身 M ]
+				//
+				// **輪のどの段からも同じ番地が出る。** 追記は宛先を `16×個数` 進めて残りを同じ
+				// 個数だけ狭めるので（`add x10, x19, x24, lsl #4` と `sub x15, x20, x24`）、
+				// `宛先 + 16×残り` が不変だからである。だから継ぎ足し位置を段の間で渡す必要が
+				// 無い——レジスタも引数も増えない。
+				let mslot = null;
+				if (sp.content) {
+					em.emit(`mov x11, #0`, "中身の総量（バイト）を測る");
+					for (const t of sp.content) {
+						const shifted = t.sizeOfIndex - drop.filter((i) => i < t.sizeOfIndex).length;
+						const src = parts[shifted];
+						if (!src || src.w !== 2) { mslot = false; break; }
+						// **測り方は実引数が決める。** `String` の中身の総量は `len` そのもので、
+						// `List(String)` なら μ（各要素の `len` の和）である。
+						const a = unwrap(passed[shifted]);
+						emitTermMeasure(em, src.off, a && a.atomType === "String" ? "len" : "chars", SCRATCH[0]);
+						if (t.coef !== 1) {
+							em.emit(`mov ${SCRATCH[1]}, #${t.coef}`, "段ごとの個数");
+							em.emit(`mul ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "係数を掛ける");
+						}
+						em.emit(`add x11, x11, ${SCRATCH[0]}`, "この器の中身ぶんを足す");
+					}
+					if (mslot !== false) {
+						mslot = em.push();
+						if (mslot === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+						em.store("x11", mslot, "中身の上界を退避");
+					}
+				}
 				em.emit(`mov x11, #${sp.konst}`, "定数の枝ぶん");
 				for (const t of sp.terms) {
 					const shifted = t.sizeOfIndex - drop.filter((i) => i < t.sizeOfIndex).length;
@@ -2558,9 +2603,25 @@ function genExpr(node, env, em, scope, tail = false) {
 					em.emit(`mov ${SCRATCH[1]}, #${sp.width}`, "要素の幅");
 					em.emit(`mul ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "バイト数へ");
 				}
+				if (mslot !== null && mslot !== false) {
+					em.load(SCRATCH[1], mslot, "中身の上界");
+					em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "中身の置き場ぶん");
+					em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #16`, "頭の2語（次に書く場所・終わり）");
+				}
 				em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #15`, "16 バイトへ丸める");
 				em.emit(`and ${SCRATCH[0]}, ${SCRATCH[0]}, #0xfffffffffffffff0`);
 				em.emit(`sub sp, sp, ${SCRATCH[0]}`, "返値スロットを取る（sret）");
+				if (mslot !== null && mslot !== false) {
+					// 置き場の頭は `底 + 16×個数`。ここは輪のどの段でも同じ番地になる。
+					em.emit(`add ${SCRATCH[0]}, sp, x11, lsl #4`, "中身の置き場の頭");
+					em.load(SCRATCH[1], mslot, "中身の上界");
+					em.emit(`add ${SCRATCH[1]}, ${SCRATCH[0]}, ${SCRATCH[1]}`);
+					em.emit(`add ${SCRATCH[1]}, ${SCRATCH[1]}, #16`, "中身の終わり");
+					em.emit(`str ${SCRATCH[1]}, [${SCRATCH[0]}, #8]`, "終わりを置く");
+					em.emit(`add ${SCRATCH[1]}, ${SCRATCH[0]}, #16`, "次に書く場所（最初は中身の先頭）");
+					em.emit(`str ${SCRATCH[1]}, [${SCRATCH[0]}]`);
+					em.pop(1);
+				}
 				// x11 は個数のまま残っている（丸めもバイト換算も x9 の側でやった）。
 				limit = () => em.emit(`mov ${SRET_LIMIT}, x11`, "入る個数を渡す（sret）");
 			} else {
@@ -2570,6 +2631,10 @@ function genExpr(node, env, em, scope, tail = false) {
 				// 丸める前の個数が上界である（丸めたぶんは余りであって、約束ではない）。
 				limit = () => em.emit(`mov ${SRET_LIMIT}, #${sp.konst}`, "入る個数を渡す（sret）");
 			}
+			// **この場所は自分の枠の中である。** エピローグの `mov sp, x29` が捨てるので、
+			// ここへ書かせた結果の**番地**を外へ出すことはできない（値を写すのは構わない）。
+			// 印を呼び出しノードに付けて、番地で置く側（器の要素）に見させる。
+			n._sretFreshSlot = callee;
 			em.movedSp = true;
 			em.emit("mov x8, sp", "返値スロットのアドレスを渡す");
 		}
@@ -4071,7 +4136,43 @@ function genExpr(node, env, em, scope, tail = false) {
 					em.pop(1);
 					continue;
 				}
+				// **要素を番地で置くなら、指す先も呼び手のスロットの中へ書かせる。**
+				//
+				// 呼び先に自分の枠を取らせると、返るときの `mov sp, x29` が捨てた所を器が指す。
+				// 記述子の並びの後ろに置いた中身の置き場（`emitContentArena`）の「次に書く場所」
+				// を宛先として渡し、返ってきた長さぶん継ぎ足す。
+				//
+				// **値の並びを返す呼び先だけ**（`e.width === 1`）。入れ子の器はその中身にもまた
+				// 置き場が要るので、そちらは下の門が断る。
+				let arenaSlot = null;
+				if (w === 16 && !spreadHere) {
+					const srcNode = stripExpand(parts[i]);
+					const nm = appendableCallee(srcNode, em);
+					const e = nm && em.sretPlan ? em.sretPlan.get(nm) : null;
+					if (e && e.width === 1) {
+						const aSlot = em.push();
+						const cSlot = em.push();
+						const rSlot = em.push();
+						if (aSlot === null || cSlot === null || rSlot === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+						if (emitContentArena(em, SCRATCH[0])) {
+							em.store(SCRATCH[0], aSlot, "中身の置き場の頭");
+							em.emit(`ldr ${SCRATCH[1]}, [${SCRATCH[0]}]`, "次に書く場所");
+							em.store(SCRATCH[1], cSlot);
+							em.emit(`ldr ${SCRATCH[0]}, [${SCRATCH[0]}, #8]`, "置き場の終わり");
+							em.emit(`sub ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}`, "残り（バイト）");
+							em.store(SCRATCH[0], rSlot);
+							srcNode._sretContentInto = cSlot;
+							srcNode._sretContentRoom = rSlot;
+							arenaSlot = aSlot;
+						} else em.pop(3);
+					}
+				}
 				const cw = genExpr(stripExpand(parts[i]), env, em, scope);
+				if (arenaSlot !== null) {
+					const srcNode = stripExpand(parts[i]);
+					srcNode._sretContentInto = undefined;
+					srcNode._sretContentRoom = undefined;
+				}
 				if (cw === false) return false;
 				if (cw !== 2) {
 					em.pop(cw === TAIL ? 0 : cw);
@@ -4133,6 +4234,30 @@ function genExpr(node, env, em, scope, tail = false) {
 						);
 				}
 				if (w === 16 && !spreadHere) {
+					// **要素を番地で置く器は、指す先の寿命まで引き受ける。**
+					//
+					// 下の `str x14, [x11]` は呼び先が書いた場所の**番地をそのまま**器へ入れる。
+					// その場所が自分の枠の中（`sub sp` で取った sret のスロット）だと、返るときの
+					// `mov sp, x29` が捨てた所を器が指す——次に誰かが枠を取った瞬間に中身が消える。
+					//
+					// **これは長さを測っても見えない。** `len` は正しく書かれるので `||…||` は合い、
+					// 中身だけが死ぬ。`lexer.sn` の `tokens` がまさにこの形で、`expr` を後ろに繋ぐと
+					// `[[+] 1 2]` が `[[+] \x00 \x01]` になっていた（門は緑のまま）。
+					//
+					// **直し方は上の `emitContentArena` である**——記述子の並びの後ろに中身の置き場を
+					// 取り、呼び先にそこへ書かせる。届いていないのは、置き場の中でさらに置き場が要る形
+					// （要素がまた器）と、字面で置く要素を含む形（`konst` の枝は引数から測れない）。
+					// そこは**黙って踏むより断る**。
+					{
+						const src = stripExpand(parts[i]);
+						if (src && src._sretFreshSlot)
+							return em.fail(
+								n,
+								`器の構築はまだ出せません（要素を \`{ptr, len}\` で運ぶ器に、${src._sretFreshSlot} が` +
+									"この枠で取った場所へ書いた結果を置こうとしました。返るときに捨てる場所なので、" +
+									"番地だけが残って中身が死にます。この形の置き場はまだ取れません）"
+							);
+					}
 					// 器の `__` は `{0, 0}`（添字の枝が既にそう出している）。1要素として
 					// 置くときも単位元なので、置かずに個数も進めない。
 					em.load("x14", so + 8, "この要素の len");
@@ -4144,9 +4269,18 @@ function genExpr(node, env, em, scope, tail = false) {
 					em.emit("str x14, [x11, #8]", "この要素の len");
 					em.load("x14", so, "この要素の ptr");
 					em.emit("str x14, [x11]");
+					if (arenaSlot !== null) {
+						// 中身を書いたぶん、置き場の「次に書く場所」を進める。ここを忘れると
+						// 2つ目の要素が1つ目を踏む（長さは合うので、また中身だけが壊れる）。
+						em.load(SCRATCH[1], so + 8, "この要素の len");
+						em.emit(`add x14, x14, ${SCRATCH[1]}`, "次に書く場所");
+						em.load(SCRATCH[1], arenaSlot, "中身の置き場の頭");
+						em.emit(`str x14, [${SCRATCH[1]}]`);
+					}
 					em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, #1`, "1つぶん進む");
 					em.store(SCRATCH[0], cnt);
 					em.pop(2);
+					if (arenaSlot !== null) em.pop(3);
 					if (skipB) em.label(skipB);
 					continue;
 				}
@@ -9408,6 +9542,25 @@ function emitTermMeasure(em, off, measure, dst) {
  * 割り当ての持ち駒（10本）を越えて関数が丸ごとメモリへ落ちる——**持たないで済むものは
  * 持たない**。使うのは出口の2箇所だけなので、そこで引く方が安い。
  */
+/**
+ * **中身の置き場の頭を出す。** `器の底 + 16×もらった個数` ——追記は宛先を `16×個数`
+ * 進めて残りを同じ個数だけ狭めるので、この和は輪のどの段でも同じ番地になる。だから
+ * 継ぎ足し位置を段の間で渡す必要が無い（そこの2語に置いてある）。
+ *
+ * 使うのは `SCRATCH[1]` と `dst` だけ。もらっていなければ false。
+ */
+function emitContentArena(em, dst) {
+	if (em.sretDest === null || em.sretDest === undefined) return false;
+	if (em.sretLimit === null || em.sretLimit === undefined) return false;
+	// **合計は引かない。** ループは宛先を `幅×個数` 進めるのと同時に、残りそのものを同じ
+	// 個数だけ狭めて書き戻す（`次の周の残り`）。だから和は最初から不変で、引くと二重に
+	// なる——周ごとに `16×合計` だけ手前を指し、実測では「記号の次の語だけが落ちる」形で出た。
+	em.load(dst, em.sretDest, "いまのカーソル");
+	em.load(SCRATCH[1], em.sretLimit, "もらった個数");
+	em.emit(`add ${dst}, ${dst}, ${SCRATCH[1]}, lsl #4`, "中身の置き場の頭");
+	return true;
+}
+
 function emitSretBase(em, dst, width) {
 	const shift = width === 16 ? 4 : width === 8 ? 3 : width === 4 ? 2 : width === 2 ? 1 : 0;
 	em.load(dst, em.sretDest, "いまのカーソル");
@@ -10018,7 +10171,20 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		//
 		// 3つ目を混ぜると、返すだけの関数にまで `sub sp` が付く。
 		const needsSlot = !!(m && m.size) && (builds || arms.some((a) => returnsCallResult(a, known)));
-		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot });
+		// **中身の置き場にも上界が要る。** 要素を `{ptr, len}` で運ぶ器（幅 16）は、記述子の
+		// 並びだけでは足りない——指す先の**中身**が呼び手のスロットの中に無ければ、返った先で
+		// 死ぬ。記述子の上界が `Σ coef×||器||` なら、中身はその器の**中身の総量**で抑えられる
+		// （要素は引数を食って作られるので、総量が増える形は実行時の照合で `__` へ落ちる）。
+		//
+		// 測り方は呼ぶ側が実引数を見て決める（`content`）——`String` の中身の総量は `len`
+		// そのものだが、`List(String)` なら μ（各要素の `len` の和）である。
+		//
+		// **konst の枝は今は出せない。** 字面で置く要素の中身は引数から測れないので、その
+		// ぶんの置き場が言えない。上界を持たないまま出すと踏み抜くので、載せない。
+		const content = m && m.size === 16 && b.konst === 0 && terms.length > 0
+			? terms.map((x) => ({ coef: x.coef, sizeOf: x.sizeOf, sizeOfIndex: x.sizeOfIndex, measure: "content" }))
+			: null;
+		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot, content });
 	}
 	return plan;
 }

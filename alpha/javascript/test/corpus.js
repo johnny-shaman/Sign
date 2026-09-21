@@ -80,7 +80,11 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  */
 export const CORPUS = [
 	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8e35f8d0a07dc74a", plain: "2494ff932efb4e17" } },
-	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 602, plain: 1004 }, digest: { full: "85319fb8742fb2ad", plain: "66f750abde5d0a1a" } },
+	// **`tokens` は長さだけ合っていた時期がある。** `take_while` が作った語の本体が `tokens`
+	// 自身の枠に在り、返るときに捨てられていた——器へ入るのはその番地なので `len` は正しく、
+	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
+	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる（+19 命令）。
+	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 621, plain: 1028 }, digest: { full: "16332a23d5b96d9d", plain: "457afdc66ca8dae3" } },
 	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "7616b47db9dce7c1", plain: "04f2d2defe573048" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は

@@ -119,6 +119,57 @@ function checkNamed(note, source, charset = "ascii", reason = null, layer = 1) {
 }
 
 /**
+ * **器を辿って、綴りを全部突き合わせる。**
+ *
+ * `agree` が見るのは `_.main` の x0 1本だけなので、器が返ってきても届くのは長さだけである。
+ * 中身を見るには `' i` で引き直すしかなく、これまではそれを**何点か抜き取って**いた。
+ *
+ * **抜き取りは穴を素通りする。** `(expr (tokens `1 + 2`)) ' i` を 0・1・3・8 で見ていたが、
+ * `[[+] 1 2]` のその4つは全部 `[` `[` `]` `]` ——字面から来て生き残る側である。壊れていたのは
+ * 5 と 7（`take_while` が作った数字）で、標本の隙間にちょうど落ちていた。長さは合うので
+ * `||…||` も黙る。**器を辿るなら、端から端まで比べる。**
+ *
+ * 両側とも `interp` / `machine` をそのまま使う（`Char` は符号位置に揃えてある）。
+ * 足しているのは「1要素ずつ辿る」ことだけで、比べ方は変えない。
+ *
+ * **前提も見る。** 長さが取れないと比較が1度も走らず、軸が壊れていても緑になる。
+ */
+function agreeText(note, defs, expr, charset = "ascii", layer = 1) {
+	total++;
+	const src = (e) => defs + "\n" + e;
+	let n;
+	try {
+		n = Number(interp(src("||" + expr + "||"), charset));
+	} catch (e) {
+		console.log(`FAIL ${note.padEnd(34)} 解釈で例外：${e.message}`);
+		return;
+	}
+	if (!Number.isInteger(n) || n <= 0) {
+		console.log(`FAIL ${note.padEnd(34)} 綴りの長さが取れない（${n}）——比較が1度も走らない`);
+		return;
+	}
+	const sides = (f) => {
+		let out = "";
+		for (let i = 0; i < n; i++) {
+			try {
+				out += " " + f(src("(" + expr + ") ' " + i));
+			} catch (x) {
+				out += " [" + x.message.slice(0, 40) + "]";
+			}
+		}
+		return out;
+	};
+	const a = sides((s) => interp(s, charset));
+	const b = sides((s) => machine(s, charset, layer));
+	if (a === b) {
+		passed++;
+		console.log(`ok   ${note.padEnd(34)} ${n} 文字とも一致`);
+	} else {
+		console.log(`FAIL ${note.padEnd(34)} 解釈=${a.trim()} / 機械=${b.trim()}`);
+	}
+}
+
+/**
  * 機械の側だけを見る。**インタプリタと同じものをモデルしていない場所**で使う——
  * 番地の算術がそれで、インタプリタは参照セル（getter/setter）、機械は整数である。
  * 突き合わせられないので期待値を書くしかない。使うのはここだけに留める。
@@ -1879,7 +1930,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 		.filter((l) => !/^expr [\\[]/.test(l))
 		.join("\n");
 	agree("parser.sn：出力の長さ", PARSER + "\n||expr [\\1 , \\+ , \\2]||");
-	for (let i = 0; i < 9; i++) agree(`parser.sn：${i} 文字目`, PARSER + `\n(expr [\\1 , \\+ , \\2 , \\* , \\3]) ' ${i}`);
+	agreeText("parser.sn：字面のトークン列の綴り", PARSER, `expr [\\1 , \\+ , \\2 , \\* , \\3]`);
 	// **上界は n が伸びても保たなければならない。** ここは長らく n=3 と n=5 しか見ておらず、
 	// **実機は n≥7 で踏み抜いていた**（qemu が時間切れで止まる）。相互再帰の輪で上界が
 	// 別々に決まっていて——`out` と `out_at` は `1 + 1×||ts||`、`out_as` と `out_one` は
@@ -1888,7 +1939,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	//
 	const TOKS = (n) => "[" + Array.from({ length: n }, (_, i) => (i % 2 ? "\\+" : "\\" + (1 + ((i >> 1) % 9)))).join(" , ") + "]";
 	for (const n of [7, 9, 11, 15, 21]) agree(`parser.sn：n=${n} の長さ`, PARSER + `\n||expr ${TOKS(n)}||`);
-	for (const i of [0, 12, 20]) agree(`parser.sn：n=11 の ${i} 文字目`, PARSER + `\n(expr ${TOKS(11)}) ' ${i}`);
+	agreeText("parser.sn：n=11 の綴りを端から端まで", PARSER, `expr ${TOKS(11)}`);
 	// **本物のトークンは語である。** 上の `TOKS` は1文字の語（`Char`）で、`10` も `==` も
 	// 書けない。要素が器（`List(String)`）になると、平らへ写すぶんを `||ts||`（語の個数）
 	// では抑えられない——要るのは μ||ts||（全語の文字数の和）で、上界の語彙にその測り方が
@@ -1899,12 +1950,12 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// そのものであり、それが実機でもそのまま働くことをここで見る。
 	const W = (...w) => "[" + w.map((x) => "`" + x + "`").join(" , ") + "]";
 	agree("parser.sn：語 1 + 2 の長さ", PARSER + `\n||expr ${W("1", "+", "2")}||`);
-	for (const i of [0, 1, 3, 5, 8]) agree(`parser.sn：語 1 + 2 の ${i} 文字目`, PARSER + `\n(expr ${W("1", "+", "2")}) ' ${i}`);
+	agreeText("parser.sn：語 1 + 2 の綴りを端から端まで", PARSER, `expr ${W("1", "+", "2")}`);
 	agree("parser.sn：複数文字 10 + 2", PARSER + `\n||expr ${W("10", "+", "2")}||`);
-	for (const i of [0, 3, 4, 5, 9]) agree(`parser.sn：10 + 2 の ${i} 文字目`, PARSER + `\n(expr ${W("10", "+", "2")}) ' ${i}`);
+	agreeText("parser.sn：10 + 2 の綴りを端から端まで", PARSER, `expr ${W("10", "+", "2")}`);
 	agree("parser.sn：二連の演算子 1 == 2", PARSER + `\n||expr ${W("1", "==", "2")}||`);
 	agree("parser.sn：入れ子 10 + 2 * 30", PARSER + `\n||expr ${W("10", "+", "2", "*", "30")}||`);
-	for (const i of [0, 5, 10, 16]) agree(`parser.sn：入れ子の ${i} 文字目`, PARSER + `\n(expr ${W("10", "+", "2", "*", "30")}) ' ${i}`);
+	agreeText("parser.sn：入れ子の綴りを端から端まで", PARSER, `expr ${W("10", "+", "2", "*", "30")}`);
 	agree("parser.sn：長い語 100 + 200 * 3000", PARSER + `\n||expr ${W("100", "+", "200", "*", "3000")}||`);
 	agree("parser.sn：廃止された綴りは __", PARSER + `\n||expr ${W("1", "===", "2")}||`);
 	// **字句と構文を繋ぐ。** `expr (tokens s)` は前段2本の合成であり、自己ホストの通し道
@@ -1930,7 +1981,7 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 		.join("\n");
 	const CHAIN = LEXER + "\n" + PARSER + "\n";
 	agree("字句→構文：長さ", CHAIN + "||expr (tokens `1 + 2`)||");
-	for (const i of [0, 1, 3, 8]) agree(`字句→構文：${i} 文字目`, CHAIN + `(expr (tokens \`1 + 2\`)) ' ${i}`);
+	agreeText("字句→構文：綴りを端から端まで", CHAIN, `expr (tokens \`1 + 2\`)`);
 	agree("字句→構文：複数文字", CHAIN + "||expr (tokens `10 + 2`)||");
 	// **器が2つ以上ある構築でも、確保は増えない。**
 	//
@@ -1957,10 +2008,10 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	// 語の個数とは何の関係も無い。**同じ形でも測り方が違えば別の話**である。
 	const SLICE = CHAIN + "run : [~ts] ? expr (ts ' 1~)\n";
 	agree("切片を渡す：長さ", SLICE + "||run (tokens `0 1 + 2`)||");
-	for (const i of [0, 2, 8]) agree(`切片を渡す：${i} 文字目`, SLICE + `(run (tokens \`0 1 + 2\`)) ' ${i}`);
+	agreeText("切片を渡す：綴りを端から端まで", SLICE, `run (tokens \`0 1 + 2\`)`);
 	const VIADEF = CHAIN + "run :\n\tts\n\tb : ts\n? expr b\n";
 	agree("既定が仮引数：長さ", VIADEF + "||run (tokens `1 + 2`)||");
-	for (const i of [0, 3]) agree(`既定が仮引数：${i} 文字目`, VIADEF + `(run (tokens \`1 + 2\`)) ' ${i}`);
+	agreeText("既定が仮引数：綴りを端から端まで", VIADEF, `run (tokens \`1 + 2\`)`);
 	agree("トークン列：個数", "||[`10` , `+` , `2`]||");
 	agree("トークン列：語の長さ", "||[`10` , `+` , `2`] ' 0||");
 	agree("トークン列：1文字の語", "||[`10` , `+` , `2`] ' 1||");
