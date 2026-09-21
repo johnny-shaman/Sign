@@ -25,7 +25,7 @@
 import { preprocess } from "./lexer.js";
 import { parse } from "./parser.js";
 import { buildEnv, buildEnvScope, bindEnv, envLookupScope, EXPORT_MARKERS } from "./pass1.js";
-import { reduceAll, desugarIndexRest, getCategory } from "./pass2.js";
+import { reduceAll, desugarIndexRest, getCategory, desugarSections } from "./pass2.js";
 import { OperationError } from "./errors.js";
 import { specializeGenericParams } from "./pass1b.js";
 import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./pass3.js";
@@ -1338,7 +1338,10 @@ function checkDefineLeftSides(nodes) {
 }
 
 function compile(source, options = {}) {
-  const parseFn = options.parse || parse;
+  // **`[:]` と `[?]` は字句の段で中置へ脱糖する**（`desugarSections`）。束縛表が生のトークン列から
+  // 定義を読むので、区間の形のままでは定義が見えない。取り込むファイルも同じ `parseFn` を通る。
+  const parseRaw = options.parse || parse;
+  const parseFn = (s) => desugarSections(parseRaw(s));
   // **入口のファイル自身も「撒き済み」として数える。** 循環したときに入口が自分を撒き直し、
   // 同じ定義が2つになる——先勝ちで断りはするが、自分自身を引いたという事実が
   // information の山に化けるだけで、誰の得にもならない。

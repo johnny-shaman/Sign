@@ -1330,6 +1330,187 @@ function resolveLambdaLine(rawItems, qIdx, env) {
   return lambdaNode;
 }
 
+// ---- 頭の区間は、位置で被演算子を取る ----
+//
+// S式の `[[+] 1 2]` は `(+ 1 2)` と同じ木である。Lisp では頭が演算子で、残りが被演算子——
+// **位置で**決まる。
+//
+// Sign の並置は**型で**決まる（`coproduct_resolver.md` の5段）。区間 `[op]` にはアリティが
+// 無いので、未飽和の適用の段で被演算子を取れず、その間に被演算子どうしが型で先に結び付いて
+// いた: 値どうしなら構築（`[+] 1 2` は畳めた）、器なら unshift、関数なら適用——`[[+] 1 d]`
+// が 10 を返していた（`1 + d` は `__`）。
+//
+// **頭の区間は、自分の連なりの残りを取る。** 連なり（次の弱い演算子まで）の頭が二項の区間なら、
+// 後ろの項を左畳みにする。被演算子が1つ（`[+] [1 2 3]`）なら器の要素を歩く従来の読みのまま。
+//
+// **頭だけ、そして被演算子に裸の区間が居たら手を出さない。** 区間どうしが並んだら合成が先に
+// 決まるのが正しい——`[* 2,] [+] 1 2 3 4 5` は写像と畳み込みの合成で 30 になる。途中の `[+]`
+// にまで「残りを取る」を当てたら `[* 2,] 15`（写像のスカラー適用）に変わり、機械が断るように
+// なった。写像の区間（`[* 2,]`）と片側を束縛した区間（`[+ 1]`）もここでは被演算子を取らない。
+// `:` と `?` は字句の段で中置へ脱糖済みなので、ここには来ない（下の `desugarSections`）。
+
+// 生のトークン列で、演算子1つだけを囲んだ括り（`[?]`・`[+]`）なら、その演算子。
+function rawLoneOperator(x) {
+  return Array.isArray(x) && x.length === 1 && Array.isArray(x[0]) && x[0].length === 1 && isPartialCapableOperator(x[0][0]) ? x[0][0] : null;
+}
+
+// 並置より弱い中置演算子の裸トークンか（連なりの切れ目）。より強い演算子（`+` 等）は連なりの
+// 中で先に畳まれるので、切れ目にはならない。
+function isWeakerThanCoproduct(x) {
+  if (!isBareOperatorToken(x)) return false;
+  const e = lookup(x, "infix");
+  return !!(e && typeof e.precedence === "number" && e.precedence < COPRODUCT_TIER);
+}
+
+// 畳み終えた節が、被演算子を取れる二項の区間（`[+]`）なら、その部分適用の節。
+function headBinarySection(node) {
+  const u = unwrapSoloBlock(node);
+  if (!u || u.type !== "operation" || !u.partial || u.pointfreeMap) return null;
+  if (u.position !== "infix" || u.left || u.right || SECTION_DESUGAR.has(u.op)) return null;
+  return u;
+}
+
+// **tier 11 で、連なりの頭を畳む。**
+function foldHeadSections(items) {
+  for (let i = 0; i < items.length; i++) {
+    const sec = typeof items[i] === "string" ? null : headBinarySection(items[i]);
+    if (!sec) continue;
+    if (i > 0 && !isBareOperatorToken(items[i - 1])) continue;
+    let end = i + 1;
+    while (end < items.length && !isBareOperatorToken(items[end])) end++;
+    const operands = items.slice(i + 1, end);
+    if (operands.length < 2) continue;
+    if (operands.some((x) => { const u = unwrapSoloBlock(x); return !!(u && u.type === "operation" && u.partial); })) continue;
+    const node = operands.reduce((acc, x) => ({ type: "operation", op: sec.op, name: sec.name, position: "infix", left: acc, right: x }));
+    items.splice(i, end - i, node);
+  }
+}
+
+// ---- `[:]` と `[?]` は、生のトークン列の段で中置へ脱糖する ----
+//
+// 仕様（`kan_extensions.md` §3.7）は `[:]`（名前と値を受け取り環境を拡張する射）と `[?]`
+// （引数と式を受け取る、カリー化の随伴）を第一級の関数と定める。`[:] f [?] y [*] y y` は
+// `f : y ? y * y` である。
+//
+// **中置の形へ戻すのは、束縛表（pass1）が生のトークン列から定義とアリティを読むからである。**
+// 区間のまま縮約の段で組むと、定義が pass1 から見えない——`[:] f …` の後の `f 1 2` が
+// アリティを知らないまま解かれ、黙って違う値を返した（3 のはずが 2）。脱糖は字句の段で1回、
+// 取り込んだファイルも同じ道を通る（`compile` が `parse` を包む）。
+//
+// 読み方は「区間は、自分の連なり（並置より弱い演算子で区切られた範囲）の残りを取る」。左から
+// 読み、値・本体の側を同じ規則で再帰的に脱糖する——`[:] f [?] y [*] y y` は `[:]` が `f` と
+// 残り全部を、その残りの `[?]` が `y` と `[*] y y` を取る。
+//
+// **`[?]` の仮引数は、平らな並びを1つの被演算子で持てない。** `(x y)` と `[x y]` は字句の段で
+// 区別されず（`resolveBlock` の既知の制限）どちらも「器1つを分解する」仮引数になり、入れ子の
+// `x ? y ? B` は関数を返す関数なので断られる。だから**仮引数の形（名前・`~名前`・名前だけの
+// 括り）の項が続く間は仮引数、それ以外の項か最後の項から本体**と読む:
+//
+//   [?] y [*] y y      → y ? [*] y y
+//   [?] x y (x + y)    → x y ? (x + y)
+//   [?] [x y] [x + y]  → [x y] ? [x + y]
+//   [?] x x            → x ? x
+//
+// 結果を1項として保つ必要があるとき（連なりの前に項や強い演算子がある・後ろに続きがある）は
+// 括りで包む——中置の結合に任せると `[?] x x , 2` が `x ? (x , 2)` に化ける。
+const SECTION_DESUGAR = new Set([":", "?"]);
+
+function isRawTag(x) {
+  return typeof x === "string" && BLOCK_KIND[x] !== undefined;
+}
+
+// 生の並び items の from 以降を項に割る。項 = 前置の印* + 本体1つ + 後置の印*。裸の演算子
+// トークンに当たったら止まる（そこから先は式であって項の並びではない）。
+function rawTermSpans(items, from, to) {
+  const spans = [];
+  let i = from;
+  while (i < to) {
+    const s = i;
+    while (i < to && isMarkedPrefix(items[i])) i++;
+    if (i >= to || isBareOperatorToken(items[i])) return spans;
+    i++;
+    while (i < to && isMarkedPostfix(items[i])) i++;
+    spans.push({ s, e: i });
+  }
+  return spans;
+}
+
+// その項は仮引数の形か（名前・`~名前`・名前と `~` だけの括り）。
+function isParamShapedSpan(items, span) {
+  const isName = (t) => isIdentifierToken(t);
+  let i = span.s;
+  while (i < span.e && isMarkedPrefix(items[i])) i++;
+  const core = items[i];
+  if (isName(core)) return true;
+  if (!Array.isArray(core) || isRawTag(core[0])) return false;
+  return core.every((line) => Array.isArray(line) && line.length > 0 && line.every((t) => isName(t) || isMarkedPrefix(t)));
+}
+
+// 値が「ラムダの1行だけを持つ括り」なら、その行（`[:] f ([?] x b)` → `f : x ? b`）。
+// S式が被演算子を1項にするために付けた括りであって、書き手の括りではない。剥がさないと
+// 機械が `f : (λ)` を関数の定義と読めない（中置で書いた `f : (x ? x + 1)` も同じく断られる、
+// 前からある穴）。
+function soloLambdaLine(valueItems) {
+  if (valueItems.length !== 1) return null;
+  const g = valueItems[0];
+  if (!Array.isArray(g) || isRawTag(g[0]) || g.length !== 1 || !Array.isArray(g[0])) return null;
+  const line = g[0];
+  return line.includes("?") && !line.includes(":") ? line : null;
+}
+
+function desugarSectionItem(x) {
+  if (!Array.isArray(x)) return x;
+  if (isRawTag(x[0])) return [x[0], desugarSectionLines(x[1])];
+  return desugarSectionLines(x);
+}
+
+function desugarSectionLines(lines) {
+  return lines.map((line) => (Array.isArray(line) ? desugarSectionLine(line) : line));
+}
+
+function desugarSectionLine(line) {
+  let items = line.map(desugarSectionItem);
+  for (let k = 0; k < items.length; k++) {
+    const op = rawLoneOperator(items[k]);
+    if (!SECTION_DESUGAR.has(op)) continue;
+    let end = k + 1;
+    while (end < items.length && !isWeakerThanCoproduct(items[end])) end++;
+    const spans = rawTermSpans(items, k + 1, end);
+    if (spans.length === 0) continue;
+    let head;
+    let restFrom;
+    if (op === ":") {
+      head = items.slice(spans[0].s, spans[0].e);
+      restFrom = spans[0].e;
+    } else {
+      // 仮引数：最初の項は必ず。以降は仮引数の形で、**かつ後ろに項が続く間**——だから最後の
+      // 項は常に本体に回る（`[?] x x` は `x ? x`）。項が1つしか無ければ本体が空なので下で見送る。
+      let t = 1;
+      while (t < spans.length && isParamShapedSpan(items, spans[t]) && t + 1 < spans.length && spans[t + 1].s === spans[t].e) t++;
+      head = items.slice(spans[0].s, spans[t - 1].e);
+      restFrom = spans[t - 1].e;
+    }
+    let rest = desugarSectionLine(items.slice(restFrom, end));
+    if (rest.length === 0) continue;
+    if (op === ":") rest = soloLambdaLine(rest) || rest;
+    const flat = [...head, op, ...rest];
+    // 1項として保つ必要があるか。前が項、または前の演算子がこの演算子より強い。後ろに続きがある。
+    const prec = lookup(op, "infix").precedence;
+    const prev = k > 0 ? items[k - 1] : null;
+    const prevForces = prev !== null && (!isBareOperatorToken(prev) || (lookup(prev, "infix") || { precedence: 0 }).precedence > prec);
+    const wrap = prevForces || end < items.length;
+    const replacement = wrap ? [[flat]] : flat;
+    items = [...items.slice(0, k), ...replacement, ...items.slice(end)];
+    k += replacement.length - 1;
+  }
+  return items;
+}
+
+/** 生の行の並び（`parse` の出力）から `[:]` と `[?]` を中置へ脱糖する。 */
+function desugarSections(lines) {
+  return Array.isArray(lines) ? desugarSectionLines(lines) : lines;
+}
+
 function reduceAll(rawItems, env) {
   // **残りアリティ2の写像はアプリカティブなので扱わない。**
   //
@@ -1350,8 +1531,13 @@ function reduceAll(rawItems, env) {
   }
   // ラムダ定義行（トップレベルに `?` を持つ行）は、仮引数部が総当たり縮約に誤って
   // 素通しされないよう、先に専用ロジックへ分岐する（上記コメント参照）。
+  //
+  // **`?` だけの括り（`[?]`）はラムダ行ではなく区間である。** 仮引数も本体も無い行として
+  // 割ると解けないまま残り、`[?] x (x + 1)` が「解決できない式」で落ちていた——`[:]` には
+  // この横取りが無いので区間になれていた、という片側だけの穴。S式の `[[?] 仮引数 本体]` は
+  // `(lambda (…) …)` と同じ木であり、区間として下の道へ通す。
   const qIdx = rawItems.indexOf("?");
-  if (qIdx !== -1) {
+  if (qIdx !== -1 && rawItems.length !== 1) {
     return resolveLambdaLine(rawItems, qIdx, env);
   }
 
@@ -1383,6 +1569,7 @@ function reduceAll(rawItems, env) {
   for (let tier = 27; tier >= 1; tier--) {
     let guard = 0;
     if (tier === COPRODUCT_TIER) {
+      foldHeadSections(items);
       // coproduct_resolver.md §3.0 の5段（内側から compose → 未飽和の適用 → 構築 →
       // 適用 → 逆適用）を順に見る（COPRODUCT_PHASES）。
       // **還元が起きたら段の先頭へ戻る。** 適用が新しい Atom-Atom の対を生むので、
@@ -1647,4 +1834,4 @@ function desugarIndexRest(node) {
   return node;
 }
 
-export { reduceAll, getCategory, resolveDensity, desugarIndexRest };
+export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections };
