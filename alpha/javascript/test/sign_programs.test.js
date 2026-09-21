@@ -67,6 +67,17 @@ function check(note, got, want) {
 }
 
 // ---- lexer.sn ----
+// **語 ＝ 次の空白まで。** ただし文字列の中と括りの中の空白は数えない。
+//
+// Sign は中置演算子を必ず空白で区切る（`operator_table.md` の基本原則「全ての空白を余積
+// 演算子と見なせる」）ので、文字クラスの最長一致は要らない——`is_digit` も `<=` も `!==` も、
+// 空白に挟まれて最初から1語である。**空白で割ることが、余積の項を取り出すことそのもの**。
+//
+// だから `bar42` は切らない。以前は数字と英字を別クラスとして `bar` / `42` に割っていたが、
+// それは**字句解析器が文法より細かく切っていた**ということで、識別子が壊れる。
+//
+// 括りは中へ降りずに丸ごと1語で返す。中身を字句へ投げ返すのは構文解析の仕事で、そこで
+// 相互再帰する（**相互再帰は余積の入れ子そのもの**）。文字列だけは中を保護して二度と掛けない。
 // **トークン列は平坦である。** カンマ（直積）で積むが、再帰の結果に後置 `~` を付けて
 // 「相手のスロットを並べる」ので、段は残らない（余積の `~` との双対）。
 //
@@ -78,15 +89,15 @@ function check(note, got, want) {
 // 「5トークンへ分割する」と言っているのに、**期待値の方が段の深さを固定していた**
 // ——`~` が無いと段が深くなり、大きさが静的に決まらず機械語にできない。
 check(
-	"lexer.sn: `foo 123 + bar42` を5トークンへ分割する",
+	"lexer.sn: `foo 123 + bar42` を4語へ分割する",
 	runFile("lexer.sn"),
-	["foo", "123", "+", "bar", "42"]
+	["foo", "123", "+", "bar42"]
 );
 
 check(
-	"lexer.sn: 数字と識別子の境界を正しく切る（bar42 → bar , 42）",
+	"lexer.sn: 識別子は数字を含んでも1語（bar42 を切らない）",
 	runWith("lexer.sn", "tokens `bar42`"),
-	["bar", "42"]
+	["bar42"]
 );
 
 check("lexer.sn: 空文字列 → __", isUnit(runWith("lexer.sn", "tokens ``")), true);
@@ -108,6 +119,76 @@ check(
 check("lexer.sn: is_space がタブに真を返す", runWith("lexer.sn", "is_space tab"), TAB);
 check("lexer.sn: is_space が改行に真を返す", runWith("lexer.sn", "is_space newline"), "\n");
 check("lexer.sn: is_space は通常文字に __ を返す", isUnit(runWith("lexer.sn", "is_space \\a")), true);
+
+// ---- 字句解析器は、自分のソースを自分で割れる ----
+//
+// **語 ＝ 次の空白まで。ただし文字列の中と括りの中の空白は数えない。** その規則を JS でも
+// 書いて、`lexer.sn` の各行で突き合わせる——**同じ規則の独立した2つの実装**であり、
+// 期待値を書き置くのではなく、そのつど導く（書き置いた証人は腐る）。
+//
+// 括りが1語のまま返るのが要点である。`(s ' 0)` を `(s` / `'` / `0)` に割らないのは、
+// **括りの中の空白は次の段の余積**だからで、中身を字句へ投げ返すのは構文解析の仕事になる。
+//
+// バッククォートを含む行は除く——この検査自身が行を Sign の文字列リテラルへ包むので、
+// 中の `` ` `` が閉じてしまう（字句の側の問題ではない）。
+{
+	const BS = String.fromCharCode(92);
+	const TB = String.fromCharCode(9);
+	const BQ = String.fromCharCode(96);
+	const raw = fs.readFileSync(path.join(signDir, "lexer.sn"), "utf8").replace(/\r\n/g, "\n");
+	const body = raw.split("\n").filter((l) => !l.startsWith("tokens " + BQ)).join("\n");
+	// 同じ規則の、もう一つの実装。
+	const words = (s) => {
+		const out = [];
+		let cur = "";
+		let d = 0;
+		for (let i = 0; i < s.length; i++) {
+			const ch = s[i];
+			if (ch === BS) {
+				cur += ch + (s[i + 1] || "");
+				i++;
+				continue;
+			}
+			if ("([{".includes(ch)) d++;
+			if (")]}".includes(ch)) d--;
+			if (d === 0 && (ch === " " || ch === TB)) {
+				if (cur) out.push(cur);
+				cur = "";
+				continue;
+			}
+			cur += ch;
+		}
+		if (cur) out.push(cur);
+		return out;
+	};
+	const run = (line) => {
+		const { nodes } = compile(body + "\ntokens " + BQ + line + BQ, { parse: parser.parse, readImport });
+		const env = newRuntimeEnv(null);
+		let r = UNIT;
+		for (const node of nodes) r = evaluate(node, env);
+		const o = observe(r);
+		return (Array.isArray(o) ? o : o === undefined || o === null ? [] : [o]).map(String);
+	};
+	let lines = 0;
+	let toks = 0;
+	let bad = 0;
+	for (const line of raw.split("\n")) {
+		const s = line.replace(/\r/g, "");
+		if (!s.trim() || s.includes(BQ)) continue;
+		lines++;
+		const got = run(s);
+		toks += got.length;
+		if (JSON.stringify(got) !== JSON.stringify(words(s))) {
+			bad++;
+			console.log(`     ${JSON.stringify(s)}`);
+			console.log(`       got: ${JSON.stringify(got)}`);
+			console.log(`      want: ${JSON.stringify(words(s))}`);
+		}
+	}
+	check("lexer.sn: 自分のソースの全行を語に割る（食い違い 0）", bad, 0);
+	// **前提も見る。** 行が拾えていなければ比較は1度も走らず、緑は何も意味しない。
+	check("lexer.sn: 語に割った行数と語数（前提）", lines >= 40 && toks >= 180, true);
+}
 
 // ---- parser.sn ----
 //

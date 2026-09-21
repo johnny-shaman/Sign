@@ -80,11 +80,15 @@ export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
  */
 export const CORPUS = [
 	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [], insn: { full: 3711, plain: 5628 }, digest: { full: "8e35f8d0a07dc74a", plain: "2494ff932efb4e17" } },
+	// **語 ＝ 次の空白まで**（文字列の中と括りの中は数えない）。規則1つで `is_digit` も `<=` も
+	// `[a ~b]` も1語になる——空白が余積演算子そのものだから、空白で割ることが余積の項を取り
+	// 出すことになる。括りは1語のまま返し、中身を字句へ投げ返すのは構文解析の仕事である。
+	//
 	// **`tokens` は長さだけ合っていた時期がある。** `take_while` が作った語の本体が `tokens`
 	// 自身の枠に在り、返るときに捨てられていた——器へ入るのはその番地なので `len` は正しく、
 	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
-	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる（+19 命令）。
-	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 621, plain: 1028 }, digest: { full: "16332a23d5b96d9d", plain: "457afdc66ca8dae3" } },
+	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる。
+	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 933, plain: 1631 }, digest: { full: "605c5a6293ccc524", plain: "72b517df53975bc3" } },
 	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 1013, plain: 1378 }, digest: { full: "7616b47db9dce7c1", plain: "04f2d2defe573048" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は

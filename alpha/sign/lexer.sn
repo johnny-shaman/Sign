@@ -1,15 +1,11 @@
 `Sign で書いた字句解析器`
-`数字・識別子・記号の3種にトークン化する`
+`語 ＝ 次の空白まで。ただし文字列の中と括りの中の空白は数えない`
 
-`--- 文字クラス判定 ---`
-`連鎖比較（comparison.md 4節）がそのまま範囲判定になる`
-`真なら文字自身が返る（値返却型比較）ので、そのまま & や match_case の条件に使える`
+`Sign は中置演算子を必ず空白で区切る（operator_table.md の基本原則）ので、`
+`文字クラスの最長一致は要らない——is_digit も <= も !== も、空白に挟まれて最初から1語である`
 
-is_digit : c ? \0 <= c <= \9
-is_alpha : c ? \a <= c <= \z
-
-`空白類。文字リテラルは直後の1文字をそのまま取るため、空白・タブもエスケープシーケンスを使わずに直接書ける`
-`改行は名前で書く（preprocessor.md 0節）。処理の区切りの CR と文字の改行の LF はどちらも語の切れ目である`
+`括りは中へ降りずに丸ごと1語で返す。中身を字句へ投げ返すのは構文解析の仕事で、そこで相互再帰する`
+`文字列だけは中を保護したまま、二度と字句に掛けない`
 
 space : \ 
 tab : \	
@@ -17,36 +13,69 @@ cr : 0u000D
 newline : 0u000A
 is_space : c ? (c = space) | (c = tab) | (c = cr) | (c = newline)
 
-`--- 文字列の走査 ---`
-`述語が真の間だけ先頭から取り、その部分文字列を返す`
-`文字どうしをスペースで並べると String の吸収則で連結される（type_system.md 3.2節）`
+quote : \`
+escape : \\
 
-take_while : p [~s] ?
+open_br : c ?
+	c = \[ : c
+	c = \( : c
+	c = \{ : c
+	__
+
+close_br : c ?
+	c = \] : c
+	c = \) : c
+	c = \} : c
+	__
+
+`--- 文字列の保護 ---`
+`閉じるバッククォートまで取る／捨てる。閉じが無ければ残り全部（行コメント）`
+
+take_quote : [~s] ?
 	!s : ``
-	(@p (s ' 0)) : (s ' 0) (take_while p (s ' 1~))
-	``
+	(s ' 0) = quote : s ' 0
+	(s ' 0) (take_quote (s ' 1~))
 
-`述語が真の間だけ先頭から捨て、残りを返す`
+drop_quote : [c ~rest] ?
+	c = quote : rest
+	drop_quote rest
 
-drop_while : p [~s] ?
+`--- 語の切り出し ---`
+`d は括りの深さ。深さ 0 の空白だけが語を切る`
+
+take_word : d [~s] ?
 	!s : ``
-	(@p (s ' 0)) : drop_while p (s ' 1~)
+	(d = 0) & (is_space (s ' 0)) : ``
+	(s ' 0) = escape : (s ' 0) (s ' 1) (take_word d (s ' 2~))
+	(s ' 0) = quote : (s ' 0) (take_quote (s ' 1~)) (take_word d (drop_quote (s ' 1~)))
+	open_br (s ' 0) : (s ' 0) (take_word (d + 1) (s ' 1~))
+	close_br (s ' 0) : (s ' 0) (take_word (d - 1) (s ' 1~))
+	(s ' 0) (take_word d (s ' 1~))
+
+drop_word : d [~s] ?
+	!s : __
+	(d = 0) & (is_space (s ' 0)) : s
+	(s ' 0) = escape : drop_word d (s ' 2~)
+	(s ' 0) = quote : drop_word d (drop_quote (s ' 1~))
+	open_br (s ' 0) : drop_word (d + 1) (s ' 1~)
+	close_br (s ' 0) : drop_word (d - 1) (s ' 1~)
+	drop_word d (s ' 1~)
+
+drop_space : [~s] ?
+	!s : __
+	is_space (s ' 0) : drop_space (s ' 1~)
 	s
 
 `--- 字句解析本体 ---`
-`トークン列はカンマ（直積）で積む`
-`スペース（余積）で積むと String の吸収則で1本の文字列に連結されてしまうため`
-`後置 ~ は「相手のスロットを並べる」——付けないと再帰の結果が1スロットとして積まれ、`
-`段の深い Struct になって大きさが静的に決まらない（余積の ~ との双対）`
+`トークン列はカンマ（直積）で積む——スペース（余積）で積むと String の吸収則で1本に連結される`
+`後置 ~ は「相手のスロットを並べる」。付けないと再帰の結果が1スロットとして積まれる`
 
 tokens : [~s] ?
 	!s : __
-	is_space (s ' 0) : tokens (drop_while $is_space s)
-	is_digit (s ' 0) : (take_while $is_digit s) , (tokens (drop_while $is_digit s))~
-	is_alpha (s ' 0) : (take_while $is_alpha s) , (tokens (drop_while $is_alpha s))~
-	(s ' 0) , (tokens (s ' 1~))~
+	is_space (s ' 0) : tokens (drop_space s)
+	(take_word 0 s) , (tokens (drop_word 0 s))~
 
 `実行例`
-`foo 123 + bar42 の5トークンに分かれる`
+`foo 123 + bar42 は4語（bar42 は文法どおり1識別子）`
 
 tokens `foo 123 + bar42`
