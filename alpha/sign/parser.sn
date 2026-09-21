@@ -31,6 +31,7 @@ top_tier : 22
 
 end_of : [~ts] i t ?
 	t > top_tier : i + 1
+	t = juxt_tier : jend ts (end_of ts i (t + 1))
 	end_at ts i t (end_of ts i (t + 1))
 
 end_at : [~ts] i t k ?
@@ -67,6 +68,7 @@ last_at : [~ts] i j t k ?
 
 out : [~ts] i j t ?
 	t > top_tier : ts ' i
+	t = juxt_tier : out_j ts i j (jlast ts i j)
 	out_at ts i j t (end_of ts i (t + 1))
 
 out_at : [~ts] i j t k ?
@@ -79,6 +81,39 @@ out_as : [~ts] i j t k a ?
 
 out_one : [~ts] i j o tl tr ?
 	`[[` (ts ' o) `] ` (out ts i o tl) ` ` (out ts (o + 1) j tr) `]`
+
+`--- 並置：綴りを持たない段 ---`
+`適用・連接・合成はどれも「間に何も無いこと」が演算子である（表の 10.0〜10.5）`
+`表は綴りを鍵に引くので、この段だけは引けない——見るのは「隣り合っているか」である`
+``
+`空白が余積演算子そのものなので、字句がそれを食った後、構文に残るのは隣接という事実だけになる`
+`だから他の段が「その綴りが来たか」で進むところを、この段は「演算子が来なかったか」で進む`
+``
+`段は 11（表の 10.x）。算術より弱い——1 + f 1 は (1 + f) 1 である`
+`左結合。f x y は (f x) y で、カリー化がそう読む`
+
+juxt_tier : 11
+
+`並置の連なりがどこで終わるか。演算子が来たら終わり、来なければ次の項へ続く`
+
+jend : [~ts] k ?
+	k = ||ts|| : k
+	tier_at ts k : k
+	jend ts (end_of ts k (juxt_tier + 1))
+
+`左結合なので、最後の項が始まる位置を探す（last_of と同じ形。違いは演算子を跨がないこと）`
+
+jlast : [~ts] i j ? jlast_at ts i j (end_of ts i (juxt_tier + 1))
+
+jlast_at : [~ts] i j k ?
+	k = j : i
+	jlast ts k j
+
+`項が1つなら並置ではない。2つ以上なら、最後の項だけを右へ置いて左を同じ段へ渡す`
+
+out_j : [~ts] i j o ?
+	o = i : out ts i j (juxt_tier + 1)
+	`(` (out ts i o juxt_tier) ` ` (out ts o j (juxt_tier + 1)) `)`
 
 `--- 入口：全部を食べたか ---`
 `表に在ることが「演算子である」という言明そのものなので、廃止された綴りも未知の綴りも`

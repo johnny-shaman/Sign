@@ -1982,6 +1982,12 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	const CHAIN = LEXER + "\n" + PARSER + "\n";
 	agree("字句→構文：長さ", CHAIN + "||expr (tokens `1 + 2`)||");
 	agreeText("字句→構文：綴りを端から端まで", CHAIN, `expr (tokens \`1 + 2\`)`);
+	// **並置は綴りを持たない段。** 字句が空白を食った後、構文に残るのは隣接という事実だけで、
+	// この段だけは表を引けない。算術より弱い（`1 + f 1` は `(1 + f) 1`）ので、実機でも段の
+	// 順序ごと出ていることを綴りで見る。
+	agree("字句→構文：適用の長さ", CHAIN + "||expr (tokens `f 1`)||");
+	agreeText("字句→構文：カリー化の綴り", CHAIN, `expr (tokens \`h 5 2\`)`);
+	agreeText("字句→構文：算術は適用より強い", CHAIN, `expr (tokens \`f 1 + 1\`)`);
 	agree("字句→構文：複数文字", CHAIN + "||expr (tokens `10 + 2`)||");
 	// **器が2つ以上ある構築でも、確保は増えない。**
 	//
