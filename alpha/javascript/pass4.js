@@ -1680,7 +1680,10 @@ function genExpr(node, env, em, scope, tail = false) {
 	// pass3 はこれを `Unit` と型付けする。射が無いので零射を通る（原理4）——`__` を置くだけで、命令表の
 	// どの形も要らない。辺は評価してから捨てる（解釈器と同じく両辺を評価する道）。層の門より前に置くのは、
 	// 結果が `__` なので番地を捏造する道にも、置き場所を漏らす道にもならないからである。
-	if (n.type === "operation" && n.atomType === "Unit" && (n.name === "mul" || n.name === "pow" || n.name === "bit_shift_left" || n.name === "factorial")) {
+	// **型は `Address` のままである**（裁定 2026-09-21）。pass3 が域を保つようになったので、
+	// ここも `Unit` ではなく `Address` で見る——見ないと下の「番地の掛け算は出せません」へ
+	// 落ちて、**通っていたものが断りに化ける**。
+	if (n.type === "operation" && n.atomType === "Address" && (n.name === "mul" || n.name === "pow" || n.name === "bit_shift_left" || n.name === "factorial")) {
 		const operands = n.name === "factorial" ? [n.operand] : [n.left, n.right];
 		if (addressWithoutArrow(n.name, operands[0] && operands[0].atomType, operands[1] && operands[1].atomType)) {
 			const why = "番地の域に射の無い演算の辺";

@@ -1261,7 +1261,9 @@ function evalBit(node, env) {
   // まま返す——値は `p` なのに型は `Unit` で、ここは爆発律で `p` を返す。機械はビット演算を
   // まだ出さないので、答えが割れる相手は居ない。
   // 番地の左シフトは番地の積なので射が無い（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
-  if (node.atomType === "Unit" && addressWithoutArrow(node.name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
+  // **型は `Address` のままである**（裁定 2026-09-21）。射が無いので値は `__` だが、域から
+  // 出るわけではない——`Unit` へ落とすと次の演算に `Int` の法則（単位元）が当たってしまう。
+  if (node.atomType === "Address" && addressWithoutArrow(node.name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
   if (absorbsUnit(node.atomType, l, r)) return UNIT;
   if (isUnit(l)) return r;
   if (isUnit(r)) return l;
@@ -1308,7 +1310,9 @@ function evalArith(node, env) {
   // **番地の域に、掛け算と冪の射は無い**（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
   // 射が無いので零射を通る（原理4）。値では番地と数の区別が付かないので、辺の型で見る——`Unit` と型付け
   // される掛け算には `__ * x`（x の型が決まっていない）もあり、そちらは爆発律で x を返す。
-  if (node.atomType === "Unit" && addressWithoutArrow(name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
+  // **型は `Address` のままである**（裁定 2026-09-21）。射が無いので値は `__` だが、域から
+  // 出るわけではない——`Unit` へ落とすと次の演算に `Int` の法則（単位元）が当たってしまう。
+  if (node.atomType === "Address" && addressWithoutArrow(name, node.left && node.left.atomType, node.right && node.right.atomType)) return UNIT;
   // **対象を置けば値が返り、射を置けば射が返る。**
   //
   // `__` は零対象で、初対象と終対象が一致している。演算子の片側に置いたとき、その
@@ -2889,7 +2893,8 @@ return items.filter((v) => !isUnit(v));
       const v = evaluate(node.operand, env);
       // **番地の階乗は射が無い**（pass3 が `Unit` と型付けする、layout.js の `addressWithoutArrow`）。
       // 被演算子は評価してから捨てる——算術と同じく両辺を評価する道（finally の読み）に揃える。
-      if (node.name === "factorial" && node.atomType === "Unit" && addressWithoutArrow("factorial", node.operand && node.operand.atomType)) return UNIT;
+      // **型は `Address` のままである**（裁定 2026-09-21）。
+      if (node.name === "factorial" && node.atomType === "Address" && addressWithoutArrow("factorial", node.operand && node.operand.atomType)) return UNIT;
       if (node.name === "bit_not" && node.atomType === "Address") return bitNot(v, "Address");
       return evalUnaryOp(node.name, v);
     }

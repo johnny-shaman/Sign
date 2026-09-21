@@ -371,7 +371,23 @@ function arithmeticResultType(node, leftType, env) {
   if (leftType === "String" || rightType === "String") return "Unit";
   // **番地の域に、掛け算と冪の射は無い**（type_system.md §3.6、利用者の決定 2026-09-14）。
   // 射が無いので零射を通る（原理4）——`` `abc` + 1 `` と同じく `__` へ収束する。
-  if (addressWithoutArrow(node.name, leftType, rightType)) return "Unit";
+  //
+  // **域は保つ**（利用者の裁定 2026-09-21）。値は `__` だが、型を `Unit` へ落としてはいけない。
+  //
+  // **型とは演算が満たす法則である**（`0_design_principles.md` 原理6、記憶の「型とは演算が
+  // 満たす法則」）。その言い方をすると、`__` の役は域ごとに違う:
+  //
+  //   `Int` の代数      `__` は**単位元**（`__ + 5 = 5`。完全性公理がその単位律）
+  //   `Address` の代数  `__` は**吸収元**（`__ + 5 = __`。番地は生き返らせない）
+  //
+  // **同じ値に2つの法則があるのではなく、域が法則を選ぶ。** だから型が落ちると、値は `__` の
+  // まま同じでも**次の演算に当たる法則が入れ替わる**——実測で `(0x1000 * 2) + 1` が
+  // **両エンジンとも 1** を返していた（`p * 2` が `Unit` へ落ち、`Unit + Int` が `Int` へ
+  // 昇格して単位元の側で読まれる）。利用者：「アドレス型の場合の想定なら、1ではあるけどね…
+  // **これで読み書きされるとたまったものじゃない**」。
+  //
+  // 域を保てば `Address + Int` は `Address` なので `absorbsUnit` が吸収し、`__` のまま通る。
+  if (addressWithoutArrow(node.name, leftType, rightType)) return "Address";
   // **`__` は強さの底である**（爆発律）。
   //
   // 算術は `A × A → A`——積を食って同じ対象を返すので、片方が始対象なら返せる値は
@@ -1871,7 +1887,9 @@ function computeAtomType(node, env) {
       const leftType = inferAtomType(node.left, env);
       if (ARITHMETIC_OPS.has(node.name)) return arithmeticResultType(node, leftType, env);
       // 番地の左シフトは番地の積なので射が無い（layout.js の `addressWithoutArrow`）。
-      if (node.name === "bit_shift_left" && addressWithoutArrow(node.name, leftType, inferAtomType(node.right, env))) return "Unit";
+      // **域は保つ**（裁定 2026-09-21）。上の `arithmeticResultType` と同じ理由——`Unit` へ
+      // 落とすと次の演算に `Int` の法則（`__` が単位元）が当たり、番地から数が生まれる。
+      if (node.name === "bit_shift_left" && addressWithoutArrow(node.name, leftType, inferAtomType(node.right, env))) return "Address";
       return leftType; // 左辺が規則を選ぶ（§3.2）。比較・構造比較族は左辺の型が結果型
     }
     if (node.operand) {
@@ -1993,7 +2011,8 @@ function computeAtomType(node, env) {
       // **番地の階乗は番地の積である**ので、番地の域に射が無い（`addressWithoutArrow`）。
       if (node.position === "postfix" && node.name === "factorial") {
         const t = inferAtomType(node.operand, env);
-        return addressWithoutArrow("factorial", t) ? "Unit" : t;
+        // **域は保つ**（裁定 2026-09-21）。射が無いことと、域から出ることは別である。
+        return addressWithoutArrow("factorial", t) ? "Address" : t;
       }
       // それ以外の前置/後置演算子は§4に個別の型シグネチャがあるが、今回は簡略化して
       // オペランドの型をそのまま通す（要精査、既知の制限）。
@@ -3986,7 +4005,15 @@ function isFixedValue(node, env) {
 
 function collectUnitReason(node, env, diagnostics) {
   if (!node || node.type !== "operation" || node.position !== "infix") return;
-  if (node.atomType !== "Unit") return;
+  // **`__` へ収束することと、型が `Unit` であることは別である**（裁定 2026-09-21）。
+  //
+  // ここは長く「`Unit` になった理由を集める」関数だったので入り口が `atomType === "Unit"` で
+  // 足りていた。番地の域に射が無い演算が**域を保つ**ようになった（値は `__`、型は `Address`）
+  // ので、その入り口では素通りする——実測で `0x10 * 2` の warning が**丸ごと出なくなった**。
+  //
+  // 型の側を変えるのではなく、ここが見るものを「`__` へ収束する節点」に直す。中の各枝は
+  // それぞれ `addressWithoutArrow` を自分で問うので、`Address` を通しても広がらない。
+  if (node.atomType !== "Unit" && node.atomType !== "Address") return;
 
   // 範囲族（§4）: 端点が「点」でない（List / Struct）ため零射へ落ちた場合。
   // `'` の鍵に立つものは範囲ではない（`annotateTypes` の `isSlotKeyIndex` の注記）。
