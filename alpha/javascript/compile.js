@@ -27,6 +27,7 @@ import { parse } from "./parser.js";
 import { buildEnv, buildEnvScope, bindEnv, envLookupScope, EXPORT_MARKERS } from "./pass1.js";
 import { reduceAll, desugarIndexRest, getCategory, desugarSections } from "./pass2.js";
 import { OperationError } from "./errors.js";
+import { OPERATOR_DICT } from "./operator_table.js";
 import { specializeGenericParams } from "./pass1b.js";
 import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./pass3.js";
 // ノードの形を見るだけの述語は layout.js が唯一の置き場である（理由はそこの
@@ -459,6 +460,17 @@ const OPERATOR_HEADS = new Set([..."?:#;|&=<>!+*/%^~@$,", "-"]);
 const isId = (x) => typeof x === "string" && x.startsWith("<") && x.endsWith(">");
 const isOp = (t) => typeof t === "string" && !isId(t) && OPERATOR_HEADS.has(t[0]) && !/^-?[0-9`]/.test(t);
 const isPostfixMark = (t) => typeof t === "string" && /^_[^\w<`"]+$/.test(t);
+const isPrefixMark = (t) => typeof t === "string" && /^[^\w<`"]+_$/.test(t);
+// 中置 `'`（get）と同じか強い段の中置演算子か。段は表が言う——手で並べると表とずれる。
+const infixEntryOf = (t) => (typeof t === "string" && OPERATOR_DICT[t] ? OPERATOR_DICT[t].find((d) => d.position === "infix") || null : null);
+const bindsAtLeastGet = (t) => {
+  const e = infixEntryOf(t);
+  return !!e && e.precedence >= infixEntryOf("'").precedence;
+};
+const bindsAtLeastComma = (t) => {
+  const e = infixEntryOf(t);
+  return !!e && e.precedence >= infixEntryOf(",").precedence;
+};
 
 /**
  * **器に並べた関数は、中身が見えれば呼べる**（operator_table.md の後置 `~` の項、
@@ -530,9 +542,32 @@ function pasteVisiblePipelines(lines, env) {
         const next = arr[i + 2];
         const inCoproduct = (i === 0 || prev === ":" || prev === "?" || !isOp(prev)) && (next === undefined || !isOp(next));
         if (inCoproduct) { out.push(...p.slots.map(asToken)); i += 1; continue; }
-        if (prev === "," || next === ",") { p.slots.forEach((x, k) => { if (k) out.push(","); out.push(...x); }); i += 1; continue; }
+        // **積の中で撒くのは、`p~` が積の1項として立っているときだけである。** 反対側の隣が
+        // `,` より強い演算子なら、撒いたスロットの端がそちらへ食われる——`3 , p~ ' 0` は
+        // `3 , (p~ ' 0)` なのに、撒くと `… , m ' 0` になっていた。スロットも括って置く：
+        // `p : 0 @ m , [+ 1]` を `m ' p~ , 3` に裸で撒くと、書いてもいない `' 0 @` の混在が
+        // 字句の段で生まれる（コプロダクトの枝が `asToken` で括るのと同じ理由）。
+        const consSide = (t, edge) => edge || t === "," || !bindsAtLeastComma(t);
+        if ((prev === "," || next === ",") && consSide(prev, i === 0) && consSide(next, next === undefined)) {
+          p.slots.forEach((x, k) => { if (k) out.push(","); out.push(asToken(x)); });
+          i += 1;
+          continue;
+        }
       }
-      if (named && arr[i + 1] === "'" && typeof arr[i + 2] === "string" && /^[0-9]+$/.test(arr[i + 2]) && !isPostfixMark(arr[i + 3])) {
+      // **貼るのは `p ' k` が1つの項として読めるときだけである。** 隣に `'` と同じか強い段の
+      // 演算子が居れば、字句のまとまりは `p ' k` ではない:
+      //
+      //     x << p ' 1   は (x << p) ' 1——p は左の演算子の被演算子
+      //     p ' 1 << 1   は p ' (1 << 1)——添字は右の演算子の被演算子
+      //     q ' p ' 1    は (q ' p) ' 1——p は鍵
+      //     1 @ p ' 1    は向きの違う get の混在（pass2 が名指しで断る）
+      //
+      // 隣を見ずに貼っていたので、`p ' 1 << 1` は `[7 8 9] << 1` になって 3 ではなく `__` を
+      // 返し、`1 @ p ' 1` は混在の断りをすり抜けていた。貼らなければ器の字面がその場に
+      // 書かれ、段の読みは pass2 が決める。右に `'` が続く形（`p ' 1 ' 2`）だけは左結合で
+      // `(p ' 1) ' 2` なので貼ってよい。
+      if (named && arr[i + 1] === "'" && typeof arr[i + 2] === "string" && /^[0-9]+$/.test(arr[i + 2]) && !isPostfixMark(arr[i + 3])
+        && !bindsAtLeastGet(arr[i - 1]) && !isPrefixMark(arr[i - 1]) && (arr[i + 3] === "'" || !bindsAtLeastGet(arr[i + 3]))) {
         const k = Number(arr[i + 2]);
         if (k < named.slots.length) { out.push(asToken(named.slots[k])); i += 2; continue; }
       }

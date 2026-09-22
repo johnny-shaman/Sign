@@ -16,6 +16,8 @@
 
 tier_at : [~ts] k ? (infix ' (ts ' k)~) ' tier
 
+assoc_at : [~ts] k ? (infix ' (ts ' k)~) ' assoc
+
 is_tier : [~ts] k t ? (tier_at ts k) = t
 
 `表にある最も強い段。ここを越えたら式は1トークン（項）そのものである`
@@ -36,7 +38,15 @@ end_of : [~ts] i t ?
 	end_at ts i t (end_of ts i (t + 1))
 
 end_at : [~ts] i t k ?
-	is_tier ts k t : end_of ts (k + 1) t
+	is_tier ts k t : end_run ts t (assoc_at ts k) (end_of ts (k + 1) (t + 1))
+	k
+
+`連なりは最初の演算子と結合の向きが同じ間だけ続ける。段の中で向きが2つあるのは 18 の ' と @ だけで、`
+`どちらも「引く」なので、括らずに混ぜると読みが2つある（s @ r ' t は (s @ r) ' t とも s @ (r ' t) とも読める）。`
+`向きの違う演算子が来たらそこで止める——入口の長さの検査が __ を返す（pass2 は同じ形を名指しで断る）`
+
+end_run : [~ts] t a k ?
+	(is_tier ts k t) & ((assoc_at ts k) = a) : end_run ts t a (end_of ts (k + 1) (t + 1))
 	k
 
 `段 t の左結合で、最後の項が始まる位置`
@@ -74,7 +84,7 @@ out : [~ts] i j t ?
 
 out_at : [~ts] i j t k ?
 	k = j : out ts i j (t + 1)
-	out_as ts i j t k ((infix ' (ts ' k)~) ' assoc)
+	out_as ts i j t k (assoc_at ts k)
 
 out_as : [~ts] i j t k a ?
 	a = -1 : out_one ts i j k (t + 1) t

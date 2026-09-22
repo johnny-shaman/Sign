@@ -124,6 +124,21 @@
 - Right-associative function composition requires explicit parentheses.
 - Infix `'` operator syntax: `(list | struct) ' index`.
 - Infix `@` operator syntax: `index @ (list | struct)`.
+- **Infix `'` and infix `@` must not be mixed in one run without brackets (syntax error).** A chain in one spelling (`a ' b ' c`, `a @ b @ c`) is valid; `a @ b ' c` and `a ' b @ c` are syntax errors.
+  - Both are get at the same precedence and differ only in direction: `'` is left-associative and `@` is right-associative. They are the only operators that share a precedence with opposite directions, so an unbracketed mix has two readings: `a @ b ' c` reads as `(a @ b) ' c` or as `a @ (b ' c)`. Either reading can return a value, so a misreading silently yields a different value. Because the writer's intent cannot be determined statically, compilation stops ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4; the same treatment as mixed chained comparisons in [`comparison.md`](../impl/type/comparison.md) §4).
+  - Brackets state the order. Write `(a @ b) ' c` or `a @ (b ' c)`, whichever you mean. Since `x @ p` denotes the same thing as `p ' x`, you may also write the whole chain in one spelling.
+  - Only the infix forms count. Prefix `@` (input) and postfix `@` (import) are different operators and do not form a mix (`IO@ ' say` is valid). Runs separated by a looser operator (`a ' b + c @ d`) are not a mix either: get binds before `+`, so there is only one reading.
+
+  ```sign
+  m : [10 20] , [30 40]
+  ` element 1 of element 0 of m. 20
+  (0 @ m) ' 1
+  ` element 0 of element 1 of m. 30
+  0 @ (m ' 1)
+  ` one spelling throughout. Both are 20
+  m ' 0 ' 1
+  1 @ 0 @ m
+  ```
 
 ---
 

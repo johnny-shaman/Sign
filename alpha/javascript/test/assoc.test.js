@@ -75,5 +75,55 @@ check("引き算は左から", cut("-"), "左");
 check("合成は左から", cut(";"), "左");
 check("余積（空白）は左から", cut(" "), "左");
 
+// **1つの連なりの結合の向きは1つである。**
+//
+// 同じ段に向きの違う演算子が居ると、括らずに並べた形に読みが2つある——`s @ r ' t` は
+// `(s @ r) ' t` とも `s @ (r ' t)` とも読める。以前の `reduceOnce` は左から畳み、右結合は
+// 「右に同じ綴りが居る」ときだけ待っていたので、`a @ b ' c @ d` が `a @ ((b ' c) @ d)` と
+// いう表からは読めない形になっていた。いまは名指しで断る（原理4、連鎖比較の混在と同じ）。
+//
+// **段は表から引く。** 向きの割れた段を手で書くと、段が増えたときにこちらが古くなる。
+const mixedTiers = [];
+for (const [tier, row] of OPERATOR_BY_PRECEDENCE.entries()) {
+	const ops = Object.entries(row || {}).filter(([, e]) => e.position === "infix");
+	const right = ops.filter(([, e]) => e.assoc === "right").map(([op]) => op);
+	const left = ops.filter(([, e]) => e.assoc !== "right").map(([op]) => op);
+	if (right.length && left.length) mixedTiers.push({ tier, left, right });
+}
+// 今それに当たるのは get の2つだけ。増えたら下の検査がそのまま新しい組も見る。
+check("向きが割れている段は get だけ", JSON.stringify(mixedTiers.map((t) => [...t.left, ...t.right].sort())), JSON.stringify([["'", "@"]]));
+const refused = (src) => {
+	try { compile(src); return "通った"; } catch (e) { return /結合の向きが違う演算子は括らずに並べられません/.test(e.message) ? "断る" : "別の理由：" + e.message; }
+};
+const G = "m : [10 20] , [30 40]\nk : 0\n";
+for (const { left, right } of mixedTiers) {
+	for (const l of left) for (const r of right) {
+		check(`括らずに混ぜると断る k ${r} m ${l} 1`, refused(G + `k ${r} m ${l} 1`), "断る");
+		check(`括らずに混ぜると断る m ${l} 0 ${r} m`, refused(G + `m ${l} 0 ${r} m`), "断る");
+		check(`括りの中でも同じ (k ${r} m ${l} 1)`, refused(G + `(k ${r} m ${l} 1)`), "断る");
+		check(`関数の本体でも同じ`, refused(G + `f : i ? i ${r} m ${l} 1\nf 0`), "断る");
+		check(`3つ以上でも最初の割れ目で断る k ${r} 1 ${r} m ${l} 0`, refused(G + `k ${r} 1 ${r} m ${l} 0`), "断る");
+	}
+}
+// **字句の段の書き換えも抜け道にならない。** 関数を並べた器の `p ' 1` は pass2 より前に
+// スロットへ貼られる（compile.js の `pasteVisiblePipelines`）。隣を見ずに貼っていたので、
+// データだけの器なら断る `1 @ d ' 0` が、関数を持つ器では `1 @ p ' 1` のまま 8 を返していた。
+check("関数を並べた器でも断る 1 @ p ' 1", refused("p : [+ 2] , [7 8 9] , 3\n1 @ p ' 1"), "断る");
+check("データだけの器でも断る 1 @ d ' 0", refused("d : [7 8 9] , [1 2] , 3\n1 @ d ' 0"), "断る");
+// **撒いた字句が混在を作らない。** 積の中で撒くとき、スロットを裸で並べると書いてもいない
+// `' 0 @` が字句の段で生まれていた。スロットは括って置く（断るなら混在以外の理由で）。
+check("撒いたスロットが混在を作らない", refused("m : [10 20] , [30 40]\np : 0 @ m , [+ 1]\nm ' p~ , 3") !== "断る", true);
+// **並置も連なりを切る。** get は並置より強いので `f 0 @ l l ' 2` は `f (0 @ l) (l ' 2)`——
+// 読みは1つである。隣り合う2つの項を切れ目と見ていなかったので断っていた。
+const F = "l : [1 2 3]\nf : x y ? x + y\ng : x ? x\n";
+check("並置で切れていれば通る f 0 @ l l ' 2", refused(F + "f 0 @ l l ' 2"), "通った");
+check("並置の中でも1つの連なりなら断る g 0 @ l ' 1", refused(F + "g 0 @ l ' 1"), "断る");
+// 読みが1つに決まる形は通る。括りは順序を明示し、弱い段の演算子は連なりを切る。
+check("括れば通る (0 @ m) ' 1", refused(G + "(0 @ m) ' 1"), "通った");
+check("括れば通る 0 @ (m ' 1)", refused(G + "0 @ (m ' 1)"), "通った");
+check("綴りを揃えれば通る m ' 0 ' 1", refused(G + "m ' 0 ' 1"), "通った");
+check("綴りを揃えれば通る 1 @ 0 @ m", refused(G + "1 @ 0 @ m"), "通った");
+check("弱い段で切れていれば通る m ' 0 ' 1 + 1 @ 0 @ m", refused(G + "m ' 0 ' 1 + 1 @ 0 @ m"), "通った");
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

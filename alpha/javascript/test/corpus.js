@@ -89,7 +89,7 @@ export const CORPUS = [
 	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
 	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる。
 	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [], insn: { full: 933, plain: 1631 }, digest: { full: "605c5a6293ccc524", plain: "72b517df53975bc3" } },
-	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 2068, plain: 2986 }, digest: { full: "489344600e791604", plain: "adb01ea3df54684e" } },
+	{ rel: "alpha/sign/parser.sn", front: 0, asm: [], insn: { full: 2187, plain: 3156 }, digest: { full: "7ea452ca27bba538", plain: "1ebe6b09176c8f21" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
 	// 「`ret` が1つ」としか言わない——`asmdiff` がディレクティブを残す理由も、命令数だけの

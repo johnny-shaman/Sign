@@ -820,6 +820,67 @@ const CHAIN_COMPARE_OPS = new Set(["<", "<=", "=", ">=", ">", "!="]);
 // 両端は等しく、これを「3つとも相異なる」と読んだ側が黙って間違える。
 const NON_TRANSITIVE_CHAIN_OPS = new Set(["!="]);
 
+// 連鎖比較の断り。中置（`reduceOnce`）と頭の区間（`foldHeadSections`）が同じ文言で断る
+// ——同じ規則を2箇所で書くと、片方だけ直ったときに言い分が割れる。
+function nonTransitiveChain(op) {
+  return new SyntaxError(
+    `comparison.md §4.1違反: '${op}' は推移的でないため連鎖できません` +
+      `（'a ${op} b' かつ 'b ${op} c' でも 'a ${op} c' とは限らない）。` +
+      `中央が両端のどちらとも異なることを見たいなら '(a ${op} b) & (b ${op} c)'、` +
+      `3項が相異なることを見たいなら '(a ${op} b) & (b ${op} c) & (a ${op} c)' と明示的に書いてください`
+  );
+}
+function chainTooLong(op) {
+  return new SyntaxError(`comparison.md §4は三項までの連鎖比較（L ${op} C ${op} R）を定義しています（4項以上は未定義）`);
+}
+
+// **1つの連なりの結合の向きは1つである。**
+//
+// 同じ段で向きが割れているのは get の2つ——`'`（左結合）と `@`（右結合）——だけで、
+// 括らずに並べると読みが2つある。`s @ r ' t` は `(s @ r) ' t` とも `s @ (r ' t)` とも
+// 読め、どちらも値を返しうるので、読み違えると黙って別の値が出る。以前は `reduceOnce`
+// が左から畳み、右結合の演算子は「右に同じ綴りがまだ居る」ときだけ待っていたので、
+// `a @ b ' c @ d` は `a @ ((b ' c) @ d)` という、表からは読めない形になっていた。
+//
+// 書き手の意図が静的に決まらないので止める（原理4。連鎖比較の混在と同じ扱い）。括りが
+// 順序を明示する。弱い段の演算子で切れた連なりどうし（`a ' b + c @ d`）は読みが1つ
+// なので混在ではない。綴りを名指さず表の `assoc` を引くのは、向きを決める事実を表の
+// 1か所に置くためである——向きの割れた段が増えても、ここは書き直さない。
+function refuseMixedAssociativity(items, tier) {
+  let first = null;
+  let prevOperand = false;
+  for (const x of items) {
+    // **並置も連なりを切る。** 並置（段 11）は綴りを持たないので、切れ目は「項が2つ隣り合う」
+    // ことでしか見えない。`f 0 @ l l ' 2` は get が並置より強いので `f (0 @ l) (l ' 2)` の
+    // 1読みしか無い——ここを見ていなかったので断っていた（parser.sn は通すので割れていた）。
+    if (!isBareOperatorToken(x)) {
+      if (prevOperand) first = null;
+      prevOperand = true;
+      continue;
+    }
+    prevOperand = false;
+    const e = lookup(x, "infix");
+    // 強い段は畳み終わっているので、ここに残る別の段の演算子は弱い側——連なりの切れ目である。
+    if (!e || e.precedence !== tier) {
+      first = null;
+      continue;
+    }
+    if (first === null) {
+      first = x;
+      continue;
+    }
+    const dir = (op) => (lookup(op, "infix").assoc === "right" ? "右" : "左");
+    if (dir(first) !== dir(x)) {
+      throw new SyntaxError(
+        `operator_table.md 違反: 結合の向きが違う演算子は括らずに並べられません` +
+          // 綴りは「」で囲む。`'` を `'` で囲むと `'''` になって読めない。
+          `（「${first}」は${dir(first)}結合、「${x}」は${dir(x)}結合で、同じ段なので読みが2つある）。` +
+          `(a ${first} b) ${x} c か a ${first} (b ${x} c) と括って順序を書いてください`
+      );
+    }
+  }
+}
+
 function reduceOnce(items, tier, env, phase) {
   for (let i = 0; i < items.length - 1; i++) {
     const a = items[i];
@@ -860,19 +921,12 @@ function reduceOnce(items, tier, env, phase) {
             throw new SyntaxError(`comparison.md §4.1違反: 連鎖比較は同一の比較演算子のみ許容されます（'${b}' と '${op2}' が混在）`);
           }
           // §4.1「連鎖できるのは推移的な比較のみ」。
-          if (NON_TRANSITIVE_CHAIN_OPS.has(b)) {
-            throw new SyntaxError(
-              `comparison.md §4.1違反: '${b}' は推移的でないため連鎖できません` +
-                `（'a ${b} b' かつ 'b ${b} c' でも 'a ${b} c' とは限らない）。` +
-                `中央が両端のどちらとも異なることを見たいなら '(a ${b} b) & (b ${b} c)'、` +
-                `3項が相異なることを見たいなら '(a ${b} b) & (b ${b} c) & (a ${b} c)' と明示的に書いてください`
-            );
-          }
+          if (NON_TRANSITIVE_CHAIN_OPS.has(b)) throw nonTransitiveChain(b);
           if (i + 4 >= items.length || isBareOperatorToken(items[i + 4])) {
             throw new SyntaxError(`連鎖比較 '${b}' の右辺がありません`);
           }
           if (typeof items[i + 5] === "string" && CHAIN_COMPARE_OPS.has(items[i + 5])) {
-            throw new SyntaxError(`comparison.md §4は三項までの連鎖比較（L ${b} C ${b} R）を定義しています（4項以上は未定義）`);
+            throw chainTooLong(b);
           }
           const node = {
             type: "operation",
@@ -1381,7 +1435,23 @@ function foldHeadSections(items) {
     const operands = items.slice(i + 1, end);
     if (operands.length < 2) continue;
     if (operands.some((x) => { const u = unwrapSoloBlock(x); return !!(u && u.type === "operation" && u.partial); })) continue;
-    const node = operands.reduce((acc, x) => ({ type: "operation", op: sec.op, name: sec.name, position: "infix", left: acc, right: x }));
+    // **畳む向きは表が言う**（`reduceOnce` の右結合と同じ事実）。左畳みで決め打ちしていたので、
+    // `[^] 2 3 2` が 64（`2 ^ 3 ^ 2` は 512）、`[,] 1 2 3` が `[[1 2] 3]`（`1 , 2 , 3` は
+    // `[1 2 3]`）、`[@] 0 1 m` が `1 @ m` の器を返していた——区間と中置が同じ木になるという
+    // 約束（`[[op] L R]` ≡ `L op R`）が、3項から割れていた。
+    const mk = (l, r) => ({ type: "operation", op: sec.op, name: sec.name, position: "infix", left: l, right: r });
+    const right = (lookup(sec.op, "infix") || {}).assoc === "right";
+    // **比較の3項は連鎖比較である**（comparison.md §4）。二項の左畳み `((a < b) < c)` では
+    // §2.1 の「左辺が算術単位元なら右辺」を1段目が食い、中央の項が返らない——`[<] 5 7 10` が
+    // 5、`5 < 7 < 10` が 7 と割れていた。中置と同じ節を作り、同じ規則で断る。
+    if (CHAIN_COMPARE_OPS.has(sec.op) && operands.length > 2) {
+      if (NON_TRANSITIVE_CHAIN_OPS.has(sec.op)) throw nonTransitiveChain(sec.op);
+      if (operands.length > 3) throw chainTooLong(sec.op);
+      const [left, middle, rightmost] = operands;
+      items.splice(i, end - i, { type: "operation", op: sec.op, name: "chain_compare", compareName: sec.name, position: "infix", left, middle, right: rightmost });
+      continue;
+    }
+    const node = right ? operands.reduceRight((acc, x) => mk(x, acc)) : operands.reduce((acc, x) => mk(acc, x));
     items.splice(i, end - i, node);
   }
 }
@@ -1587,6 +1657,7 @@ function reduceAll(rawItems, env) {
       }
       continue;
     }
+    refuseMixedAssociativity(items, tier);
     while (reduceOnce(items, tier, env)) {
       if (++guard > 10000) throw new Error("reduceAll: possible infinite loop at tier " + tier);
     }
