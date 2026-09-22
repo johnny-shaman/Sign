@@ -192,14 +192,28 @@ check("lexer.sn: is_space は通常文字に __ を返す", isUnit(runWith("lexe
 
 // ---- parser.sn ----
 //
-// **パース結果はそのまま Sign のプログラムである。** `1 + 2 * 3` は `[[+] 1 [[*] 2 3]]`
-// になり、それを走らせると 7 が出る——`[+]` は畳み込みなので、S式がそのまま式である。
-// だから中間表現は要らず、後段のコード生成は既にあるコンパイラそのものになる。
+// **パース結果は構文木で、.ms の形で書き出す。** `1 + 2 * 3` は
 //
-// 木を持たないので節の寿命という問題も出ない。再帰そのものが木であり、出力は流れる。
-// 優先順位・左結合・優先順位跨ぎを、**出した文字列**と**それを評価した値**の両方で見る
-// ——形だけ合っていて値が違う、という壊れ方を通さないためである。
-function sexpr(lastLine) {
+//     ast : [
+//     op : `+`
+//     l : 1
+//     r : [
+//     op : `*`
+//     l : 2
+//     r : 3
+//     ]
+//     ]
+//
+// になる。.ms は Sign の積の記法をそのままデータに使う形式で（option_ms_schema.md）、木は
+// 走らせるものではなく読むものである。入れ子は字下げではなく括りで書く——字下げは各行が深さ
+// ぶんのタブを持つので出力が入力の二乗で伸び、機械は線形の上界しか言えないので置き場所が
+// 取れない。括りなら1つの節が足すのは定数である。
+//
+// 以前は前置（S式）で書き出し、出したものを走らせて中置と同じ値かを見ていた。S式のままでは
+// 定義とラムダの特例（`:` の外括りを外す、`?` の仮引数を並べる）が積み重なったので、木を
+// データで出すことにした（利用者の裁定 2026-09-22）。検査は**pass2 の木と突き合わせる**
+// ——同じ入力を読む2つの前段が同じ木を出すことが、parser.sn が正しいことの定義である。
+function astText(lastLine) {
 	return runWith("parser.sn", lastLine);
 }
 function evalSign(src) {
@@ -209,73 +223,213 @@ function evalSign(src) {
 	for (const node of nodes) result = observe(evaluate(node, env));
 	return result;
 }
-function checkParse(note, tokens, want, infix) {
-	const got = sexpr("expr " + tokens);
-	check(note, got, want);
-	check(note + "：走らせると中置と同じ", evalSign(String(got)), evalSign(infix));
+
+// **木を同じ形に均す。** pass2 の木と parser.sn の木は、書き方の違うところが3つある:
+//
+//   並置          pass2 は型とアリティで解いた節（apply・construct…）、parser.sn は「隣り合っている」
+//                 という事実だけ——どちらも平らな連なりへ均す（同じ段の中の結び方は Sign の仕事）
+//   連鎖比較      pass2 は1つの節（L C R）、parser.sn は同じ段の入れ子——左へ入れ子の二項へ均す
+//   中置 `@`      pass2 は `'` の左右を入れ替えた形へ均してある——parser.sn の側を同じく入れ替える
+//
+// 葉（字句の1語）は pass2 に読ませて同じ規則で均す。ラムダの仮引数は、並べた名前と括りの分解を
+// 仮引数の形のまま比べる。
+const J = " ";
+const bareOf = (v) => String(v).replace(/^<|>$/g, "");
+const rightNest = (xs) => (xs.length === 1 ? xs[0] : { op: J, l: xs[0], r: rightNest(xs.slice(1)) });
+const isJuxt = (n) => n && n.type === "operation" && n.op === J && n.position === "infix";
+const flatJuxt = (n, out) => { if (isJuxt(n)) { flatJuxt(n.left, out); flatJuxt(n.right, out); } else out.push(n); return out; };
+const restParam = (name) => ({ prefix: "~", x: { a: "identifier", v: name } });
+function canon(n) {
+	if (n === null || n === undefined) return null;
+	if (n.type === "atom") return { a: n.kind, v: n.value };
+	if (n.type === "params") {
+		const es = n.entries || [];
+		if (n.bracket) return { params: "bracket", names: es.map((e) => (e.rest ? "~" : "") + bareOf(e.name)) };
+		const one = (e) => (e.pattern
+			? { params: "bracket", names: e.pattern.map((p) => (p.rest ? "~" : "") + bareOf(p.name)) }
+			: e.rest ? restParam(e.name) : { a: "identifier", v: e.name });
+		return rightNest(es.map(one));
+	}
+	if (n.type === "block") return { blk: n.kind, lines: (n.lines || []).map(canon) };
+	if (n.type === "operation") {
+		if (isJuxt(n)) return rightNest(flatJuxt(n, []).map(canon));
+		if (n.name === "chain_compare") return { op: n.op, l: { op: n.op, l: canon(n.left), r: canon(n.middle) }, r: canon(n.right) };
+		if (n.position === "prefix" || n.position === "postfix") return { [n.position]: n.op, x: canon(n.operand) };
+		return { op: n.op, l: canon(n.left), r: canon(n.right) };
+	}
+	return { other: n.type };
 }
-
-check("parser.sn: 1 + 2 * 3", runFile("parser.sn"), "[[+] 1 [[*] 2 3]]");
-checkParse("parser.sn: 1 * 2 + 3", "[`1` , `*` , `2` , `+` , `3`]", "[[+] [[*] 1 2] 3]", "1 * 2 + 3");
-checkParse("parser.sn: 1 - 2 - 3（左結合）", "[`1` , `-` , `2` , `-` , `3`]", "[[-] [[-] 1 2] 3]", "1 - 2 - 3");
-checkParse("parser.sn: 1 + 2 * 3 - 4", "[`1` , `+` , `2` , `*` , `3` , `-` , `4`]", "[[-] [[+] 1 [[*] 2 3]] 4]", "1 + 2 * 3 - 4");
-check("parser.sn: 単項（7 のみ）", sexpr("expr " + "[`7`]"), "7");
-
-// **並置は綴りを持たない段である。**
-//
-// 適用・連接・合成はどれも「間に何も無いこと」が演算子で（表の 10.0〜10.5）、表は綴りを
-// 鍵に引くので、この段だけは引けない。**空白が余積演算子そのもの**なので、字句がそれを
-// 食った後に構文へ残るのは**隣接という事実だけ**になる——他の段が「その綴りが来たか」で
-// 進むのに対し、この段は「演算子が来なかったか」で進む。
-//
-// 段は 11（表の 10.x）で、**算術より弱い**。`1 + f 1` は `(1 + f) 1` であって `1 + (f 1)`
-// ではない。ここを取り違えて「並置が一番強い」と置くと、規則そのものを作り変えてしまう
-// ——実測で解釈器と割れて気づいた（解釈器 1 ／ 作り変えた側 3）。
-//
-// **同じ段の中の結び方は Sign に任せ、連なりは平らなまま出す。** 最初は左結合で2つずつ括って
-// いた（`h 5 2` → `((h 5) 2)`）。関数の適用ならそれで同じ値だが、値どうしの並置は**構築**で
-// 平らな器になる——`1 2 3` が `((1 2) 3)` = `[[1 2] 3]` に、`1 d 2` が `[10 2]`（中置は
-// `[1 20]`）に化けていた。Sign の並置は連なりごと型とアリティで解くので、`(h 5 2)` と
-// そのまま渡せば中置と同じになる。
-{
-	const D = "f : x ? x + 1\nh : x y ? x - y\nd : n ? n * 10\n";
-	const pj = (note, toks, want, infix) => {
-		const got = sexpr("expr " + toks);
-		check(note, got, want);
-		check(note + "：走らせると中置と同じ", evalSign(D + String(got)), evalSign(D + infix));
+// .ms を行で読む：`鍵 : 値`、`鍵 : [` で節が開き `]` の行で閉じる。値は字句のまま残す。
+// 同じ欄が2つ・閉じない括り・余った行は読めないと言う（.ms は重複を先勝ちで黙って捨てるので、
+// 本物の読み手に任せると壊れた出力が通ってしまう）。
+function parseMs(text) {
+	const lines = String(text).split("\n");
+	let i = 0;
+	const block = (top) => {
+		const o = {};
+		while (i < lines.length && lines[i] !== "]") {
+			const body = lines[i];
+			const m = body.indexOf(" : ");
+			if (m < 0) throw new Error("欄の形でない: " + JSON.stringify(body));
+			const key = body.slice(0, m);
+			const rest = body.slice(m + 3);
+			i++;
+			if (key in o) throw new Error("同じ欄が2つ: " + key);
+			if (rest === "[") {
+				o[key] = block(false);
+				if (lines[i] !== "]") throw new Error("括りが閉じていない");
+				i++;
+			} else o[key] = { leaf: rest };
+		}
+		if (top && i !== lines.length) throw new Error("余った行（" + (i + 1) + " 行目）");
+		return o;
 	};
-	pj("parser.sn: 適用 f 1", "[`f` , `1`]", "(f 1)", "f 1");
-	pj("parser.sn: 連なりは平らに h 5 2", "[`h` , `5` , `2`]", "(h 5 2)", "h 5 2");
-	pj("parser.sn: 値の並置は構築 1 2 3", "[`1` , `2` , `3`]", "(1 2 3)", "1 2 3");
-	pj("parser.sn: 型で決まる並置 1 d 2", "[`1` , `d` , `2`]", "(1 d 2)", "1 d 2");
-	pj("parser.sn: 算術は適用より強い f 1 + 1", "[`f` , `1` , `+` , `1`]", "(f [[+] 1 1])", "f 1 + 1");
-	pj("parser.sn: 括りは1語のまま項になる", "[`f` , `(h 5 2)`]", "(f (h 5 2))", "f (h 5 2)");
+	return block(true);
 }
+function leafCanon(text, paramSide) {
+	const n = compile(text, { parse: parser.parse }).nodes[0];
+	if (paramSide && n && n.type === "block") {
+		const ln = n.lines && n.lines[0];
+		const nm = (x) => (x.type === "operation" && x.position === "prefix" && x.op === "~" ? "~" + bareOf(x.operand.value) : bareOf(x.value));
+		return { params: "bracket", names: ln ? flatJuxt(ln, []).map(nm) : [] };
+	}
+	if (paramSide && n && n.type === "operation" && n.position === "prefix" && n.op === "~") return restParam(n.operand.value);
+	return canon(n);
+}
+function fromMs(v, paramSide) {
+	if (v && "leaf" in v) return leafCanon(v.leaf, paramSide);
+	const op = v.op && v.op.leaf ? v.op.leaf.replace(/^`|`$/g, "") : "?op?";
+	const l = fromMs(v.l, op === "?" || (paramSide && op === J));
+	const r = fromMs(v.r, paramSide && op === J);
+	return op === "@" ? { op: "'", l: r, r: l } : { op, l, r };
+}
+{
+	const BQ = String.fromCharCode(96);
+	const TB = String.fromCharCode(9);
+	const noExample = (name, re) => fs.readFileSync(path.join(signDir, name), "utf8").replace(/\r\n/g, "\n").split("\n").filter((l) => !re.test(l)).join("\n");
+	const CHAIN = noExample("lexer.sn", new RegExp("^tokens " + BQ)) + "\n" + noExample("parser.sn", /^expr \[/) + "\n";
+	const textOf = (line) => {
+		const { nodes } = compile(CHAIN + "expr (tokens " + BQ + line + BQ + ")", { parse: parser.parse, readImport });
+		const env = newRuntimeEnv(null);
+		let r = UNIT;
+		for (const node of nodes) r = evaluate(node, env);
+		return isUnit(r) ? null : observe(r);
+	};
+	const astOf = (line) => {
+		const text = textOf(line);
+		if (text === null) return "__";
+		const t = parseMs(text);
+		return t.ast ? fromMs(t.ast, false) : "ast の欄が無い";
+	};
+	// pass2 の木。単独で読めない行（match の枝）は関数の本体の枝として読む。
+	const pass2Of = (line) => {
+		try { return canon(compile(line, { parse: parser.parse }).nodes[0]); } catch {}
+		try {
+			const n = compile("_ctx : _v ?\n" + TB + line + "\n" + TB + "__", { parse: parser.parse }).nodes[0];
+			return canon(n.right.right.lines[0]);
+		} catch { return null; }
+	};
+	const same = (note, line) => check(note, JSON.stringify(astOf(line)), JSON.stringify(pass2Of(line)));
 
-// **止まること、読めない演算子を項にしないこと。**
-//
-// 末尾が演算子（`1 +`・`a :`）だと、並置の段が長さを跨いで回り続けていた（両エンジンとも
-// 停止しない）。演算子の字だけでできた語（`===`・`!`・`><`）は、表に中置として無ければ読めない
-// 演算子であって項ではない——項として数えると `((1 ===) 2)` という誤った木が黙って出た。
-check("parser.sn: 末尾の演算子で止まる 1 +", isUnit(sexpr("expr [`1` , `+`]")), true);
-check("parser.sn: 廃止された綴りを項にしない 1 === 2", isUnit(sexpr("expr [`1` , `===` , `2`]")), true);
-check("parser.sn: 前置だけの ! を項にしない a ! b", isUnit(sexpr("expr [`a` , `!` , `b`]")), true);
+	check("parser.sn: 1 + 2 * 3 を .ms の木で書く", runFile("parser.sn"), "ast : [\nop : `+`\nl : 1\nr : [\nop : `*`\nl : 2\nr : 3\n]\n]");
+	check("parser.sn: 1語は葉そのもの", astText("expr [`7`]"), "ast : 7");
+	same("parser.sn = pass2: 1 * 2 + 3", "1 * 2 + 3");
+	same("parser.sn = pass2: 1 - 2 - 3（左結合）", "1 - 2 - 3");
+	same("parser.sn = pass2: 1 + 2 * 3 - 4", "1 + 2 * 3 - 4");
+	same("parser.sn = pass2: 2 ^ 3 ^ 2（右結合）", "2 ^ 3 ^ 2");
+	same("parser.sn = pass2: a , b , c（右結合）", "a , b , c");
+	same("parser.sn = pass2: 3 < 5 < 7（連鎖比較）", "3 < 5 < 7");
+	same("parser.sn = pass2: 1 ~+ 2 ~ 10（範囲の連なり）", "1 ~+ 2 ~ 10");
+	same("parser.sn = pass2: xs ' 0 ' 1", "xs ' 0 ' 1");
+	same("parser.sn = pass2: a @ b @ c", "a @ b @ c");
+	same("parser.sn = pass2: 前置と後置 !x & y", "!x & y");
+	same("parser.sn = pass2: a | b & c", "a | b & c");
 
-// **結合の向きが違う演算子を、括らずに1つの連なりへ混ぜない。** 同じ段で向きが割れているのは
-// get の `'`（左）と `@`（右）だけで、`s @ r ' t` は `(s @ r) ' t` とも `s @ (r ' t)` とも
-// 読める。pass2 は名指しで断る（`assoc.test.js`）。parser.sn は向きが変わった所で連なりを止め、
-// 入口の長さの検査が `__` を返す——知らない綴りを断るのと同じ道である。
-check("parser.sn: 向きの違う get を混ぜない s @ r ' t", isUnit(sexpr("expr [`s` , `@` , `r` , `'` , `t`]")), true);
-check("parser.sn: 向きの違う get を混ぜない s ' r @ t", isUnit(sexpr("expr [`s` , `'` , `r` , `@` , `t`]")), true);
-check("parser.sn: 同じ向きの連なりは右から a @ b @ c", sexpr("expr [`a` , `@` , `b` , `@` , `c`]"), "[[@] a [[@] b c]]");
-check("parser.sn: 弱い段で切れていれば混在ではない", sexpr("expr [`a` , `'` , `b` , `+` , `c` , `@` , `d`]"), "[[+] [['] a b] [[@] c d]]");
-check("parser.sn: 並置で切れていれば混在ではない", sexpr("expr [`f` , `0` , `@` , `l` , `l` , `'` , `2`]"), "(f [[@] 0 l] [['] l 2])");
-check("parser.sn: 並置の中でも1つの連なりなら混ぜない", isUnit(sexpr("expr [`g` , `0` , `@` , `m` , `'` , `1`]")), true);
+	// **並置は綴りを持たない段である。** 適用・連接・合成はどれも「間に何も無いこと」が演算子で
+	// （表の 10.0〜10.5）、表は綴りを鍵に引くので、この段だけは引けない。段は 11 で**算術より弱い**
+	// ——`1 + f 1` は `(1 + f) 1`。同じ段の中の結び方（`f x y` が `(f x) y` か、`1 2 3` が `[1 2 3]`
+	// か）は Sign が型とアリティで決めるので、木は連なりをそのまま渡す（op は空白1つ）。
+	same("parser.sn = pass2: 適用 f 1", "f 1");
+	same("parser.sn = pass2: 連なり h 5 2", "h 5 2");
+	same("parser.sn = pass2: 値の並置 1 2 3", "1 2 3");
+	same("parser.sn = pass2: 算術は並置より強い f 1 + 1", "f 1 + 1");
+	same("parser.sn = pass2: 括りは1語のまま葉になる", "f (h 5 2)");
+
+	// **定義とラムダもただの節である。** S式のときに要った特例は、木を走らせないので要らない。
+	// 仮引数の並び `x y` は並置の節に、`[x y]` は葉になって区別できる。
+	same("parser.sn = pass2: 定義 x : 20", "x : 20");
+	same("parser.sn = pass2: 2引数のラムダ", "f : x y ? x - y");
+	same("parser.sn = pass2: 器1つの仮引数", "f : [x y] ? x - y");
+	same("parser.sn = pass2: 残りの仮引数", "f : x ~xs ? ||xs||");
+	same("parser.sn = pass2: 括りと裸の混ざった仮引数", "f : [~ts] k ? k");
+	same("parser.sn = pass2: 文字の定義", "c : \\a");
+
+	// **自分のソースを読む。** lexer.sn と parser.sn の行のうち pass2 が1行で読めるもの（本体の枝は
+	// 関数の枝として読む）を全部突き合わせる。書き置いた期待値ではなく、そのつど pass2 に訊く。
+	// バッククォートを含む行は除く——この検査自身が行を文字列へ包むので閉じてしまう。
+	let compared = 0;
+	let bad = 0;
+	for (const name of ["lexer.sn", "parser.sn"]) {
+		for (const raw of fs.readFileSync(path.join(signDir, name), "utf8").split(/\r?\n/)) {
+			const line = raw.replace(/^\t+/, "");
+			if (!line.trim() || line.includes(BQ)) continue;
+			const ref = pass2Of(line);
+			if (ref === null) continue; // 仮引数だけの頭の行（`f : [~s] ?`）は1行では式にならない
+			compared++;
+			const got = astOf(line);
+			if (JSON.stringify(got) !== JSON.stringify(ref)) {
+				bad++;
+				console.log(`     ${name}: ${JSON.stringify(line)}\n       got:  ${JSON.stringify(got)}\n       want: ${JSON.stringify(ref)}`);
+			}
+		}
+	}
+	check("parser.sn = pass2: 自分のソースの行を全部（食い違い 0）", bad, 0);
+	// **前提も見る。** 比べた行が少なければ、緑は何も言っていない。
+	check("parser.sn = pass2: 比べた行数（前提）", compared >= 70, true);
+
+	// **本物の .ms の読み手でも同じ形。** 括りのブロックは字下げのブロックと同じ define の並びとして
+	// 読まれる（option_ms.js の toTree と同じ規則で、節は op・l・r の3つの欄）。
+	const shapeOf = (nodes) => {
+		const o = {};
+		for (const n of nodes) {
+			if (!n || n.type !== "operation" || n.name !== "define" || !n.left || n.left.type !== "atom") continue;
+			const rhs = n.right;
+			const isNode = rhs && rhs.type === "block" && (rhs.lines || []).some((l) => l && l.name === "define");
+			o[bareOf(n.left.value)] = isNode ? shapeOf(rhs.lines) : "葉";
+		}
+		return o;
+	};
+	const shapeMs = (t) => { const o = {}; for (const [k, v] of Object.entries(t)) o[k] = "leaf" in v ? "葉" : shapeMs(v); return o; };
+	for (const line of ["1 + 2 * 3", "f : x y ? x - y", "h 5 2", "3 < 5 < 7"]) {
+		const text = textOf(line);
+		check(`parser.sn: 本物の .ms の読み手でも同じ形（${line}）`, JSON.stringify(shapeOf(compile(text, { parse: parser.parse }).nodes)), JSON.stringify(shapeMs(parseMs(text))));
+	}
+
+	// **止まること、読めない演算子を項にしないこと。**
+	//
+	// 末尾が演算子（`1 +`・`a :`）だと、並置の段が長さを跨いで回り続けていた（両エンジンとも
+	// 停止しない）。演算子の字だけでできた語（`===`・`!`・`><`）は、表に中置として無ければ読めない
+	// 演算子であって項ではない——項として数えると誤った木が黙って出た。
+	check("parser.sn: 末尾の演算子で止まる 1 +", isUnit(astText("expr [`1` , `+`]")), true);
+	check("parser.sn: 廃止された綴りを項にしない 1 === 2", isUnit(astText("expr [`1` , `===` , `2`]")), true);
+	check("parser.sn: 前置だけの ! を項にしない a ! b", isUnit(astText("expr [`a` , `!` , `b`]")), true);
+
+	// **結合の向きが違う演算子を、括らずに1つの連なりへ混ぜない。** 同じ段で向きが割れているのは
+	// get の `'`（左）と `@`（右）だけで、`s @ r ' t` は `(s @ r) ' t` とも `s @ (r ' t)` とも
+	// 読める。pass2 は名指しで断る（`assoc.test.js`）。parser.sn は向きが変わった所で連なりを止め、
+	// 入口の長さの検査が `__` を返す——知らない綴りを断るのと同じ道である。
+	check("parser.sn: 向きの違う get を混ぜない s @ r ' t", isUnit(astText("expr [`s` , `@` , `r` , `'` , `t`]")), true);
+	check("parser.sn: 向きの違う get を混ぜない s ' r @ t", isUnit(astText("expr [`s` , `'` , `r` , `@` , `t`]")), true);
+	same("parser.sn = pass2: 弱い段で切れていれば混在ではない", "a ' b + c @ d");
+	same("parser.sn = pass2: 並置で切れていれば混在ではない", "f 0 @ l l ' 2");
+	check("parser.sn: 並置の中でも1つの連なりなら混ぜない", isUnit(astText("expr [`g` , `0` , `@` , `m` , `'` , `1`]")), true);
+}
 
 // **`[[op] L R]` ≡ `L op R`——区間は位置で被演算子を取る。**
 //
-// parser の出力はこの同値に乗っている（だから中間表現が要らない）。以前は両辺が値のときだけ
-// 成り立ち、片方が関数だと割れていた:
+// S式が構文木の表現であることの根拠で（利用者の裁定 2026-09-22）、parser.sn が .ms の木を
+// 出すようになった今も pass2 の規則として残る。以前は両辺が値のときだけ成り立ち、片方が
+// 関数だと割れていた:
 //
 //     1 + d      = __     中置：算術の相手が `Lambda` なので零射（表の ※1）
 //     [[+] 1 d]  = 10     器の中で `1 d` が先に逆適用へ解決されてから畳まれていた
@@ -315,43 +469,6 @@ check("parser.sn: 並置の中でも1つの連なりなら混ぜない", isUnit(
 	same("[?] x y B は2引数（部分適用）", "f : [?] x y (x - y)", "f : x y ? x - y", "g : f 10\ng 3");
 	same("[?] [x y] B は器1つ（部分適用）", "f : [?] [x y] (x - y)", "f : [x y] ? x - y", "g : f 10\ng 3");
 	same("[:] の右辺のラムダ", "[:] f ([?] x (x + 1))", "f : x ? x + 1", "f 5");
-}
-
-// ---- 字句 → 構文 → S式 → 走らせる：定義とラムダ ----
-//
-// **S式は構文木の表現で、そのまま走る。** `[:] f [[?] x y [[-] x y]]` は
-// `(define f (lambda (x y) (- x y)))` と同じ木である（`kan_extensions.md` §3.7——`[:]` は環境を
-// 拡張する射、`[?]` はカリー化の随伴）。
-//
-// 出し方の決まりは2つ：**文の頭の定義は外括りを付けない**（Sign の括りはスコープなので、
-// `[[:] x 20]` は構造体の欄 `{x: 20}` になって外から見えない）。**`?` の仮引数は並べて出す**
-// （`(x y)` と `[x y]` は字句で区別されず、括ると器を分解する仮引数に変わる——`x y ?` は
-// 2引数、`[x y] ?` は器1つで、部分適用の値が違う）。
-//
-// 往復した値が、ソースを直に走らせた値と同じことを見る。部分適用で2引数と器1つが割れる形まで。
-{
-	const BQ = String.fromCharCode(96);
-	const noExample = (name, re) => fs.readFileSync(path.join(signDir, name), "utf8").replace(/\r\n/g, "\n").split("\n").filter((l) => !re.test(l)).join("\n");
-	const CHAIN = noExample("lexer.sn", new RegExp("^tokens " + BQ)) + "\n" + noExample("parser.sn", /^expr \[/) + "\n";
-	const run = (src) => {
-		const { nodes } = compile(src, { parse: parser.parse, readImport });
-		const env = newRuntimeEnv(null);
-		let r = UNIT;
-		for (const node of nodes) r = evaluate(node, env);
-		const o = observe(r);
-		return isUnit(r) || o === undefined || o === null ? "__" : typeof o === "object" ? (o.__lambda__ ? "(関数)" : JSON.stringify(o)) : String(o);
-	};
-	const toSexpr = (src) => run(CHAIN + "expr (tokens " + BQ + src + BQ + ")");
-	check("字句→構文：定義は外括り無しで出す", toSexpr("x : 20"), "[:] x 20");
-	check("字句→構文：2引数のラムダは仮引数を並べる", toSexpr("f : x y ? x - y"), "[:] f [[?] x y [[-] x y]]");
-	check("字句→構文：器1つの仮引数はそのまま", toSexpr("f : [x y] ? x - y"), "[:] f [[?] [x y] [[-] x y]]");
-	const roundTrip = (note, src, use) => check(note, run(toSexpr(src) + "\n" + use), run(src + "\n" + use));
-	roundTrip("往復：定義", "x : 20", "x + 1");
-	roundTrip("往復：1引数", "f : x ? x + 1", "f (f 1)");
-	roundTrip("往復：2引数", "f : x y ? x - y", "f 10 3");
-	roundTrip("往復：2引数の部分適用", "f : x y ? x - y", "g : f 10\ng 3");
-	roundTrip("往復：器1つの部分適用", "f : [x y] ? x - y", "g : f 10\ng 3");
-	roundTrip("往復：部分適用を束ねる", "g : 1 + 2", "g");
 }
 
 // ---- 8-Queens（guide の例） ----
