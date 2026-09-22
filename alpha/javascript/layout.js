@@ -1143,6 +1143,11 @@ export {
   bareName,
   unparen,
   addressWithoutArrow,
+  // **問いの窓口も門のために出す。** `layout.sn` の門は JS の答えをその場で出して突き合わせる
+  // （期待値を書き置くと片方だけ直る）。スロット1つ分と詰め方は外からは `layoutOfStruct` 越しに
+  // しか引けず、それだと構文木が要る——型の名前と数だけで訊ける入口がこの2つである。
+  slotCellSize,
+  packSlots,
   // **表そのものを出す。** 引くのは `layout.js` の中だけだが、外へ出すのは門のためである
   // ——`target_info_sn.test.js` が表の行を1本ずつずらして「その行を誰か問うているか」を
   // 数えるのと同じ測り方を、`layout.sn` の門でもできるようにする。`if` の中に埋まって

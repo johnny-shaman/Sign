@@ -101,6 +101,10 @@ export const CORPUS = [
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
 	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
 	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1295, plain: 2055 }, digest: { full: "69375f472b243370", plain: "fa42d490d1e02f89" } },
+	// 値の置き方と渡し方。型の名前と数だけで答えられる問い（渡し方の表・構造体の詰め方・番地の域）を
+	// `layout.js` から移した枚で、`target_info.sn` を取り込んで幅を引く。表を引く枝と、直和の綴りを
+	// 1文字ずつ歩く枝と、平行2本の数の列を歩く枝が同居する。`layout_sn.test.js` が JS 側と答えを突き合わせる。
+	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4347, plain: 6890 }, digest: { full: "6c83ca0ce9576299", plain: "914fb10a82612415" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,
@@ -217,6 +221,7 @@ export const ST_BOUNDARY = [
 	},
 	{ rel: "alpha/sign/emit.sn", st: { sha: "85cbca180facc0b9", bytes: 93, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
 	{ rel: "alpha/sign/target_info.sn", st: { sha: "be05332cb5937e52", bytes: 100, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
+	{ rel: "alpha/sign/layout.sn", st: { sha: "0c7b17909a70619c", bytes: 95, entries: 0, unresolved: 0 }, own: [], selfCopy: false, raised: "7be35452c61194ea" },
 ];
 
 /**

@@ -1,0 +1,336 @@
+`layout.sn — 値の置き方と渡し方。型の名前と数だけで答えられる問いを、layout.js から移す`
+`移植もと alpha/javascript/layout.js`
+
+`移すのは「型の名前と数だけで答えが決まる問い」である——渡し方の表（stack_abi.md §4.6）と`
+`構造体の詰め方（§7.1・§7.2）、それに番地の域の表（type_system.md §3.6）。移さないのは`
+`スロットの一覧を作る所で、構文木を歩いて名前と型を集める。そこは呼ぶ側に残る`
+
+`この枚が受け取る列は数だけである。型の名前を並べた列は値として存在しない——字面の文字列を`
+`並べると余積が連結して1本の綴りに均すからである。だから構造体を詰めるときは、大きさの列と`
+`境界の列を平行に2本渡す。並べ替えもここには置けないので、比較子（name_lt）だけを置く`
+
+`答えの綴りは target_info.sn と同じ：数は Int、綴りは String、決まらない・表に無いは __`
+
+`target_info.sn`@~
+
+`--- §4.6 渡し方の表（layout.js の REF_SLOTS / REG_SLOTS / RULE_SLOTS / UNIT_TYPES と1対1） ---`
+
+`参照で運ぶ型と、その本数。表に居ることが「参照で運ぶ」ことで、値が本数である——`
+`List と String は要素数が型に無いので {ptr, len} の2本、Struct は形が型に在るので {ptr} の1本`
+
+ref_slots_tbl :
+	`List` : 2
+	`String` : 2
+	`Container` : 2
+	`Struct` : 1
+
+`入力は番地そのものなので、器ではなく値で運ぶ（番地1語）`
+
+reg_slots_tbl :
+	`Reader` : 1
+
+`規則の本数。表に居るのは「型そのものが規則だ」と言う型だけで、それ以外の規則は終端を持つ側`
+`（{start, step, end} の3本）である`
+
+rule_slots_tbl :
+	`Iterator` : 2
+
+default_rule_slots : 3
+
+unit_tbl :
+	`Unit` : 1
+
+char_tbl :
+	`Char` : 1
+
+register_w : `register`
+reference_w : `reference`
+
+`表は関数越しに引く。静的な鍵で書くと、鍵が表に無いとき機械は __ を返さずに断る`
+
+ty_is_unit : ty ? unit_tbl ' ty~
+ty_is_char : ty ? char_tbl ' ty~
+ref_slots_of : ty ? ref_slots_tbl ' ty~
+reg_slots_of : ty ? reg_slots_tbl ' ty~
+rule_type_slots : ty ? rule_slots_tbl ' ty~
+rule_slots_of : ty ? (rule_slots_tbl ' ty~) | default_rule_slots
+
+`--- 直和は枝へ切り出す ---`
+`直和の綴りは「Int | String」のように空白と縦棒で並ぶ。終端の有る切り出し（s ' [a ~ b]）は`
+`機械が出せないので、枝の頭は1文字ずつ並べ直し、残りは開いた切り出し（s ' i~）で取る`
+
+bar_ch : \|
+space_ch : \ 
+
+find_bar : s i ?
+	i >= ||s|| : __
+	(s ' i) = bar_ch : i
+	find_bar s (i + 1)
+
+alt_head : [~s] ?
+	!s : ``
+	(s ' 0) = space_ch : ``
+	(s ' 0) (alt_head (s ' 1~))
+
+bar_pos : s i ?
+	i >= ||s|| : i
+	(s ' i) = bar_ch : i
+	bar_pos s (i + 1)
+
+alt_rest : s ? s ' ((bar_pos s 0) + 2)~
+
+`--- §4.6 の問い：枝1つ ---`
+`綴りに縦棒の無い型名だけを答える。直和の枝はここだけを引く——直和へ戻る道が無いので輪ができない`
+
+atom_mode : ty tg ?
+	!(widths_of tg) : __
+	(size_of ty tg) : register_w
+	(ref_slots_of ty) : reference_w
+	(reg_slots_of ty) : register_w
+	(rule_type_slots ty) : register_w
+	__
+
+atom_slots : ty tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 0
+	(size_of ty tg) : 1
+	(ref_slots_of ty) : (ref_slots_of ty)
+	(reg_slots_of ty) : (reg_slots_of ty)
+	rule_type_slots ty
+
+atom_size : ty tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 0
+	(size_of ty tg) : (size_of ty tg)
+	!(atom_slots ty tg) : __
+	(atom_slots ty tg) * (width_by_class (widths_of tg) `gpr`)
+
+`--- 直和は広い方へ揃える（type_system.md §2） ---`
+`広い方は本数の多い枝で、並びが同じなら先の枝——layout.js の reduce と同じ。揃えた先が3本`
+`（規則）なら揃えられない`
+
+widest_alt : s tg ?
+	!(find_bar s 0) : s
+	!(atom_slots (alt_head s) tg) : __
+	!(widest_alt (alt_rest s) tg) : __
+	(atom_slots (alt_head s) tg) >= (atom_slots (widest_alt (alt_rest s) tg) tg) : alt_head s
+	widest_alt (alt_rest s) tg
+
+sum_ok : s tg ?
+	!(widest_alt s tg) : __
+	(atom_slots (widest_alt s tg) tg) <= 2 : widest_alt s tg
+	__
+
+`--- §4.6 の問い ---`
+`渡し方（register / reference）・本数・バイト数。境界（align）は訊かない——pass4 が読まない`
+
+passing_mode : ty tg ?
+	(find_bar ty 0) : atom_mode (sum_ok ty tg) tg
+	atom_mode ty tg
+
+passing_slots : ty tg ?
+	(find_bar ty 0) : atom_slots (sum_ok ty tg) tg
+	atom_slots ty tg
+
+passing_size : ty tg ?
+	(find_bar ty 0) : atom_size (sum_ok ty tg) tg
+	atom_size ty tg
+
+`--- 規則の大きさ（measureRule） ---`
+`幅は要素型が決め、要素型が無ければ GPR。要素の幅は呼ぶ側が size_of で引いて渡す——`
+`要素に大きさが無ければ __ のまま掛からない`
+
+rule_size : ty tg ? (rule_slots_of ty) * (width_by_class (widths_of tg) `gpr`)
+
+rule_size_w : ty w ?
+	!w : __
+	(rule_slots_of ty) * w
+
+`--- 型の名前だけで測る（measure） ---`
+`String は長さが型に無いので __ である（長さは中身にしか無い）。List・Struct・Implicit は`
+`構文木を歩かないと測れないので、ここでは答えない`
+
+meas_size : ty cs tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 0
+	ty_is_char ty : char_size_of cs
+	(rule_type_slots ty) : rule_size ty tg
+	size_of ty tg
+
+meas_align : ty cs tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 1
+	ty_is_char ty : char_size_of cs
+	(rule_type_slots ty) : (width_by_class (widths_of tg) `gpr`)
+	size_of ty tg
+
+`--- スロット1つ分（slotCellSize） ---`
+`先に訊くのは「どう運ぶか」である。参照で運ぶ型は、中身が読めるかどうかに関わらず運ぶ姿の`
+`幅を置く——境界は番地を運ぶ GPR 幅`
+
+cell_size : ty cs tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 0
+	(ref_slots_of ty) : (passing_size ty tg)
+	ty_is_char ty : char_size_of cs
+	(rule_type_slots ty) : rule_size ty tg
+	size_of ty tg
+
+cell_align : ty cs tg ?
+	!(widths_of tg) : __
+	ty_is_unit ty : 1
+	(ref_slots_of ty) : (width_by_class (widths_of tg) `gpr`)
+	ty_is_char ty : char_size_of cs
+	(rule_type_slots ty) : (width_by_class (widths_of tg) `gpr`)
+	size_of ty tg
+
+`--- §7.2 詰め方 ---`
+`切り上げは除算で書く。bit and（&&）も bit not（!!）も機械はまだ出せない`
+
+align_up : n a ?
+	!(a > 0) : n
+	((n + a - 1) / a) * a
+
+slot_at : off a ? align_up off a
+slot_end : off a sz ? (align_up off a) + sz
+pack_end : off mx ? align_up off mx
+
+`列で訊く形。大きさの列 sz と境界の列 al を平行に渡す——型の名前の列は値として作れない`
+
+max_align : al i m ?
+	i >= ||al|| : m
+	(al ' i) > m : max_align al (i + 1) (al ' i)
+	max_align al (i + 1) m
+
+end_off : sz al i off ?
+	i >= ||sz|| : off
+	end_off sz al (i + 1) ((align_up off (al ' i)) + (sz ' i))
+
+nth_off : sz al k i off ?
+	i >= k : align_up off (al ' i)
+	nth_off sz al k (i + 1) ((align_up off (al ' i)) + (sz ' i))
+
+pack_size : sz al ? align_up (end_off sz al 0 0) (max_align al 0 1)
+pack_align : sz al ? max_align al 0 1
+
+`--- §7.1 並び順の比較子 ---`
+`名前のある欄は名前の順に並べる。並べ替えそのものは列を並べ直すので置けず、比較子だけを置く`
+`比べるのは剥いだ後の綴りそのもの——呼ぶ側が bare_len / bare_at（bareName）を通してから並べる。`
+`ここでもう一度剥ぐと、剥いだ後も包みに見える名前（``<z>`` を剥いだ <z>）で layout.js と割れる。尽きた方が先`
+
+lt_ch : \<
+gt_ch : \>
+bq_ch : \`
+
+is_wrapped : s ?
+	||s|| < 2 : __
+	((s ' 0) = lt_ch) & ((s ' (||s|| - 1)) = gt_ch) : s
+	((s ' 0) = bq_ch) & ((s ' (||s|| - 1)) = bq_ch) : s
+	__
+
+bare_len : s ?
+	is_wrapped s : ||s|| - 2
+	||s||
+
+bare_at : s i ?
+	is_wrapped s : s ' (i + 1)
+	s ' i
+
+one : p ?
+	p : 1
+	__
+
+name_lt : a b i ?
+	i >= ||a|| : one (||a|| < ||b||)
+	i >= ||b|| : __
+	(a ' i) < (b ' i) : 1
+	(a ' i) > (b ' i) : __
+	name_lt a b (i + 1)
+
+`--- §3.6 番地の域に射の無い演算（layout.js の ADDRESS_* / WEAK_LEFT_TYPES と1対1） ---`
+`左辺が番地の *・^・<< と、番地の後置 !。左辺が __ か生の値なら、域は相手が決める`
+
+addr_ops :
+	`mul` : 1
+	`pow` : 1
+	`bit_shift_left` : 1
+
+addr_partners :
+	`Int` : 1
+	`Address` : 1
+	`Char` : 1
+	`Raw` : 1
+	`Unit` : 1
+
+weak_left :
+	`Unit` : 1
+	`Raw` : 1
+
+addr_is :
+	`Address` : 1
+
+fact_tbl :
+	`factorial` : 1
+
+is_address : ty ? addr_is ' ty~
+
+addr_domain : lt rt ?
+	weak_left ' lt~ : rt
+	lt
+
+addr_no_arrow : nm lt rt ?
+	fact_tbl ' nm~ : is_address lt
+	!(addr_ops ' nm~) : __
+	!(is_address (addr_domain lt rt)) : __
+	addr_partners ' rt~
+
+`--- 駆動 ---`
+`呼ばれない関数は出せない（仮引数 X の渡し方が決まりません）ので、この枚は自分を使い切る`
+
+drive_layout : x ?
+	drive 0 : 1
+	passing_mode `Int` `aarch64_qemu` : 1
+	atom_mode `Int` `aarch64_qemu` : 1
+	atom_slots `Int` `aarch64_qemu` : 1
+	atom_size `Int` `aarch64_qemu` : 1
+	passing_slots `Int` `aarch64_qemu` : 1
+	passing_size `Int` `aarch64_qemu` : 1
+	rule_size `Iterator` `aarch64_qemu` : 1
+	rule_size_w `List` 8 : 1
+	ty_is_unit `Unit` : 1
+	ty_is_char `Char` : 1
+	meas_size `Char` `ascii` `aarch64_qemu` : 1
+	meas_align `Char` `ascii` `aarch64_qemu` : 1
+	cell_size `Char` `ascii` `aarch64_qemu` : 1
+	cell_align `Char` `ascii` `aarch64_qemu` : 1
+	reg_slots_of `Reader` : 1
+	ref_slots_of `List` : 1
+	rule_type_slots `Iterator` : 1
+	rule_slots_of `Iterator` : 1
+	find_bar `a|b` 0 : 1
+	alt_head `Int | Char` : 1
+	alt_rest `Int | Char` : 1
+	widest_alt `Int | Char` `aarch64_qemu` : 1
+	sum_ok `Int | Char` `aarch64_qemu` : 1
+	align_up 1 8 : 1
+	slot_at 1 8 : 1
+	slot_end 1 8 8 : 1
+	pack_end 8 8 : 1
+	max_align [8] 0 1 : 1
+	end_off [8] [8] 0 0 : 1
+	nth_off [8] [8] 0 0 0 : 1
+	pack_size [8] [8] : 1
+	pack_align [8] [8] : 1
+	is_wrapped `ab` : 1
+	bare_len `ab` : 1
+	bare_at `ab` 0 : 1
+	one 1 : 1
+	name_lt `ab` `ac` 0 : 1
+	is_address `Address` : 1
+	addr_domain `Unit` `Int` : 1
+	addr_no_arrow `mul` `Address` `Int` : 1
+	||register_w|| : 1
+	||reference_w|| : 1
+	0
+
+drive_layout 0
