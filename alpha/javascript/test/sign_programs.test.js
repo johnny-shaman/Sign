@@ -404,5 +404,26 @@ for (const name of ["lexer.sn", "parser.sn", "preprocess.sn"]) {
 	check("emit.sn: 命令数はこの桁（500〜700、いまは 576）", count > 500 && count < 700, true);
 }
 
+// ---- sret の計画は上界の不動点で止まる ----
+//
+// 計画は「載った名前の数」と `needsSlot` の旗が動かなくなったら止めていたので、上界そのものが
+// まだ伸びている途中で止まっていた。parser.sn の輪は周ごとに 28 → 1792 と倍々で伸びており、
+// 外側（`expr`）ほど1〜2周前の小さい値のまま残る。外側で包むと置き場所が足りず、容量の照合が
+// 返す `__` が連結の中で吸われて、**機械は黙って短い綴りを返した**（AST 版で 30 文字が 6 文字）。
+// S式の版は1節4文字なので、遅れた見積もりでも足りていて表に出なかった。
+//
+// もう1周回しても何も動かないこと（本当に不動点であること）、上限の前に止まること、外した
+// 名前が無いことを見る。輪の上界は1つ——輪の全員が同じ係数を持つ（倍々の増え方は係数が割れる）。
+for (const name of ["lexer.sn", "parser.sn", "preprocess.sn", "emit.sn"]) {
+	const { nodes, env } = compile(fs.readFileSync(path.join(signDir, name), "utf8"), { readImport });
+	const stats = [];
+	generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1, sretPlanStats: stats });
+	const st = stats[0];
+	check(`${name}: sret の計画は上界の不動点で止まる`, !!st && st.stable && st.rounds < st.limit && st.banned.length === 0, true);
+	if (name === "parser.sn" && st) {
+		const ring = [...st.plan].filter(([k]) => /^out/.test(k)).map(([, v]) => v.terms.filter((t) => t.measure === "len").map((t) => t.coef).join("/"));
+		check("parser.sn: 輪の上界は1つ（out の輪の全員が同じ係数）", ring.length > 1 && new Set(ring).size === 1, true);
+	}
+}
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

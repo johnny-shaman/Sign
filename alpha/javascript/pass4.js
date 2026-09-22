@@ -8288,6 +8288,42 @@ function returnSizeBound(lam, name, known, group, env = null) {
 		for (const l of x.lines || []) scanIdx(l);
 	};
 	scanIdx(lam.right);
+	// **輪の中で器をそのまま渡す呼び出しは、輪の再帰である。**
+	//
+	// 相互再帰の輪では、器を食う（動く添字で引く）のは輪の誰か1人で、残りは器をそのまま
+	// 次へ渡す。parser.sn の `out_jk` がそれで、本体に `ts ' …` を書いていないので自分の節
+	// だけでは「食う」と言えず、`out` への2回の呼び出しを**既知の上界**で足していた。輪の
+	// 全員はその最大を拾うので、次の周に `out` が 2 倍になり、`out_jk` がまた 2 倍にする
+	// ——上界が周ごとに倍々に伸び、計画は伸びている途中の値で止まっていた（外側ほど古い）。
+	//
+	// **根拠は輪の側に在る。** 輪の誰かが器を動く添字で引いているなら（`selfConsumes` が
+	// そう言った器）、同じ器をそのまま渡す輪の呼び出しも同じ再帰の段である。1周ぶんの
+	// 上界は輪の中で決まり、足し込まないので伸びない。根拠を持たない輪は今まで通りで、
+	// 上界が収束しなければ計画から外れる（`collectSretPlan`）。
+	//
+	// **これも見積もりである**（上の `selfConsumes` の段落と同じ）。根拠にするのは本物の
+	// 「食う」だけで、この規則で数えた呼び出しは根拠に足さない——輪が自分で自分を支えない。
+	const ownEats = new Set();
+	const scanCalls = (x) => {
+		if (!x || typeof x !== "object") return;
+		if (x.type === "operation" && x.name === "apply") {
+			const e = selfConsumes(x, name, params, restNames, group, defaults, indexedBy);
+			if (e) ownEats.add(e);
+		}
+		for (const kk of ["left", "right", "operand"]) scanCalls(x[kk]);
+		for (const l of x.lines || []) scanCalls(l);
+	};
+	scanCalls(lam.right);
+	const ringEvidence = new Set(ownEats);
+	if (group && known) for (const m of group) for (const e of (known.get(m) || {}).eats || []) ringEvidence.add(e);
+	const ringEaten = (q) => {
+		const { head, args } = applyParts(q);
+		if (!isIdentifierNode(head) || !group || !group.has(bareName(head.value))) return null;
+		for (const a of args) {
+			if (a && isIdentifierNode(a) && params.includes(a.value) && isBoxType(a.atomType) && ringEvidence.has(a.value)) return a.value;
+		}
+		return null;
+	};
 	let konst = 0;
 	// **器ごとに係数を持つ。** 上界は `konst + Σ coef_i × ||器_i||` である。
 	//
@@ -8368,7 +8404,7 @@ function returnSizeBound(lam, name, known, group, env = null) {
 					? { k: 1, refs: new Map(), rec: null }
 					: { k: 0, refs: new Map([[q.value, 1]]), rec: null };
 			}
-			const eaten0 = selfConsumes(q, name, params, restNames, group, defaults, indexedBy);
+			const eaten0 = selfConsumes(q, name, params, restNames, group, defaults, indexedBy) || ringEaten(q);
 			if (eaten0) return { k: 0, refs: new Map(), rec: eaten0 };
 			const b0 = known ? boundedCallOf(q, known, params) : null;
 			if (b0) return { k: b0.konst, refs: new Map(b0.terms.map((t) => [t.sizeOf, t.coef])), rec: null };
@@ -8430,7 +8466,7 @@ function returnSizeBound(lam, name, known, group, env = null) {
 			}
 			// **自己呼び出しは、食っている器の要素数ぶん。** ここで諦めていたのが、
 			// 器を返す関数のほとんどが再帰である以上そのまま sret を塞いでいた。
-			const eaten = selfConsumes(q, name, params, restNames, group, defaults, indexedBy);
+			const eaten = selfConsumes(q, name, params, restNames, group, defaults, indexedBy) || ringEaten(q);
 			if (eaten) {
 				if (rec && rec !== eaten) return null; // 1枝で2つ食う形はまだ扱わない
 				rec = eaten;
@@ -8600,7 +8636,7 @@ function returnSizeBound(lam, name, known, group, env = null) {
 		return true;
 	};
 	for (const [nm, c] of terms) if (!resolveTerm(nm, c, 0)) return null;
-	return { konst: konst + extra, terms: [...resolved].map(([sizeOf, coef]) => ({ sizeOf, coef })) };
+	return { konst: konst + extra, terms: [...resolved].map(([sizeOf, coef]) => ({ sizeOf, coef })), eats: [...ownEats] };
 }
 
 // **覗き穴の家族が共有する読み方。** 行から命令だけを取り出す（行末の注記を落とす）、
@@ -10002,17 +10038,45 @@ function collectSignatures(nodes, em, monos = null) {
  * newline` は「`closers` が返す器 ＋ 1」であり、`closers` の上界が決まらなければ決まら
  * ない。定義の順序で決まってしまわないように、増えなくなるまで回す。
  */
-function collectSretPlan(nodes, em) {
+function collectSretPlan(nodes, em, stats = null) {
 	let plan = new Map();
 	const groups = mutualGroups(nodes);
-	for (let grew = true; grew; ) {
+	// **上界が動かなくなるまで回す。** 以前は「計画に載った名前の数」と `needsSlot` の旗しか
+	// 見ておらず、上界そのものがまだ伸びている途中で止まっていた。相互再帰の輪では内側の
+	// 上界が先に伸び、それを呼ぶ外側は1〜2周前の値のまま残る——parser.sn では `out` が
+	// `μ + 42×len` なのに、それを包む `expr_at` は `6 + μ + 21×len`、さらに外の `run` は
+	// `6 + μ + 1×len` だった。足りない置き場所は容量の照合が `__` にするが、連結の中では
+	// その `__` が吸われるので、**機械は黙って短い綴りを返す**（解釈 30 文字、機械 6 文字）。
+	//
+	// 上界の言葉（`konst + Σ coef×測った値`）で不動点が無い形——周ごとに伸び続ける形——は、
+	// 上限まで回っても動く名前を計画から外す。外れた関数とそれを頼る呼び手は上界を持たない
+	// と言うことになり、名指しで断られる。伸びている途中の値を使うことはもう無い。
+	const sig = (v) => JSON.stringify([v.konst, v.width, v.builds, v.needsSlot,
+		v.terms.map((t) => [t.coef, t.sizeOf, t.sizeOfIndex, t.measure]),
+		(v.content || []).map((t) => [t.coef, t.sizeOf, t.sizeOfIndex, t.measure]), v.eats || []]);
+	const banned = new Set();
+	const LIMIT = 64;
+	for (let round = 1; ; round++) {
 		const next = collectSretPlanOnce(nodes, em, plan, groups);
-		// **旗が立ったことでも進む。** 大きさだけを見ていると、`needsSlot` が下から
-		// 伝わる形（`preprocess` → `mark` → `strip_head`）が1周で止まる。
-		grew = next.size > plan.size || [...next].some(([k, v]) => v.needsSlot && !(plan.get(k) || {}).needsSlot);
+		for (const k of banned) next.delete(k);
+		const moved = [...new Set([...plan.keys(), ...next.keys()])]
+			.filter((k) => !plan.has(k) || !next.has(k) || sig(plan.get(k)) !== sig(next.get(k)));
+		if (moved.length === 0) {
+			// 試験が見る：何周で止まったか・外した名前・もう1周回しても動かないか（不動点の確認）
+			if (stats) {
+				const again = collectSretPlanOnce(nodes, em, next, groups);
+				for (const k of banned) again.delete(k);
+				const stable = again.size === next.size && [...next].every(([k, v]) => again.has(k) && sig(again.get(k)) === sig(v));
+				stats.push({ rounds: round, limit: LIMIT, banned: [...banned], stable, plan: next });
+			}
+			return next;
+		}
+		if (round >= LIMIT) {
+			for (const k of moved) banned.add(k);
+			round = 0;
+		}
 		plan = next;
 	}
-	return plan;
 }
 
 /**
@@ -10184,7 +10248,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		const content = m && m.size === 16 && b.konst === 0 && terms.length > 0
 			? terms.map((x) => ({ coef: x.coef, sizeOf: x.sizeOf, sizeOfIndex: x.sizeOfIndex, measure: "content" }))
 			: null;
-		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot, content });
+		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot, content, eats: b.eats || [] });
 	}
 	return plan;
 }
@@ -10823,7 +10887,7 @@ function generateAsm(nodes, env, options = {}) {
 	em.returnWidths = collectReturnWidths(nodes, em, monos);
 	// 返す器の置き場所（sret）。呼ぶ側と呼ばれる側の両方が同じ表を引く必要がある
 	// ——2箇所で別々に大きさを数えると、片方だけが正しい命令列を出す。
-	em.sretPlan = collectSretPlan(nodes, em);
+	em.sretPlan = collectSretPlan(nodes, em, options.sretPlanStats);
 
 	em.lines.push("// Sign — AArch64 (AAPCS64)");
 	if (options.source) em.lines.push(`// source: ${options.source}`);
