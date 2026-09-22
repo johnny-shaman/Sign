@@ -547,6 +547,25 @@ function hasPostfixTilde(node) {
   return node && node.type === "operation" && node.op === "~" && node.position === "postfix";
 }
 
+// **get の器の側に後置 `~` は書けない。** `p~ ' 0` の `~` は器を開いて中身を受け手へ撒く
+// 指示で、撒いた後には引く器が1つの値として残っていない（list_model.md §5.3——撒くのは
+// 受け手がある位置だけ）。receiver の `x~ f` を断るのと同じ理屈である。以前は黙って `~` を
+// 捨てていたので、データの器なら `p ' 0` と同じ値、関数を並べた器では括りの有無で値が割れた。
+//
+// 断るのは器の側だけである。添字の側の `~` は添字の残り（`s ' 1~`・`1~ @ s`）と動的な鍵
+// （`obj ' k~`）で、どちらも書ける。
+function refuseSpreadGetContainer(name, left, right) {
+  const container = name === "get_prop" ? left : name === "get_at" ? right : null;
+  if (!hasPostfixTilde(container)) return;
+  const spelled = name === "get_prop" ? "p~ ' 0" : "0 @ p~";
+  throw new SyntaxError(
+    `get の器の側に後置 '~' は書けません。'${spelled}' の '~' は器を開いて中身を受け手へ撒く指示で、` +
+      `撒いた後には引く器が1つの値として残っていません（list_model.md §5.3）。` +
+      `器を引くなら '~' を外して '${spelled.replace("~", "")}' と書いてください` +
+      `（添字の側の '~'——'s ' 1~'・'1~ @ s'——は添字の残りなので書けます）`
+  );
+}
+
 function mk(name, left, right) {
   return { type: "operation", op: " ", name, position: "infix", left, right };
 }
@@ -943,6 +962,7 @@ function reduceOnce(items, tier, env, phase) {
         }
         const left = toNode(a, env);
         const right = toNode(items[i + 2], env);
+        refuseSpreadGetContainer(entry.name, left, right);
         const node = { type: "operation", op: b, name: entry.name, position: "infix", left, right };
         items.splice(i, 3, node);
         return true;
@@ -1439,7 +1459,10 @@ function foldHeadSections(items) {
     // `[^] 2 3 2` が 64（`2 ^ 3 ^ 2` は 512）、`[,] 1 2 3` が `[[1 2] 3]`（`1 , 2 , 3` は
     // `[1 2 3]`）、`[@] 0 1 m` が `1 @ m` の器を返していた——区間と中置が同じ木になるという
     // 約束（`[[op] L R]` ≡ `L op R`）が、3項から割れていた。
-    const mk = (l, r) => ({ type: "operation", op: sec.op, name: sec.name, position: "infix", left: l, right: r });
+    const mk = (l, r) => {
+      refuseSpreadGetContainer(sec.name, l, r);
+      return { type: "operation", op: sec.op, name: sec.name, position: "infix", left: l, right: r };
+    };
     const right = (lookup(sec.op, "infix") || {}).assoc === "right";
     // **比較の3項は連鎖比較である**（comparison.md §4）。二項の左畳み `((a < b) < c)` では
     // §2.1 の「左辺が算術単位元なら右辺」を1段目が食い、中央の項が返らない——`[<] 5 7 10` が

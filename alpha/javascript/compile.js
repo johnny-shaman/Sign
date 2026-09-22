@@ -540,7 +540,11 @@ function pasteVisiblePipelines(lines, env) {
       if (p && arr[i + 1] === "_~") {
         const prev = arr[i - 1];
         const next = arr[i + 2];
-        const inCoproduct = (i === 0 || prev === ":" || prev === "?" || !isOp(prev)) && (next === undefined || !isOp(next));
+        // **隣が中置演算子なら、`p~` は余積の要素ではなくその被演算子である。** 演算子かどうかは
+        // `isOp`（実引数を読むための頭文字の集合）だけで見ていたので、そこに無い `'` を見落とし、
+        // `(p~ ' 0)` を余積と読んでスロットを `[+ 1] m ' 0` と並べていた。表を引けば `'` も入る。
+        const cuts = (t) => isOp(t) || !!infixEntryOf(t);
+        const inCoproduct = (i === 0 || prev === ":" || prev === "?" || !cuts(prev)) && (next === undefined || !cuts(next));
         if (inCoproduct) { out.push(...p.slots.map(asToken)); i += 1; continue; }
         // **積の中で撒くのは、`p~` が積の1項として立っているときだけである。** 反対側の隣が
         // `,` より強い演算子なら、撒いたスロットの端がそちらへ食われる——`3 , p~ ' 0` は

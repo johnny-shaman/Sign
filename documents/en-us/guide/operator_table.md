@@ -139,6 +139,7 @@
   m ' 0 ' 1
   1 @ 0 @ m
   ```
+- **Do not put postfix `~` on the container side of get (the left of infix `'`, the right of infix `@`) (syntax error).** In `p~ ' 0` the `~` opens the container and spreads its contents into a receiver, so after the spread there is no single container left to index ([`list_model.md`](../impl/type/list_model.md) §5.3: spreading only means something where a receiver takes it). It is refused for the same reason as the receiver form `x~ f` ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4). To index the container, write `p ' 0`. A `~` on the index side is valid: the index rest in `s ' 1~` and `1~ @ s`, and the dynamic key in `obj ' k~`.
 
 ---
 
