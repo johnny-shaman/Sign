@@ -497,11 +497,28 @@ function fromMs(v, paramSide) {
 // 旗（「この周で書き換えた」）で回していた頃は、状態が数周で止まった後も2つの集め方が同じ欄を
 // 書き換え合って旗が立ち続け、3本とも毎回上限（定義の数 + 2）まで回っていた。値は変わらないので
 // 他の検査では見えず、ビルドの時間だけが入力に対して急に伸びる（自己ホストの規模では終わらない）。
-// parser.sn の3回目は2周期（`end_of` / `end_at`）で、位相をそろえて止まることを見る。
-for (const name of ["lexer.sn", "parser.sn", "preprocess.sn"]) {
+//
+// **2周期でも止まらない。** 2つの状態を行き来する不動点は、上限の周の位相で止めている。上限は
+// 「定義の数 + 2」なので、どちらの状態が残るかは**行の数の偶奇**で決まり、根拠が無い。実測で
+// `target_info.sn` を取り込んで `size_of` を呼ぶ形が、使わない行を1行足すかどうかで通る／断るを
+// 行き来した（範囲の端点の規則が、`x ' k~` を均した `k ~+ 1` の合成の `1` を証拠に数えていた）。
+// 前は parser.sn にも2周期（`end_of` / `end_at`）が居た。今はどの枚でも起きないことを見る。
+for (const name of ["lexer.sn", "parser.sn", "preprocess.sn", "target_info.sn", "emit.sn", "operator_table.sn"]) {
 	const fixpointStats = [];
 	compile(fs.readFileSync(path.join(signDir, name), "utf8"), { parse: parser.parse, readImport, fixpointStats });
 	check(`${name}: 型の不動点はどの回も上限の前で止まる`, fixpointStats.length > 0 && fixpointStats.every((s) => s.rounds < s.limit), true);
+	check(`${name}: 型の不動点は2周期で止まらない`, fixpointStats.filter((s) => s.cycled).length, 0);
+}
+// **行の数の偶奇で答えが変わらない。** 使わない定義を 0〜3 本足しても、診断も値も同じであること。
+{
+	const body = "`target_info.sn`@~\ndrive 0\n\nrse : ty el tg ?\n\t!(size_of el tg) : __\n\t3 * (size_of el tg)\n\ncs2 : ty tg ? size_of ty tg\n";
+	const results = [0, 1, 2, 3].map((pad) => {
+		const src = body + Array.from({ length: pad }, (_, k) => `zz${k} : ${k}\n`).join("") + "rse `List` `Int` `aarch64_qemu`\n";
+		const { nodes, env } = compile(src, { readImport });
+		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
+		return r.diagnostics.map((d) => d.message.slice(0, 30)).join(" / ") || "診断なし";
+	});
+	check("使わない行を足しても断りが出たり消えたりしない（0〜3 本）", results, ["診断なし", "診断なし", "診断なし", "診断なし"]);
 }
 // ---- emit.sn：後段を Sign で書く最初の1枚 ----
 //

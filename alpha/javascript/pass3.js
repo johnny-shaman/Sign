@@ -2405,7 +2405,15 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
     // これを拾わないと `mk : n ? [1 ~ n]` の `n` が `Atom` に留まり、要素型が決まらず、
     // 規則裏打ちの大きさ（`{start, step, end}`）が出せない。終端が実行時変数でも形は
     // 静的に決まる、という list_model.md §2.3 の主張はここまで繋がって初めて成立する。
-    if (node.type === "operation" && (node.name === "range" || RANGE_STEP_OPS.has(node.name))) {
+    //
+    // **ただし `x ' k~` を均した `k ~+ 1` は範囲ではない。** 歩幅の `1` は Pass 2 が合成した
+    // もので（`desugarIndexRest`）、書き手は何も書いていない。`k` が添字（Int）か鍵（String）かは
+    // `x` の側が決めることで、`1` を「もう片方の端点」と読むと、鍵の仮引数が Int と決まる。
+    // 呼び出しサイトは String と言うので、2つが同じ欄を周ごとに書き換え合って2周期になり、
+    // 上限の周の位相——**定義や行の数の偶奇**——で型が決まっていた。実測で `target_info.sn` を
+    // 取り込んで `size_of` を呼ぶ形が、使わない行を1行足すかどうかで「鍵を長さ1の器へ広げられ
+    // ません（Int）」と通るとを行き来した。
+    if (node.type === "operation" && (node.name === "range" || RANGE_STEP_OPS.has(node.name)) && node.desugaredFrom !== "index-rest") {
       const ends = rangeEndpoints(node, scope);
       for (const [side, other] of [
         [ends[0], ends[1]],
@@ -4407,7 +4415,7 @@ function bareIdent(n) {
  *
  * 型変数も制約ソルビングも使っていない（§1）——束を単調に上がるだけである。
  */
-// `fixpointStats` を渡すと、不動点を1回回すごとに `{ rounds, limit }` を積む（上限まで回っていないかを検査が見る）。
+// `fixpointStats` を渡すと、不動点を1回回すごとに `{ rounds, limit, cycled }` を積む（上限まで回っていないか・2周期で止まっていないかを検査が見る）。
 function annotateAll(nodes, env, diagnostics, fixpointStats) {
   for (const node of liveDefines(nodes)) {
     const rhs = node.right;
@@ -4457,6 +4465,7 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
   let previousState = null;
   let twoRoundsAgo = null;
   let rounds = 0;
+  let cycled = false;
   for (let i = 0; i < limit; i++) {
     rounds = i + 1;
     for (const node of nodes) clearTypeAnnotations(node);
@@ -4485,11 +4494,15 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
     // なる周で止める——上限まで回した場合と最後の状態が同じになる。
     const state = fixpointState(nodes, env);
     if (state === previousState) break;
+    // **2周期で止まったことは記録に残す。** どちらの位相で止めても根拠は無く、上限（定義の数 + 2）の
+    // 偶奇で決まる——無関係な行を1行足すと型が変わる。コーパスでは起きていないことを門が見る
+    // （`sign_programs.test.js`）。起きたら、同じ欄を2か所で書き換え合っている所を探して直すこと。
+    if (state === twoRoundsAgo) cycled = true;
     if (state === twoRoundsAgo && (limit - 1 - i) % 2 === 0) break;
     twoRoundsAgo = previousState;
     previousState = state;
   }
-  if (fixpointStats) fixpointStats.push({ rounds, limit });
+  if (fixpointStats) fixpointStats.push({ rounds, limit, cycled });
   };
   // **その前に、証拠だけで一度回す。** 字面の相手から来る `Int` は既定値なので
   // （`inferParamTypesFromUsage`）、呼び出しサイトの証拠が出揃ってから埋める。
