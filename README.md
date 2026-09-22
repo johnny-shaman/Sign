@@ -42,7 +42,9 @@ config:
 graph LR
 
 subgraph Lambda
-        identity( __ : identity or Void )
+    subgraph Identity [ Identity : !__ = _ ]
+        void( Void : __  )
+    end
 end
 
 subgraph Object[ Object = True ]
@@ -50,16 +52,17 @@ subgraph Object[ Object = True ]
     Letter([ UTF ... etc ])
 
     subgraph List [ List ...etc ]
-        False( __ : false = Null)
+        False( False : __ )
     end
 end
 
-Apply([ Default or Fulfilled Apply ])
-Partial([ Partial or Not Apply ])
+Apply([ Fulfilled Apply ])
+Partial([ Partial Apply ])
+NotApply([ Not Apply ])
 
-identity <-.-> False
-Lambda --> Partial & Apply
-Partial --> False & Lambda
+Lambda --> Partial & Apply & NotApply
+NotApply --> False
+Partial --> Lambda
 Apply --> List & Number & Letter
 ```
 
