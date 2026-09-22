@@ -1157,7 +1157,7 @@ class Emitter {
 		// ——実測（clang）: `error: non-local symbol required` / `.global .Lbind_t`。
 		const level = exportLevelOf(name, this.env);
 		const sane = name.replace(/[^\w]/g, "_");
-		const label = level ? sane : `.Lbind_${sane}`;
+		const label = level ? symbolOf(sane) : `.Lbind_${sane}`;
 		this.namedData.set(key, { label, body, align, writable, level });
 		return label;
 	}
@@ -2478,7 +2478,7 @@ function genExpr(node, env, em, scope, tail = false) {
 			// **飛んだ先が返す本数が、この関数が返す本数である。** 型が答えない形（具体化した
 			// `@p`）でも、飛び先の名前は決まっている——`genFunction` がここを読む。
 			em.tailCallee = callee;
-			em.emit(`b ${callee}`, "末尾呼び出し");
+			em.emit(`b ${symbolOf(callee)}`, "末尾呼び出し");
 			return TAIL;
 		}
 
@@ -2650,7 +2650,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		// **残りは最後に組み立てる。** 途中の式は x15 を一時に使うので、`bl` の直前でなければ
 		// 潰れる。x8 と違って計算で作るものなので、置く場所そのものが規約の一部である。
 		if (limit) limit();
-		em.emit(`bl ${callee}`, n.monoLabel ? "呼び出し（具体化済み）" : "呼び出し");
+		em.emit(`bl ${symbolOf(callee)}`, n.monoLabel ? "呼び出し（具体化済み）" : "呼び出し");
 		// 引数域はもう要らない。sret のスロットは返値が指しているので**畳まない**。
 		if (plan.stackBytes > 0) em.emit(`add sp, sp, #${plan.stackBytes}`, "引数域を戻す");
 		// 返値の幅も型が決める。器を返す関数は x0/x1 で `{ptr, len}` を返す
@@ -4724,7 +4724,7 @@ function genCursorIndex(node, env, em, scope, group, cbase) {
 	if (cw > ARG_REGS.length) return em.fail(node, `カーソルが ${cw} 本でレジスタに載りません`);
 	for (let k = 0; k < cw; k++) em.load(ARG_REGS[k], (base + k) * 8, k === 0 ? "カーソルをそのまま渡す" : undefined);
 	const callee = group + (isSlice ? CURSOR_SUFFIXES.adv : CURSOR_SUFFIXES.at);
-	em.emit(`bl ${callee}`, isSlice ? "1つ進めたカーソル" : "先頭の要素");
+	em.emit(`bl ${symbolOf(callee)}`, isSlice ? "1つ進めたカーソル" : "先頭の要素");
 	em.pop(cw);
 	// 引いた結果は要素1つ、進めた結果はカーソルそのもの。
 	const outw = isSlice ? cw : 1;
@@ -4774,8 +4774,28 @@ function addressFromDollar(node, env) {
 // 付けていた——`#` を書いても書かなくても同じで、つまり `#` は機械語に何の意味も
 // 持っていなかった。内部関数の名前がシンボル表に載るのは、`.ist` を書き出さない理由
 // （内部識別子名を外に出さない）と同じものが `.s` 側から漏れていたということでもある。
+/**
+ * **Sign の名前をアセンブリの綴りへ。** 名前はそのままシンボルになるが、アセンブラが
+ * レジスタと読む綴りだけは引用符で囲む——`bl h1` は半精度レジスタ h1 への分岐と読まれ、
+ * `expected label or encodable integer pc offset` で落ちる。囲んでも**字句だけの話**で、
+ * ELF のシンボル名は `h1` のまま（llvm-nm で `T h1`）。だから公開した名前は C からも同じ
+ * 綴りで呼べるし、`.st` の名前とシンボル表の名前も一致したままである。
+ *
+ * 一覧は clang 22 で測った（英字1〜4字と、英字1〜3字＋0〜40を `bl` に置いて総当たり）。
+ * 大文字小文字を問わない。`x00`・`x32`・`z0`・`p0`・`pn0`・`za`・`pc`・`midr_el1`・`lsl` は
+ * 記号として読まれる。**漏れても黙らない**——囲み損ねた綴りはアセンブラが名指しで落とす。
+ * 囲みすぎても害は無い（シンボル表の綴りは変わらない）。
+ *
+ * 名前の中の綴りをレジスタとして読まないことは、字面を読む側（`maskSymbols`）が持つ。
+ */
+const ASM_REGISTER_SPELLING = /^(?:[xwbhsdqv](?:[0-9]|[12][0-9]|3[01])|sp|wsp|xzr|wzr|lr|fp|nzcv|fpcr|fpsr|fpmr|vg|vgx2|vgx4|ffr|zt0)$/i;
+function symbolOf(name) {
+	return ASM_REGISTER_SPELLING.test(name) ? `"${name}"` : name;
+}
+
 function symbolDirectives(name, env, label = name) {
 	const level = exportLevelOf(name, env);
+	label = symbolOf(label);
 	if (level === "###") return [`	.global ${label}`, `	.section .sign.pinned,"ax",%progbits`];
 	if (level === "##") return [`	.global ${label}`];
 	if (level === "#") return [`	.global ${label}`, `	.hidden ${label}`];
@@ -9108,6 +9128,35 @@ function calleeSaveLines(regs, verb, base = 16) {
 }
 
 /**
+ * **命令の中でシンボル（飛び先・番地の名前）が占める範囲を伏せる。**
+ *
+ * レジスタを探す正規表現（`\bx0\b`）は、名前の中の綴りまで拾う——`$` も `.` も `"` も単語の
+ * 境目なので、`bl f$x0` の `x0` も読みに見える。それを `substituteReads` が書き換えると、
+ * コピー伝播が**呼び先の名前**を変えてしまう。実測：`f$x0` と `f$x19` を持つプログラムで
+ * `bl f$x0` が `bl f$x19` になり、解釈 8 に対して機械は 106 を返した（別の関数を黙って呼ぶ）。
+ * 呼び先が無ければリンクで落ちるが、在れば誤答である。
+ *
+ * 名前が立つ位置はここで決める：`b`/`bl`/`b.cond` の飛び先、`cbz`/`cbnz`/`tbz`/`tbnz` の
+ * 最後のオペランド、`adr`/`adrp` の第2オペランド、`:lo12:` から後ろ、引用符の中。**長さを変えずに
+ * 空白で伏せる**ので、伏せた字面で見つけた位置は元の字面でも同じ位置である。
+ */
+function maskSymbols(mn, ops) {
+	const spans = [];
+	if (mn === "b" || mn === "bl" || mn.startsWith("b.")) spans.push([0, ops.length]);
+	else if (/^(cbz|cbnz|tbz|tbnz)$/.test(mn)) spans.push([ops.lastIndexOf(",") + 1, ops.length]);
+	else if (mn === "adr" || mn === "adrp") spans.push([ops.indexOf(",") + 1, ops.length]);
+	const lo = ops.indexOf(":lo12:");
+	if (lo >= 0) {
+		const end = ops.indexOf("]", lo);
+		spans.push([lo, end < 0 ? ops.length : end]);
+	}
+	for (const m of ops.matchAll(/"[^"]*"/g)) spans.push([m.index, m.index + m[0].length]);
+	const out = ops.split("");
+	for (const [a, b] of spans) for (let i = Math.max(a, 0); i < b; i++) out[i] = " ";
+	return out.join("");
+}
+
+/**
  * **読みだけを写し元へ向け直す。**
  *
  * 書き先も同じ名前のことがある——`csel x9, x9, x12, eq` の第2オペランドは読みである。
@@ -9129,7 +9178,16 @@ function substituteReads(line, from, to) {
 	let start = 0;
 	for (let k = 0; k < n; k++) start = ops.indexOf(",", start) + 1;
 	if (n > 0 && start === 0) return line; // カンマが無い（書き先だけ）——読みは無い
-	return code.slice(0, at) + ops.slice(0, start) + ops.slice(start).replace(new RegExp("\\b" + from + "\\b", "g"), to) + tail;
+	// 名前の中の綴りは読みではない（`maskSymbols`）。伏せた字面で探して、元の字面を置き換える。
+	const masked = maskSymbols(mn, ops);
+	let out = ops.slice(0, start);
+	let pos = start;
+	for (const m of masked.slice(start).matchAll(new RegExp("\\b" + from + "\\b", "g"))) {
+		const i = start + m.index;
+		out += ops.slice(pos, i) + to;
+		pos = i + m[0].length;
+	}
+	return code.slice(0, at) + out + ops.slice(pos) + tail;
 }
 
 /**
@@ -9146,7 +9204,8 @@ function substituteReads(line, from, to) {
 function regsOf(t) {
 	const mn = t.split(/[\s,]/)[0];
 	const ops = t.slice(mn.length);
-	const all = [...ops.matchAll(/\b([wx])(\d+|zr)\b/g)].map((m) => "x" + m[2]);
+	// 名前の中の綴り（`bl f$x0`）は読みでも書きでもない（`maskSymbols`）。
+	const all = [...maskSymbols(mn, ops).matchAll(/\b([wx])(\d+|zr)\b/g)].map((m) => "x" + m[2]);
 	if (/^(str|strb|strh|stur|sturb|sturh|stp|stlr|cmp|cmn|tst|ccmp|ccmn|b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz)$/.test(mn) || mn.startsWith("b."))
 		return { w: [], r: all };
 	// 先頭からいくつのオペランドが「x レジスタそのもの」か。`ldp` だけが2本に書く。
@@ -9809,10 +9868,10 @@ function wrapFrame(bodyLines, slots, name, movedSp = false, alloc = true, peep =
 	// ある——入口と出口を落とすと `sub sp` した16バイトが返らず、`ret` した先の記憶が
 	// ずれる（実際それで `@($(n + 4))` が止まらなくなった）。
 	if (bare || (moved && !movedSp && !live.length && !filled.some((l) => /\bx29\b/.test(l) || /^\s*(bl|blr)\b/.test(l.split("//")[0].trim()))))
-		return [`${name}:`, ...filled, "\tret"];
+		return [`${symbolOf(name)}:`, ...filled, "\tret"];
 
 	return [
-		`${name}:`,
+		`${symbolOf(name)}:`,
 		`\tstp x29, x30, [sp, #-${frame}]!`.padEnd(30) + `// フレーム ${frame} バイト`,
 		"\tmov x29, sp",
 		...saves,

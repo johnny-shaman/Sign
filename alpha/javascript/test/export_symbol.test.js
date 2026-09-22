@@ -524,6 +524,42 @@ const asmOfFile = (name) => {
 		check("同名: アセンブラは通る（もう `already defined` は出ない）", asmErr, "");
 		check("同名: `foo:` は1つだけ", dupAsm.split("\n").filter((l) => l.trim() === "foo:").length, 1);
 		check("同名: 前段は断りを1件持っている", dupSrc.diagnostics.map((d) => d.reason), ["redefinition-refused"]);
+
+		// **レジスタと読まれる綴りの囲みは字句だけで、ELF の名前は Sign の名前のまま。**
+		// `bl h1` は半精度レジスタへの分岐と読まれてアセンブラが落ちるので、`.s` の中では `"h1"` と
+		// 囲む（pass4 の `symbolOf`）。囲んでもシンボル表の綴りは `h1` なので、相方の `.o` から
+		// **裸の綴り**で参照して繋がる——C から `extern long h1(long)` で呼べるのと同じことである。
+		// 綴りを化かす変更（`_.h1` のように前置きする）はここで `undefined symbol` に落ちる。
+		// 印なしは外から見えないので繋がらない——証人に歯があることもここで見る。公開したデータは
+		// 番地を取られないと定数へ畳まれて像が出ないので（レジスタの綴りとは別の話）、§1 の表と
+		// 同じく `$d0` の行で場所を作る。
+		const linkWith = (src) => {
+			const c = compile(src);
+			const s = path.join(dir, "reg.s");
+			const o = path.join(dir, "reg.o");
+			fs.writeFileSync(s, generateAsm(c.nodes, c.env, OPT).text);
+			let err = "";
+			try { execFileSync(clang, ["--target=aarch64-unknown-none", "-c", s, "-o", o], { stdio: "pipe" }); }
+			catch (e) { return "アセンブラ: " + String(e.stderr || "").split("\n").find((l) => /error/.test(l)); }
+			try { execFileSync(lld, ["-o", path.join(dir, "reg.elf"), path.join(dir, "ref.o"), o], { stdio: "pipe" }); }
+			catch (e) { err = String(e.stderr || "") + String(e.stdout || ""); }
+			const undef = [...err.matchAll(/undefined symbol: (\S+)/g)].map((m) => m[1]);
+			// **未定義以外の理由で落ちたら、それを言う。** 空の配列を返すと「繋がった」と区別が付かない。
+			return err && undef.length === 0 ? "リンク: " + err.split("\n").find((l) => /error/.test(l)) : undef;
+		};
+		const refS = path.join(dir, "ref.s");
+		fs.writeFileSync(refS, "\t.section .rodata\n\t.quad h1\n\t.quad x0\n\t.quad sp\n\t.quad d0\n");
+		execFileSync(clang, ["--target=aarch64-unknown-none", "-c", refS, "-o", path.join(dir, "ref.o")], { stdio: "pipe" });
+		check(
+			"レジスタの綴りで公開しても ELF の名前はそのまま（裸の参照で繋がる）",
+			linkWith("##h1 : k ? k + 7\n##x0 : k ? k * 2\n#sp : k ? k - 1\n##d0 : 42\n$d0\nh1 (x0 (sp d0))\n"),
+			[],
+		);
+		check(
+			"印なしは外から見えない（証人に歯がある）",
+			linkWith("h1 : k ? k + 7\nx0 : k ? k * 2\nsp : k ? k - 1\n##d0 : 42\n$d0\nh1 (x0 (sp d0))\n"),
+			["h1", "x0", "sp"],
+		);
 	}
 }
 
