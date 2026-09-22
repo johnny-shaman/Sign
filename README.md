@@ -63,7 +63,7 @@ NotApply([ Not Apply ])
 Lambda --> Partial & Apply & NotApply
 NotApply --> False
 Partial --> Lambda
-Apply --> List & Number & Letter
+Apply --> Object
 ```
 
 ```mermaid
