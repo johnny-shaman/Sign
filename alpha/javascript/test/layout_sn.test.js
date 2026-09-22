@@ -26,6 +26,8 @@
  */
 import fs from "fs";
 import path from "path";
+import os from "os";
+import { Worker, isMainThread, parentPort, workerData } from "worker_threads";
 import { compile } from "../compile.js";
 import { generateAsm } from "../pass4.js";
 import * as I from "../interpreter.js";
@@ -194,7 +196,7 @@ const programOf = (ask) => SOURCE + (SOURCE.endsWith("\n") ? "" : "\n") + ask + 
 
 const interpCache = new Map();
 function interpAnswer(ask, kind) {
-	const key = kind + " " + ask;
+	const key = kind + "\u0000" + ask;
 	if (interpCache.has(key)) return interpCache.get(key);
 	let out;
 	try {
@@ -257,134 +259,176 @@ function machineAnswer(ask, kind) {
 
 // ---- 突き合わせ ----
 const toolsOk = available();
-if (!toolsOk) console.log(`（qemu の道具が無いので機械の側は飛ばす: ${toolReport()}）`);
 
-function ask(note, item) {
+/**
+ * **問いはワーカーへ分けて立てる。** 1問ごとに compile・generateAsm・clang/lld/qemu を回すので、
+ * 1本の糸では 1224 回の qemu で約 20 分かかった。問いどうしは何も共有しない（どちらのエンジンも
+ * 問いごとに compile し直し、キャッシュが効くのは同じ問いの言い直しだけ）ので、分けても立てる問いと
+ * 答えは同じで、変わるのは壁時計だけである。並べるのは4本まで——qemu を回す検査を積みすぎない。
+ */
+const WORKERS = Math.max(1, Math.min(4, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) - 2));
+
+if (isMainThread) await main();
+else {
+	const out = workerData.items.map(({ ask, kind }) => ({
+		interp: interpAnswer(ask, kind),
+		machine: toolsOk ? machineAnswer(ask, kind) : null,
+	}));
+	parentPort.postMessage({ out, qemuRuns });
+}
+
+// 問いを WORKERS 本へ配り、答えを元の並びで返す。配り方は飛び飛び（i % n）——同じ関数の問いが
+// 並んでいるので、塊で切ると1本だけが重い問い（綴りを1文字ずつ訊くもの）を抱える。
+function answersOf(list) {
+	const n = Math.min(WORKERS, list.length);
+	if (n === 0) return Promise.resolve([]);
+	const slices = Array.from({ length: n }, () => []);
+	list.forEach((it, i) => slices[i % n].push({ ask: it.ask, kind: it.kind }));
+	const run = (items) =>
+		new Promise((resolve, reject) => {
+			// 再帰の深い compile を回すので、ワーカーの糸にも親と同じだけの深さを渡す。
+			const w = new Worker(new URL(import.meta.url), { workerData: { items }, resourceLimits: { stackSizeMb: 64 } });
+			let got = null;
+			w.once("message", (m) => (got = m));
+			w.once("error", reject);
+			w.once("exit", (code) => (got && code === 0 ? resolve(got) : reject(new Error(`ワーカーが答えを返さずに終わった（終了コード ${code}）`))));
+		});
+	return Promise.all(slices.map(run)).then((parts) => {
+		qemuRuns += parts.reduce((s, p) => s + p.qemuRuns, 0);
+		const answers = new Array(list.length);
+		parts.forEach((p, k) => p.out.forEach((a, j) => (answers[j * n + k] = a)));
+		return answers;
+	});
+}
+
+function report(note, item, got) {
 	const want = item.kind === "char" && item.want !== null ? String(item.want) : norm(item.want);
-	for (const [engine, got] of [
-		["解釈", interpAnswer(item.ask, item.kind)],
-		...(toolsOk ? [["機械", machineAnswer(item.ask, item.kind)]] : []),
-	]) {
+	for (const [engine, g] of [["解釈", got.interp], ...(toolsOk ? [["機械", got.machine]] : [])]) {
 		total++;
-		if (got === want) {
+		if (g === want) {
 			passed++;
 			console.log(`ok   ${engine} ${note.padEnd(46)} ${want}`);
 		} else {
-			console.log(`FAIL ${engine} ${note.padEnd(46)} JS=${want} / Sign=${got}`);
+			console.log(`FAIL ${engine} ${note.padEnd(46)} JS=${want} / Sign=${g}`);
 		}
 	}
 }
 
-const items = [];
-for (const row of REACHED) {
-	for (const item of questionsOf(row)) {
-		if (item.unknown) {
+async function main() {
+	if (!toolsOk) console.log(`（qemu の道具が無いので機械の側は飛ばす: ${toolReport()}）`);
+
+	const items = [];
+	for (const row of REACHED) {
+		for (const item of questionsOf(row)) {
+			if (item.unknown) {
+				total++;
+				console.log(`FAIL 知らない問い ${item.unknown}（${JSON.stringify(row)}）——綴りを決めること`);
+				continue;
+			}
+			items.push({ ...item, from: row.from, note: item.ask });
+		}
+	}
+	// 同じ問いは1度だけ立てる（行が違っても、開いた問いが同じことがある）。
+	const seen = new Set();
+	const uniq = items.filter((it) => (seen.has(it.ask + it.kind) ? false : (seen.add(it.ask + it.kind), true)));
+
+	/**
+	 * **見えているか——表の行を、1本ずつ名指しで数える。**
+	 *
+	 * 測り方は `target_info_sn.test.js` と同じ：JS 側の行を1つだけ意味の変わる値へ置き、問いの
+	 * 答えが1つでも動くかを見る。鍵のある表は「値」と「所属」を別々にずらす（値を変える／行を
+	 * 落とす）。行の名前も値も `layout.js` から取る——一覧を写すと、表が増えた日に写した方だけが
+	 * 古くなる。
+	 */
+	function wantsSnapshot() {
+		return JSON.stringify(REACHED.map((r) => questionsOf(r).map((i) => norm(i.want))));
+	}
+	const put = (o, k, v) => () => {
+		const was = o[k];
+		o[k] = v;
+		return () => (o[k] = was);
+	};
+	const del = (o, k) => () => {
+		const was = o[k];
+		delete o[k];
+		return () => (o[k] = was);
+	};
+	const drop = (set, v) => () => {
+		set.delete(v);
+		return () => set.add(v);
+	};
+	const keyed = (name, o) =>
+		Object.keys(o).flatMap((k) => [
+			{ what: `${name} ${q(k)} の値`, perturb: put(o, k, o[k] === 1 ? 2 : o[k] - 1) },
+			{ what: `${name} ${q(k)} の所属`, perturb: del(o, k) },
+		]);
+	const members = (name, set) => [...set].map((v) => ({ what: `${name} ${q(v)}`, perturb: drop(set, v) }));
+	const LINES = [
+		...keyed("REF_SLOTS", L.REF_SLOTS),
+		...keyed("REG_SLOTS", L.REG_SLOTS),
+		...keyed("RULE_SLOTS", L.RULE_SLOTS),
+		...members("UNIT_TYPES", L.UNIT_TYPES),
+		...members("ADDRESS_OPS", L.ADDRESS_OPS),
+		...members("ADDRESS_FACTORIAL_OPS", L.ADDRESS_FACTORIAL_OPS),
+		...members("ADDRESS_PARTNERS", L.ADDRESS_PARTNERS),
+		...members("WEAK_LEFT_TYPES", L.WEAK_LEFT_TYPES),
+		...members("ADDRESS_DOMAIN", L.ADDRESS_DOMAIN),
+	];
+
+	const blind = [];
+	{
+		const base = wantsSnapshot();
+		for (const line of LINES) {
+			const undo = line.perturb();
+			let moved;
+			try {
+				moved = wantsSnapshot() !== base;
+			} finally {
+				undo();
+			}
 			total++;
-			console.log(`FAIL 知らない問い ${item.unknown}（${JSON.stringify(row)}）——綴りを決めること`);
-			continue;
+			if (moved) {
+				passed++;
+				console.log(`ok   見えている ${line.what}`);
+			} else {
+				blind.push(line.what);
+				console.log(`FAIL 見えない   ${line.what} ——この行は誰も問うていない。Sign 側に何を書いても門は緑である`);
+			}
 		}
-		items.push({ ...item, from: row.from, note: item.ask });
+		if (wantsSnapshot() !== base) {
+			total++;
+			console.log("FAIL ずらした表が戻っていない——以降の問いは信用できない");
+		}
 	}
-}
-// 同じ問いは1度だけ立てる（行が違っても、開いた問いが同じことがある）。
-const seen = new Set();
-const uniq = items.filter((it) => (seen.has(it.ask + it.kind) ? false : (seen.add(it.ask + it.kind), true)));
 
-/**
- * **見えているか——表の行を、1本ずつ名指しで数える。**
- *
- * 測り方は `target_info_sn.test.js` と同じ：JS 側の行を1つだけ意味の変わる値へ置き、問いの
- * 答えが1つでも動くかを見る。鍵のある表は「値」と「所属」を別々にずらす（値を変える／行を
- * 落とす）。行の名前も値も `layout.js` から取る——一覧を写すと、表が増えた日に写した方だけが
- * 古くなる。
- */
-function wantsSnapshot() {
-	return JSON.stringify(REACHED.map((r) => questionsOf(r).map((i) => norm(i.want))));
-}
-const put = (o, k, v) => () => {
-	const was = o[k];
-	o[k] = v;
-	return () => (o[k] = was);
-};
-const del = (o, k) => () => {
-	const was = o[k];
-	delete o[k];
-	return () => (o[k] = was);
-};
-const drop = (set, v) => () => {
-	set.delete(v);
-	return () => set.add(v);
-};
-const keyed = (name, o) =>
-	Object.keys(o).flatMap((k) => [
-		{ what: `${name} ${q(k)} の値`, perturb: put(o, k, o[k] === 1 ? 2 : o[k] - 1) },
-		{ what: `${name} ${q(k)} の所属`, perturb: del(o, k) },
-	]);
-const members = (name, set) => [...set].map((v) => ({ what: `${name} ${q(v)}`, perturb: drop(set, v) }));
-const LINES = [
-	...keyed("REF_SLOTS", L.REF_SLOTS),
-	...keyed("REG_SLOTS", L.REG_SLOTS),
-	...keyed("RULE_SLOTS", L.RULE_SLOTS),
-	...members("UNIT_TYPES", L.UNIT_TYPES),
-	...members("ADDRESS_OPS", L.ADDRESS_OPS),
-	...members("ADDRESS_FACTORIAL_OPS", L.ADDRESS_FACTORIAL_OPS),
-	...members("ADDRESS_PARTNERS", L.ADDRESS_PARTNERS),
-	...members("WEAK_LEFT_TYPES", L.WEAK_LEFT_TYPES),
-	...members("ADDRESS_DOMAIN", L.ADDRESS_DOMAIN),
-];
+	const answers = await answersOf(uniq);
+	uniq.forEach((it, i) => report(it.note, it, answers[i]));
 
-const blind = [];
-{
-	const base = wantsSnapshot();
-	for (const line of LINES) {
-		const undo = line.perturb();
-		let moved;
-		try {
-			moved = wantsSnapshot() !== base;
-		} finally {
-			undo();
-		}
+	for (const d of NOT_PORTED) {
 		total++;
-		if (moved) {
+		const hits = d.reached();
+		if (!hits.length) {
 			passed++;
-			console.log(`ok   見えている ${line.what}`);
+			console.log(`ok   移さず  ${d.what} ——まだ誰も問うていない`);
 		} else {
-			blind.push(line.what);
-			console.log(`FAIL 見えない   ${line.what} ——この行は誰も問うていない。Sign 側に何を書いても門は緑である`);
+			console.log(`FAIL 移さず  ${d.what} が到達した: ${hits.map((r) => JSON.stringify(r)).join(" / ")}`);
+			console.log(`     ${d.why}——移すのか JS 側を直すのか、ここで決めること`);
 		}
 	}
-	if (wantsSnapshot() !== base) {
-		total++;
-		console.log("FAIL ずらした表が戻っていない——以降の問いは信用できない");
-	}
+
+	const byFrom = (f) => uniq.filter((i) => i.from === f).length;
+	const said = uniq.filter((i) => norm(i.want) !== "__").length;
+	console.log(
+		`\n問い ${uniq.length} 通り（コーパスが立てた ${byFrom("corpus")} / 一式だけが立てた ${byFrom("suite")} / 足した ${byFrom("added")}）` +
+			`、qemu を ${qemuRuns} 回まわした`
+	);
+	console.log(`うち答えが __ でない問いは ${said} 通り——残り ${uniq.length - said} 通りは、何も書いていない枚でも通る`);
+	console.log(
+		`表の行は ${LINES.length} 本、そのうち門が見ているのは ${LINES.length - blind.length} 本` +
+			(blind.length ? `——見えていないのは ${blind.join(" / ")}` : "") +
+			`（欄の綴り ${OUTSIDE_ROWS.join(" / ")} は門の外）`
+	);
+	if (OUTSIDE) console.log(`構文木を歩くので移さない呼び出し: ${JSON.stringify(OUTSIDE)}`);
+	console.log(`\n${passed}/${total} passed`);
+	process.exit(passed === total ? 0 : 1);
 }
-
-for (const it of uniq) ask(it.note, it);
-
-for (const d of NOT_PORTED) {
-	total++;
-	const hits = d.reached();
-	if (!hits.length) {
-		passed++;
-		console.log(`ok   移さず  ${d.what} ——まだ誰も問うていない`);
-	} else {
-		console.log(`FAIL 移さず  ${d.what} が到達した: ${hits.map((r) => JSON.stringify(r)).join(" / ")}`);
-		console.log(`     ${d.why}——移すのか JS 側を直すのか、ここで決めること`);
-	}
-}
-
-const byFrom = (f) => uniq.filter((i) => i.from === f).length;
-const said = uniq.filter((i) => norm(i.want) !== "__").length;
-console.log(
-	`\n問い ${uniq.length} 通り（コーパスが立てた ${byFrom("corpus")} / 一式だけが立てた ${byFrom("suite")} / 足した ${byFrom("added")}）` +
-		`、qemu を ${qemuRuns} 回まわした`
-);
-console.log(`うち答えが __ でない問いは ${said} 通り——残り ${uniq.length - said} 通りは、何も書いていない枚でも通る`);
-console.log(
-	`表の行は ${LINES.length} 本、そのうち門が見ているのは ${LINES.length - blind.length} 本` +
-		(blind.length ? `——見えていないのは ${blind.join(" / ")}` : "") +
-		`（欄の綴り ${OUTSIDE_ROWS.join(" / ")} は門の外）`
-);
-if (OUTSIDE) console.log(`構文木を歩くので移さない呼び出し: ${JSON.stringify(OUTSIDE)}`);
-console.log(`\n${passed}/${total} passed`);
-process.exit(passed === total ? 0 : 1);
