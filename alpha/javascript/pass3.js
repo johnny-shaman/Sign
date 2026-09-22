@@ -2735,35 +2735,19 @@ function lambdaParamSlotTypes(lambdaNode, env) {
 }
 
 /**
- * `fnName` への呼び出しサイトを全て集め、各サイトの位置順の実引数ノードを返す。
+ * **呼び出しサイトの索引**——連鎖の頭の名前ごとに、歩いた順で並べる。
  *
- * **部分適用も呼び出しサイトである。** `f 1` は飽和していないが、スロット0へ 1 を
- * 渡していることに変わりはない——埋めたスロットについては同じ強さの証拠になる。
- * `applyChainOf` が `apply` と `partial_apply` の両方を辿るのはそのためである
- * （Pass 1b 側の収集は Layer 1 のジェネリック解決が目的なので別物として残す）。
+ * 前は `callsitesOf` が呼ばれるたびに木を丸ごと歩いていた。`collectCallsiteParamTypes` は
+ * 定義ごとに最大4回呼ぶので、不動点の1周で（定義の数 × 4）回歩く——`layout.sn` の
+ * compile の8割がここだった。1回の収集の中では木の形は変わらない（書くのは束縛の型だけ）
+ * ので、頭で1回歩いて引けば同じ答えになる。
+ *
+ * 歩き方は元のままである。名前を問わず、頭が名前の連鎖を1サイトとして数え、実引数だけを
+ * 辿る——元の走査も、頭が別の名前の連鎖は内側の連鎖を降りて同じ実引数へ行き着いていた。
  */
-function callsitesOf(nodes, fnName, rootEnv) {
-  const sites = [];
-  // **別名越しの呼び出しも、その関数の呼び出しサイトである。**
-  //
-  // `g : f` と書いたとき `g 5 6` は `f` を呼んでいる。ここで数えないと、実引数を見せて
-  // いるのに仮引数の型が決まらない——`f: 仮引数 a の渡し方が決まりません（直和か族）` に
-  // なる。名前を1つ挟んだだけで型が落ちるのは、`$` を挟んだ場合と同じ穴であり、そちらは
-  // `addressOf`／`aliasOf` を辿って既に塞いである。
-  //
-  // 辿るのは名前の連なりだけ（`h : g` / `g : f`）。部分適用（`g : f 1`）は実引数の位置が
-  // ずれるので数えない——ずれたまま数えると、別の位置の型を書き込むことになる。
-  const names = new Set([fnName]);
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const node of nodes) {
-      if (!isDefineNode(node) || !isIdentifierNode(node.left) || !isIdentifierNode(node.right)) continue;
-      if (names.has(node.right.value) && !names.has(node.left.value)) {
-        names.add(node.left.value);
-        grew = true;
-      }
-    }
-  }
+function callsiteIndex(nodes, rootEnv) {
+  const byBase = new Map();
+  let seq = 0;
   // **サイトごとにスコープを持ち回る。** 実引数の型はそれが書かれた場所でしか引けない
   // ——`try_col 1 row n board` の `board` は `place` のスコープに居るので、トップレベルの
   // env で引いても見つからない。器が何段も引数として渡り歩く形（盤が first_row →
@@ -2773,8 +2757,9 @@ function callsitesOf(nodes, fnName, rootEnv) {
     if (node.scope) scope = node.scope;
     if (node.type === "operation" && (node.name === "apply" || node.name === "partial_apply")) {
       const { base, args } = applyChainOf(node);
-      if (isIdentifierNode(base) && names.has(base.value)) {
-        sites.push(Object.assign(args, { scope }));
+      if (isIdentifierNode(base)) {
+        if (!byBase.has(base.value)) byBase.set(base.value, []);
+        byBase.get(base.value).push({ seq: seq++, args, scope });
         // 連鎖全体で1サイト。内側を別サイトとして二重に数えない。ただし実引数の中に
         // 別の呼び出しが入っていることはあるので、そちらは個別に辿る。
         args.forEach((a) => visit(a, scope));
@@ -2799,6 +2784,46 @@ function callsitesOf(nodes, fnName, rootEnv) {
     if (n && n.supersededByDesugar) continue;
     visit(n, rootEnv);
   }
+  return byBase;
+}
+
+/**
+ * `fnName` への呼び出しサイトを全て集め、各サイトの位置順の実引数ノードを返す。
+ *
+ * **部分適用も呼び出しサイトである。** `f 1` は飽和していないが、スロット0へ 1 を
+ * 渡していることに変わりはない——埋めたスロットについては同じ強さの証拠になる。
+ * `applyChainOf` が `apply` と `partial_apply` の両方を辿るのはそのためである
+ * （Pass 1b 側の収集は Layer 1 のジェネリック解決が目的なので別物として残す）。
+ */
+function callsitesOf(nodes, fnName, index) {
+  const sites = [];
+  // **別名越しの呼び出しも、その関数の呼び出しサイトである。**
+  //
+  // `g : f` と書いたとき `g 5 6` は `f` を呼んでいる。ここで数えないと、実引数を見せて
+  // いるのに仮引数の型が決まらない——`f: 仮引数 a の渡し方が決まりません（直和か族）` に
+  // なる。名前を1つ挟んだだけで型が落ちるのは、`$` を挟んだ場合と同じ穴であり、そちらは
+  // `addressOf`／`aliasOf` を辿って既に塞いである。
+  //
+  // 辿るのは名前の連なりだけ（`h : g` / `g : f`）。部分適用（`g : f 1`）は実引数の位置が
+  // ずれるので数えない——ずれたまま数えると、別の位置の型を書き込むことになる。
+  const names = new Set([fnName]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const node of nodes) {
+      if (!isDefineNode(node) || !isIdentifierNode(node.left) || !isIdentifierNode(node.right)) continue;
+      if (names.has(node.right.value) && !names.has(node.left.value)) {
+        names.add(node.left.value);
+        grew = true;
+      }
+    }
+  }
+  const found = [];
+  for (const n of names) if (index.has(n)) found.push(...index.get(n));
+  // 別名ごとに引いた列を、歩いた順（`seq`）へ戻す。実引数の列は呼ぶたびに写す
+  // ——前は呼ぶたびに `applyChainOf` が新しい列を作っていたので、受け取った側が触っても
+  // 次の呼び出しには漏れなかった。
+  found.sort((a, b) => a.seq - b.seq);
+  for (const f of found) sites.push(Object.assign([...f.args], { scope: f.scope }));
   return sites;
 }
 
@@ -2873,6 +2898,7 @@ function observeArgTypes(sites, index, env, unwrapSpread = false) {
  */
 function collectCallsiteParamTypes(nodes, env) {
   let changed = false;
+  const sitesIndex = callsiteIndex(nodes, env);
   for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
@@ -2930,7 +2956,7 @@ function collectCallsiteParamTypes(nodes, env) {
       !entries[0].rest &&
       !entries[0].pattern
     ) {
-      const ssites = callsitesOf(nodes, node.left.value, env);
+      const ssites = callsitesOf(nodes, node.left.value, sitesIndex);
       const sscope = rhs.scope;
       if (ssites.length > 0 && sscope) {
         // 展開（`l~`）で渡されたものだけを見る＝`observeArgTypes` の `unwrapSpread`。
@@ -2986,7 +3012,7 @@ function collectCallsiteParamTypes(nodes, env) {
       const oneBare = isIdentifierNode(paramNode);
       const pents = oneBare ? [{ name: paramNode.value }] : entries;
       const isBracket = !oneBare && !!paramNode.bracket;
-      const sites = callsitesOf(nodes, node.left.value, env);
+      const sites = callsitesOf(nodes, node.left.value, sitesIndex);
       if (sites.length > 0) {
         pents.forEach((e, i) => {
           if (!e) return;
@@ -3052,7 +3078,7 @@ function collectCallsiteParamTypes(nodes, env) {
       }
     }
     if (paramNode && paramNode.type === "params" && paramNode.bracket) {
-      const bsites = callsitesOf(nodes, node.left.value, env);
+      const bsites = callsitesOf(nodes, node.left.value, sitesIndex);
       const bscope = rhs.scope;
       if (bsites.length === 0 || !bscope) continue;
       // **名前で分ける形は、スロットの型がそのまま束縛の型である。**
@@ -3118,7 +3144,7 @@ function collectCallsiteParamTypes(nodes, env) {
       continue;
     }
     if (names.length === 0) continue;
-    const sites = callsitesOf(nodes, node.left.value, env);
+    const sites = callsitesOf(nodes, node.left.value, sitesIndex);
     if (sites.length === 0) continue;
     // **器を受け取る位置は、要素の型を語る。** `[h ~t]` は渡された集合をその場で分解
     // するので、渡ってくるのが `List(Int)` なら `h` は Int である。既存の規則は
