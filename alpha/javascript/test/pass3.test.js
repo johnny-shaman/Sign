@@ -169,6 +169,32 @@ function checkNoThrow(note, source, want) {
 	}
 }
 
+// 書き込み先の仮引数へ値を渡したときの断り（pass3 の collectWriteThroughValue）。
+function checkWriteArg(note, source, want) {
+	extra++;
+	const ds = (compile(source, { parse: parser.parse }).diagnostics || []).filter((d) => d.reason === "write-through-value-arg");
+	if (ds.length === want) {
+		console.log(`OK   ${note}`);
+		extraPassed++;
+	} else {
+		console.log(`FAIL ${note}`);
+		console.log(`     診断 ${ds.length} 件（期待 ${want}）: ${JSON.stringify(ds.map((d) => d.message))}`);
+	}
+}
+
+// 書き込みの左辺が番地でないときの断り。診断は pass3 が付ける（reason: write-to-non-address）。
+function checkWrite(note, source, want) {
+	extra++;
+	const ds = (compile(source, { parse: parser.parse }).diagnostics || []).filter((d) => d.reason === "write-to-non-address");
+	if (ds.length === want) {
+		console.log(`OK   ${note}`);
+		extraPassed++;
+	} else {
+		console.log(`FAIL ${note}`);
+		console.log(`     診断 ${ds.length} 件（期待 ${want}）: ${JSON.stringify(ds.map((d) => d.message))}`);
+	}
+}
+
 // Stringは余積の吸収元（あらゆる値がテキスト表現を持つのでjoinが常に存在する）。
 // 左右どちらに来てもテキスト連結になり、要素型のjoin判定には入らない。
 checkNoThrow("`ab` 1 → String（String左辺）", "`ab` 1", "String");
@@ -318,6 +344,52 @@ checkStructOk("スカラーは器へ持ち上がる", "z : [~l] x [~r] ?\n\tl\nz
 // 焦点を動かすのは再帰そのもので、余結合律がその歩きを保証している
 // （どこで先に切っても同じ所に着く）。左文脈は呼び出しの側に在る。
 checkStructOk("焦点を進めるのは再帰", "at : n [a ~b] ?\n\tn = 0 : a\n\tat (n - 1) b\nat 2 [1 2 3 4]");
+
+
+// ---- 書き込み（中置 `#`）の左辺は番地である（operator_table.md 段4、利用者の裁定 2026-09-23） ----
+//
+// 左辺の型が**番地でないと分かっている**ときだけ名指しで断る。黙って通すと、解釈器は
+// 「書き込み先を持たない左辺へは書かない」で `__` を返し、**機械は値を番地と読んで
+// 書きに行く**——同じ字面で片方が黙り、片方が踏み抜く形だった。
+//
+// 断らないのは `$x`・`$(l ' 1)`・MMIO の生番地・仮引数（型は呼び出しサイトから届く）で、
+// つまり「番地だと分かっている」「まだ分からない」はどちらも通る。
+checkWrite("Int の束縛へ書くと断る", "x : 5\nx # 7", 1);
+checkWrite("String の束縛へ書くと断る", "s : `ab`\ns # 7", 1);
+checkWrite("List の束縛へ書くと断る", "l : 1 2 3\nl # 7", 1);
+checkWrite("`$x` は通る", "x : 5\n$x # 7", 0);
+checkWrite("番地を束ねた名前は通る", "x : 5\np : $x\np # 7", 0);
+checkWrite("器の要素の場所は通る", "l : 1 2 3\n$(l ' 1) # 9", 0);
+checkWrite("MMIO の生番地は通る", "0x9000000 # 65", 0);
+checkWrite("仮引数は通る（型は呼び出しサイトから）", "f : p ? p # 7\nx : 5\nf $x", 0);
+
+// **呼び出しを1つ挟んだ同じ穴。** `f : p ? p # 7` の `p` は使われ方から `Address` になるので、
+// `f x`（`x : 5`）は上の門に掛からない——実測で解釈器は `__`、機械はスタックを踏み抜いていた。
+// 渡す所で見る（reason: write-through-value-arg）。
+checkWriteArg("番地を受ける仮引数へ値を渡すと断る", "f : p ? p # 7\nx : 5\nf x", 1);
+checkWriteArg("字面で渡しても断る", "f : p ? p # 7\nf 5", 1);
+checkWriteArg("式の結果でも断る", "g : n ? n + 1\nf : p ? p # 7\nf (g 4)", 1);
+checkWriteArg("場所を渡せば通る", "f : p ? p # 7\nx : 5\nf $x", 0);
+checkWriteArg("器の要素の場所でも通る", "f : p ? p # 7\nl : 1 2 3\nf $(l ' 1)", 0);
+checkWriteArg("MMIO の番地でも通る", "f : p ? p # 65\nf 0x9000000", 0);
+checkWriteArg("番地でない仮引数は見ない（右辺）", "out : 0x9000000\nput : c ?\n\tout # c\nput 65", 0);
+checkWriteArg("2番目のスロットも位置で見る", "f : p q ? q # p\nx : 5\nf 7 x", 1);
+checkWriteArg("その位置に場所が来ていれば通る", "f : p q ? q # p\nx : 5\nf 7 $x", 0);
+
+// **転送を1つ挟んでも同じ規則で当たる。** `g : n ? f n` の `n` は字面では書き込み先でないが、
+// 型は `f` の仮引数から伝わって `Address` になる——書かれ方だけを見ていたときは、名前を1つ
+// 挟むたびに穴が奥へ逃げていた（実測で `g 5` は踏み抜いていた）。
+checkWriteArg("転送を挟んでも断る", "f : p ? p # 7\ng : n ? f n\ng 5", 1);
+checkWriteArg("転送でも場所を渡せば通る", "f : p ? p # 7\ng : q ? f q\nx : 5\ng $x", 0);
+// 実引数の型は**書かれた場所**でしか引けない（`s` は `g` のスコープに居る）。
+checkWriteArg("サイトのスコープで実引数を読む", "f : p ? p # 7\ng : s ? f (s ' 0)\ng `ab`", 1);
+checkWriteArg("その要素の場所なら通る", "f : p ? p # 7\ng : s ? f $(s ' 0)\ng `ab`", 0);
+
+// **位置が1対1にならない受け方は見ない。** `~y` は残りをまとめて受けるので、3番目の実引数と
+// 3番目のスロットは同じものではない——器を受ける位置の型は `Address` になりうるので、ここを
+// 外すと可変引数の関数が軒並み断られる（実測：`preprocessor.md` の `map` の例）。
+checkWriteArg("可変引数の位置は見ない", "map : f x ~y ? @f x , map y~\nmap $[* 2] 1 2 3 4 5", 0);
+checkWriteArg("分解で受ける位置も見ない", "f : p [h ~t] ? p # h\nx : 5\nf $x [1 2 3]", 0);
 
 console.log(`\n${passed + extraPassed}/${cases.length + extra} passed`);
 process.exit(passed === cases.length && extraPassed === extra ? 0 : 1);

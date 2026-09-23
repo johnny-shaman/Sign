@@ -2771,7 +2771,7 @@ function callsiteIndex(nodes, rootEnv) {
       const { base, args } = applyChainOf(node);
       if (isIdentifierNode(base)) {
         if (!byBase.has(base.value)) byBase.set(base.value, []);
-        byBase.get(base.value).push({ seq: seq++, args, scope });
+        byBase.get(base.value).push({ seq: seq++, args, scope, node });
         // 連鎖全体で1サイト。内側を別サイトとして二重に数えない。ただし実引数の中に
         // 別の呼び出しが入っていることはあるので、そちらは個別に辿る。
         args.forEach((a) => visit(a, scope));
@@ -2835,7 +2835,7 @@ function callsitesOf(nodes, fnName, index) {
   // ——前は呼ぶたびに `applyChainOf` が新しい列を作っていたので、受け取った側が触っても
   // 次の呼び出しには漏れなかった。
   found.sort((a, b) => a.seq - b.seq);
-  for (const f of found) sites.push(Object.assign([...f.args], { scope: f.scope }));
+  for (const f of found) sites.push(Object.assign([...f.args], { scope: f.scope, node: f.node }));
   return sites;
 }
 
@@ -4139,6 +4139,116 @@ function collectUnitReason(node, env, diagnostics) {
 // 未解決（null）が混ざる場合は直和全体が未解決——分かっていない枝がある以上、
 // 分かっている枝だけで返値型を名乗ると嘘になる。
 /**
+ * **書き込みの左辺は番地である**（中置 `#`、operator_table.md 段4「アドレスにデータを入れ、
+ * 成功したらアドレスを返す」）。型が**番地でないと分かっている**左辺を名指しで断る。
+ *
+ * 黙って通すと、解釈器は「書き込み先を持たない左辺へは書かない」規則で `__` を返し（下の
+ * `output` の注）、**機械は値を番地として書きに行って踏み抜く**（実測：`x : 5` に対する
+ * `x # 7` で qemu が STKOVFLT）。同じ字面で片方が黙り、片方が落ちる形である。
+ *
+ * 断るのは**型が分かっていて番地でない**ときだけにする。`$x`・`$(l ' 1)`・MMIO の `0x9000000`・
+ * `$__`・仮引数（呼び出しサイトから Address が届く）は全部 Address なので通る——実測で確かめた。
+ * 型が付いていない左辺は断らない：ここで断ると「まだ型が決まっていない」と「書けない」が
+ * 混ざる（型が決まるのは呼び出しサイトを見た後である）。
+ */
+// 書き込み先として置けない型か。**分からない（null）・族・`Unit` は通す**——分からないことを
+// 「不正」と断じないのが原理4 の線引きである（`acceptsType` と同じ構え）。
+function notAnAddressType(t) {
+  return !!t && t !== "Address" && t !== "Atom" && t !== "Scalar" && t !== "Container" && t !== "Unit";
+}
+
+function collectWriteToNonAddress(nodes, env, diagnostics) {
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "operation" && node.name === "output" && node.position === "infix" && node.left) {
+      const t = widestMember(inferAtomType(node.left, env));
+      if (notAnAddressType(t)) {
+        // **印を節へ残す。** ドライバは前段の診断を表示するだけで出力を止めないので
+        // （`emit_asm.mjs`）、印が無いと機械は踏み抜く命令を出してしまう。規則はここ1か所で
+        // 決めて、Pass 4 は印に従うだけにする。
+        node.writeToNonAddress = t;
+        diagnostics.push({
+          level: "error",
+          reason: "write-to-non-address",
+          spec: "operator_table.md 段4",
+          message:
+            `書き込み（中置 '#'）の左辺は番地です（${t} が来ています）。場所を取るなら '$x'、` +
+            `器の要素なら '$(l ' 0)'、MMIO なら番地の数を直に書きます——値へ書くと、` +
+            `解釈器は何も起きず機械は踏み抜きます`,
+        });
+      }
+    }
+    for (const c of childrenOf(node)) visit(c);
+  };
+  for (const node of nodes) visit(node);
+}
+
+/**
+ * **書き込み先の仮引数へ、値を渡していないか**（同じ規則が呼び出しを1つ挟んだ形）。
+ *
+ * 直の `x # 7` は上の門が断るが、`f : p ? p # 7` を `f x`（`x : 5`）で呼ぶ形は素通りしていた
+ * ——実測で**解釈器は `__`、機械はスタックを踏み抜く**（STKOVFLT）。仮引数の型は使われ方から
+ * 逆算されるので `p` は `Address` になり、呼ぶ側の `Int` はそれを上書きしない。だから
+ * 「左辺の型」を見る門では届かない。**渡す所で見る。**
+ *
+ * 見るのは**仮引数の型が `Address` の位置**である。書かれ方（`p # 7`）だけを見ていたときは
+ * **転送を1つ挟むと素通り**していた——`g : n ? f n` の `n` は字面では書き込み先でないが、
+ * 型は `f` の仮引数から伝わって `Address` になる。実測で `g 5` は踏み抜いていた（穴は
+ * 名前を1つ挟むたびに奥へ逃げる）。型で見れば伝わった先も同じ1つの規則で当たる。
+ *
+ * `Address` ちょうどの位置に限る——直和（`Address | Int`）は「まだ決まっていない」であって
+ * 「番地である」ではないので、そこで断ると分からないことを不正と断じることになる（原理4）。
+ */
+function addressSlots(lambdaNode, binding) {
+  const paramNode = lambdaNode.left;
+  const names = isIdentifierNode(paramNode)
+    ? [paramNode.value]
+    : paramNode && paramNode.type === "params" && !paramNode.bracket
+      ? (paramNode.entries || []).map((e) => (!e.pattern && !e.rest && e.name ? e.name : null))
+      : [];
+  const types = (binding && binding.paramTypes) || [];
+  const slots = [];
+  // **名前で受けている位置だけを見る。** 可変引数（`~y`）や分解（`[h ~t]`）は実引数の
+  // 位置と1対1にならない——`map : f x ~y ?` を `map $[* 2] 1 2 3 4 5` と呼ぶと、3番目の
+  // スロットは `2 3 4 5` をまとめて受けるのに、位置で引くと `2` が当たる（実測で
+  // `preprocessor.md` の例を誤って断った）。器を受ける位置の型は `Address` になりうるので、
+  // ここを外すと可変引数の関数が軒並み断られる。
+  types.forEach((t, i) => {
+    if (t === "Address" && names[i]) slots.push({ i, name: names[i] });
+  });
+  return slots;
+}
+
+function collectWriteThroughValue(nodes, env, diagnostics) {
+  const index = callsiteIndex(nodes, env);
+  for (const node of liveDefines(nodes)) {
+    const rhs = node.right;
+    if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
+    const slots = addressSlots(rhs, envLookup(env, node.left.value));
+    if (!slots.length) continue;
+    for (const site of callsitesOf(nodes, node.left.value, index)) {
+      for (const { i, name } of slots) {
+        const arg = site[i];
+        if (!arg) continue;
+        const t = widestMember(inferAtomType(arg, site.scope || env));
+        if (!notAnAddressType(t)) continue;
+        // **印は呼び出しの節に付ける。** 実引数は畳まれて消えることがあるが、呼び出しは必ず出る。
+        if (site.node) site.node.writeThroughValue = { fn: node.left.value, name, type: t };
+        diagnostics.push({
+          level: "error",
+          reason: "write-through-value-arg",
+          spec: "operator_table.md 段4",
+          message:
+            `'${bareIdent(node.left)}' の仮引数 '${name}' は番地です（${t} を渡しています）。` +
+            `場所を渡すなら '${bareIdent(node.left)} $x'、器の要素なら '$(l ' 0)' です——値を渡すと、` +
+            `書き込みは解釈器で何も起きず機械は踏み抜きます`,
+        });
+      }
+    }
+  }
+}
+
+/**
  * **多相な `Struct` へ実行時の添字は引けない**（§2）。
  *
  * `p ' @i` は「名前ではなく中身で引く」形だが、スロットごとに型が違ってよいのが直積の
@@ -4650,6 +4760,8 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
   for (const node of nodes) annotateTypes(node, env, diagnostics);
   if (diagnostics) collectCompositionMismatch(nodes, env, diagnostics);
   if (diagnostics) collectPolymorphicIndex(nodes, diagnostics);
+  if (diagnostics) collectWriteToNonAddress(nodes, env, diagnostics);
+  if (diagnostics) collectWriteThroughValue(nodes, env, diagnostics);
   return nodes;
 }
 

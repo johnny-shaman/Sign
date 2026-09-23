@@ -1332,6 +1332,16 @@ function genExpr(node, env, em, scope, tail = false) {
 	const n = unwrap(node);
 	if (!n) return false;
 
+	// **書き込み先の仮引数へ値を渡す呼び出しは出さない**（規則は Pass 3 の `collectWriteThroughValue`）。
+	// 直の `x # 7` は上の門が断るが、`f $x` の所へ `f x` と書いた形は呼び出しの節に印が付く
+	// ——出すと呼び先が値を番地として書きに行って踏み抜く（実測：STKOVFLT）。
+	if (n.writeThroughValue)
+		return em.fail(
+			n,
+			`'${n.writeThroughValue.fn}' の仮引数 '${n.writeThroughValue.name}' は番地です` +
+				`（${n.writeThroughValue.type} を渡しています）。場所を渡すなら '${n.writeThroughValue.fn} $x' です`
+		);
+
 	// **match_case の並び**（関数本体）。各行は `条件 : 結果`、最後の1行だけ条件無しの
 	// フォールバックでありうる。条件が `__` でなければその結果を返す（function_guide.md）。
 	//
@@ -3208,6 +3218,9 @@ function genExpr(node, env, em, scope, tail = false) {
 	// 中置 `#`——アドレスへ書く。**守るのは左辺**（不正なアドレスへ書かない）。
 	// 右辺の `__` は書ける——書けないと場所を空にできない。
 	if (n.type === "operation" && n.name === "output" && n.position === "infix") {
+		// **番地でない左辺へは出さない**（規則は Pass 3 の `collectWriteToNonAddress`）。印が在る
+		// のに出すと、値を番地として書きに行って踏み抜く（実測：`x : 5` の `x # 7` で STKOVFLT）。
+		if (n.writeToNonAddress) return em.fail(n, `書き込み（中置 '#'）の左辺は番地です（${n.writeToNonAddress} が来ています）。場所を取るなら '$x'、器の要素なら '$(l ' 0)'、MMIO なら番地の数を直に書きます`);
 		// **生の番地へ直に書けるのは、ハードウェアを触る層だけである。**
 		//
 		// `0x9000000 # 0x4b`（UART へ1文字）は layer 0〜1 の仕事であり、上の層で同じ式を

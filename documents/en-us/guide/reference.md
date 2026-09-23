@@ -202,9 +202,11 @@ calc :
 
 Writes data to a physical memory address or IO port.
 
-```sign
-`Identifier or Hex` # `Expression`
-```
+`<address or hex literal> # <expression>`
+
+The left side is an **address** — a place taken with `$` (`$x`, `$(l ' 1)`), a name bound to one, or a hex literal.
+A name that holds a value is refused by name: writing through it would read the value as an address.
+
 Returns the address on success, or `__` on failure.
 
 ```sign

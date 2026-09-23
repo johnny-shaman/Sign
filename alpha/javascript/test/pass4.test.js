@@ -945,17 +945,19 @@ check("通る形は診断ゼロ", asm("sq : x ? x * x\nadd : a b ? a + b\nf : n 
 	checkTrue("読む前に niche を見る", ld.some((l) => /^b\.eq \.Lnoaddr/.test(l)), ld.join(" / "));
 	checkTrue("読むのは1命令", ld.some((l) => l === "ldr x9, [x9]"), ld.join(" / "));
 	// 中置 `#`——**守るのは左辺**。不正なアドレスへは書かない。
-	const st = body("f : p v ? p # v\nf 100 5", "f");
+	const st = body("f : p v ? p # v\nf 0x64 5", "f");
 	checkTrue("書く前に niche を見る", st.some((l) => /^b\.eq \.Lnowrite/.test(l)), st.join(" / "));
 	checkTrue("書くのは1命令", st.some((l) => l === "str x10, [x9]"), st.join(" / "));
 	// 成功したらアドレス、書けなければ `__`（演算子表 tier 4）。
 	checkTrue("書けなければ __ を返す", st.some((l) => l === "mov x9, x12"), st.join(" / "));
-	check("診断は出ない", asm("f : p v ? p # v\nf 100 5").diagnostics.length, 0);
+	// **番地を渡す。** 10進の字面は `Int` なので、書き込み先の仮引数へ渡すと名指しで断られる
+	// （`collectWriteThroughValue`）——ここで見たいのは書く命令の形なので、番地を渡す。
+	check("診断は出ない", asm("f : p v ? p # v\nf 0x64 5").diagnostics.length, 0);
 }
 // **右辺の `__` は書ける。** 書けないと場所を空にできない——ストリームが尽きたときに
 // カーソルへ「もう無い」を書き込めない。だから右辺には niche の検査を入れない。
 {
-	const st = body("f : p ? p # __\nf 100", "f");
+	const st = body("f : p ? p # __\nf 0x64", "f");
 	check("右辺を検査する分岐は出ない", st.filter((l) => /^b\.eq \.Lnowrite/.test(l)).length, 1);
 }
 
@@ -1386,6 +1388,27 @@ f 1`, "f") || [];
 	const ns = body("asm :\n\tgpr_signed : `sdiv`\n\tgpr_unsigned : `udiv`\n\tform : `alu`\nat : k ? asm ' k~\n||at `gpr_unsigned`||", "at") || [];
 	checkTrue("文字列のスロットを探して引くと、場所を足して len・ptr の2語を読む", seq(ns, ["add x10, x10, x14", "ldr x11, [x10, #8]", "ldr x10, [x10]"]), ns.join(" / "));
 	checkTrue("見つからなければ ptr も len も 0（空の器が __）", seq(ns, ["mov x10, xzr", "mov x11, xzr"]), ns.join(" / "));
+}
+
+
+// ---- 書き込みの左辺が番地でなければ、機械も断る（利用者の裁定 2026-09-23） ----
+//
+// 前段（pass3）が付けた印を後段がそのまま断りにする。**印だけ付けて後段が出してしまうと、
+// 機械は値を番地と読んで書きに行く**——実測で `x : 5` に `x # 7` を書くと qemu が踏み抜いた。
+// 印を読む所と断る所を別々に検査するのは、片方だけ壊れたときに名指しできるようにするため。
+{
+	const w = (src) => asm(src).diagnostics.filter((d) => /書き込み（中置/.test(String(d.message)));
+	checkTrue("Int の束縛へ書くのは機械も断る", w("x : 5\nx # 7").length === 1, JSON.stringify(asm("x : 5\nx # 7").diagnostics.map((d) => d.message)));
+	checkTrue("器の束縛へ書くのも断る", w("l : 1 2 3\nl # 7").length === 1);
+	checkTrue("`$x` への書き込みは出る", w("x : 5\n$x # 7").length === 0);
+	checkTrue("MMIO の生番地への書き込みは出る", w("0x9000000 # 65").length === 0);
+	// 断ったときに命令を出していないこと（断りと出力が同時に立つと、次の段が嘘を読む）。
+	checkTrue("断った式の命令は出ない", (body("x : 5\nx # 7", "_start") || []).every((l) => !/str /.test(l)));
+	// **呼び出しを1つ挟んだ形も、機械が出す前に止める。** 印は呼び出しの節に付く
+	// （実引数は畳まれて消えることがあるが、呼び出しは必ず出る）。
+	const wa = (src) => asm(src).diagnostics.filter((d) => /の仮引数 .+ は番地です/.test(String(d.message)));
+	checkTrue("番地を受ける仮引数へ値を渡す呼び出しは出さない", wa("f : p ? p # 7\nx : 5\nf x").length === 1, JSON.stringify(asm("f : p ? p # 7\nx : 5\nf x").diagnostics.map((d) => d.message)));
+	checkTrue("場所を渡す呼び出しは出る", wa("f : p ? p # 7\nx : 5\nf $x").length === 0);
 }
 
 console.log(`\n${passed}/${total} passed`);
