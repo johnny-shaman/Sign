@@ -420,8 +420,18 @@ function fromMs(v, paramSide) {
 	// 入口の長さの検査が `__` を返す——知らない綴りを断るのと同じ道である。
 	check("parser.sn: 向きの違う get を混ぜない s @ r ' t", isUnit(astText("expr [`s` , `@` , `r` , `'` , `t`]")), true);
 	check("parser.sn: 向きの違う get を混ぜない s ' r @ t", isUnit(astText("expr [`s` , `'` , `r` , `@` , `t`]")), true);
-	same("parser.sn = pass2: 弱い段で切れていれば混在ではない", "a ' b + c @ d");
-	same("parser.sn = pass2: 並置で切れていれば混在ではない", "f 0 @ l l ' 2");
+	// **同じ行に中置の `'` と `@` を混ぜない**（利用者の裁定 2026-09-23）。弱い段で切れていても、
+	// 並置で切れていても、括っていても断る——読みが1つに決まるかではなく、**行の中で綴りを混ぜない**
+	// ことが規則である（行を左から読む側が向きの裏返りを見落とす）。両方の前段が同じ形で止まる:
+	// JS は名指しで断り（`compile` が throw、`assoc.test.js`）、parser.sn は `__` を返す。
+	const bothRefuse = (note, line, toks) => {
+		check(note + "（parser.sn）", isUnit(astText("expr [" + toks + "]")), true);
+		let jsRefused = false;
+		try { compile(line, { parse: parser.parse }); } catch (e) { jsRefused = /同じ行に中置の「'」と「@」は混ぜられません/.test(e.message); }
+		check(note + "（pass2）", jsRefused, true);
+	};
+	bothRefuse("parser.sn = pass2: 弱い段で切れていても混在は断る", "a ' b + c @ d", "`a` , `'` , `b` , `+` , `c` , `@` , `d`");
+	bothRefuse("parser.sn = pass2: 並置で切れていても混在は断る", "f 0 @ l l ' 2", "`f` , `0` , `@` , `l` , `l` , `'` , `2`");
 	check("parser.sn: 並置の中でも1つの連なりなら混ぜない", isUnit(astText("expr [`g` , `0` , `@` , `m` , `'` , `1`]")), true);
 }
 

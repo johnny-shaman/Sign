@@ -407,7 +407,7 @@ car ' brand ' 0 = `Foo`
 0 @ brand @ car = `Foo`
 ```
 
-Because `@` runs in the opposite direction from `'`, the two cannot be mixed in one run without brackets (syntax error). Instead of `brand @ car ' 0`, bracket the order, as in `(brand @ car) ' 0`, or use one spelling, as in `car ' brand ' 0`.
+Because `@` runs in the opposite direction from `'`, **the two cannot be mixed on one line** (syntax error). Brackets do not help: both `brand @ car ' 0` and `(brand @ car) ' 0` are refused — bracketing fixes the reading of the expression, but a reader going left to right along the line misses that the direction flipped. Use one spelling, as in `car ' brand ' 0`, or split the line.
 
 ### The spelling of the key decides the reading
 

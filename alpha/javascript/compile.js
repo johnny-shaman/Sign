@@ -327,6 +327,69 @@ function resolveImports(lines, options, parseFn, base, state, self) {
  * わざと再定義して、後の方をカーソルの入口にする（`markCursorEntries`）。そこは
  * 「2つ書かれた」のではなく「1つを書き換えた」のであり、先勝ちで落とすと均しが効かない。
  */
+/**
+ * **同じ行に中置の `'` と `@` を混ぜない**（利用者の裁定 2026-09-23）。
+ *
+ * どちらも同じ段の get で、`'` は左結合・`@` は右結合である。括れば式の読みは1つに決まるが、
+ * **行を左から読む側は向きが途中で裏返ったことを見落とす**——だから括りも認めない。
+ * Pass 2 の `refuseMixedAssociativity` は「括らずに1つの連なりへ混ぜた」形を断っており、
+ * こちらはその外側（括った形・同じ行の別の連なり）を断る。2つは重なるが、粗い方がここである。
+ *
+ * **数えるのは中置だけである。** 前置 `@`（参照外し）と後置 `@`（import）は別の演算子で、
+ * 段も違うので連なりが切れる——`l ' @i`（鍵の中身で引く）も `IO@ ' say` も書ける。字句の段で
+ * 綴りが分かれている（中置 `@`、前置 `@_`、後置 `_@`）ので、ここでは綴りを見るだけでよい。
+ *
+ * **「行」は処理の行である。** パースの結果は1要素が1行で、継続行（行頭が空白・演算子で始まる行）と
+ * 字下げブロックの見出しは字句の段で既に繋がっている（`lexer.js` の `markBlock`）。括りの中は:
+ *
+ *   1行だけの括り   `(0 @ m) ' 1`      同じ行の続きとして数える
+ *   2行以上の括り   `[`⏎`0 @ m`⏎`m ' 1`⏎`]`   書いた人が行を分けているので別の行
+ *   字下げブロック  `f : x ?`⏎`…`      同じく別の行
+ *
+ * 位置（行番号）はどこにも残っていないので、**1行だけの括りが本当に同じ物理行にあるか**は
+ * ここでは分からない。今のリポジトリでは両方の数え方で答えが同じだったので、読み手にとって
+ * 自然な方（括りは同じ行の続き）を採る。
+ */
+function refuseMixedGetInLine(lines) {
+  const QUOTE = String.fromCharCode(34);
+  const INDENT_OPEN = QUOTE + "INDENT_" + QUOTE;
+  const isIndentGroup = (v) => Array.isArray(v) && v[0] === INDENT_OPEN;
+  const checkLine = (tokens) => {
+    const seen = { prop: false, at: false };
+    const walk = (ts) => {
+      for (const t of ts) {
+        if (typeof t === "string") {
+          if (t === "'") seen.prop = true;
+          else if (t === "@") seen.at = true;
+          continue;
+        }
+        if (!Array.isArray(t)) continue;
+        if (isIndentGroup(t)) {
+          for (const l of Array.isArray(t[1]) ? t[1] : []) checkLine(Array.isArray(l) ? l : [l]);
+          continue;
+        }
+        if (t.length === 1 && Array.isArray(t[0])) {
+          walk(t[0]);
+          continue;
+        }
+        for (const l of t) (Array.isArray(l) ? checkLine(l) : walk([l]));
+      }
+    };
+    walk(tokens);
+    if (seen.prop && seen.at) {
+      throw new SyntaxError(
+        "operator_table.md 違反: 同じ行に中置の「'」と「@」は混ぜられません" +
+          "（どちらも同じ段の get で、「'」は左結合・「@」は右結合。括れば式の読みは1つに決まるが、" +
+          "行を左から読む側は向きが途中で裏返ったことを見落とす）。" +
+          "どちらかの綴りへ揃える（m ' 0 ' 1 か 1 @ 0 @ m）か、行を分けてください" +
+          "（前置 @（参照外し）と後置 @（import）は別の演算子なので当たりません）"
+      );
+    }
+  };
+  for (const line of lines) checkLine(Array.isArray(line) ? line : [line]);
+  return lines;
+}
+
 function refuseRedefinitions(lines, state, exempt, diagnostics) {
   const where = (a) => (a && a.path ? `${a.path} の ${a.index} 番目の文` : "前の文");
   const seen = new Map();
@@ -1405,6 +1468,9 @@ function compile(source, options = {}) {
   // 走らせるので、その事実を列の側で作る——使う行より先へ定義を並べ直す。
   // **`inlineSoloLambdaBlocks` の後で見る**——字下げブロックで書いたラムダは、剥がして
   // 初めてトップレベルに `?` を持つ。ラムダかどうかで辺の張り方が変わるので、順番が要る。
+  // **行の門はここで当てる。** `inlineSoloLambdaBlocks` は字下げブロックを行へ畳むので、
+  // その後だと別の行だったものが同じ行に見える。
+  refuseMixedGetInLine(kept);
   const lines = orderDefinitions(kept.map(inlineSoloLambdaBlocks));
   const env = buildEnv(lines);
   // 中身の見える器に並べた関数は、撒けば・取り出せば呼べる（字句の段でスロットへ置き換える）

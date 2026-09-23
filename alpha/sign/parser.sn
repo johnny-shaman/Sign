@@ -198,7 +198,22 @@ out_jk : [~ts] i j k ?
 `だから終わりが全体の長さと一致したときだけ返す。長さは一度だけ数えて渡す`
 `——同じ問いを何度も書くと段の深さに対して指数的に効くのは上と同じ理由である`
 
-expr : [~ts] ? expr_at ts (end_of ts 0 2)
+`同じ行に中置の ' と @ は混ぜられない（利用者の裁定 2026-09-23）。どちらも同じ段の get で`
+`向きが逆であり、括れば式の読みは1つに決まるが、行を左から読む側は向きが途中で`
+`裏返ったことを見落とす。数えるのは中置だけで、前置（@_）と後置（_@）は綴りが違う`
+
+prop_ch : `'`
+at_ch : `@`
+
+has_tok : t [~ts] ?
+	(ts ' 0) == t : 1
+	has_tok t (ts ' 1~)
+
+mixed_get : [~ts] ? (has_tok prop_ch ts) & (has_tok at_ch ts)
+
+expr : [~ts] ?
+	mixed_get ts : __
+	expr_at ts (end_of ts 0 2)
 
 expr_at : [~ts] j ?
 	j = ||ts|| : `ast : ` (out ts 0 j 2)

@@ -92,38 +92,67 @@ for (const [tier, row] of OPERATOR_BY_PRECEDENCE.entries()) {
 }
 // 今それに当たるのは get の2つだけ。増えたら下の検査がそのまま新しい組も見る。
 check("向きが割れている段は get だけ", JSON.stringify(mixedTiers.map((t) => [...t.left, ...t.right].sort())), JSON.stringify([["'", "@"]]));
+// **断りは2つある。** 行の門（`compile.js` の `refuseMixedGetInLine`）が「同じ行に中置の
+// `'` と `@`」を断り、連なりの門（`pass2.js` の `refuseMixedAssociativity`）が「括らずに1つの
+// 連なりへ混ぜた」を断る。書いた字句に対しては**行の門が先に当たる**ので、こちらへ届くのは
+// 字句の段で合成された形だけである（`pasteVisiblePipelines`）。どちらが出たかで数える。
 const refused = (src) => {
-	try { compile(src); return "通った"; } catch (e) { return /結合の向きが違う演算子は括らずに並べられません/.test(e.message) ? "断る" : "別の理由：" + e.message; }
+	try {
+		compile(src);
+		return "通った";
+	} catch (e) {
+		if (/同じ行に中置の「'」と「@」は混ぜられません/.test(e.message)) return "行";
+		if (/結合の向きが違う演算子は括らずに並べられません/.test(e.message)) return "連なり";
+		return "別の理由：" + e.message;
+	}
 };
 const G = "m : [10 20] , [30 40]\nk : 0\n";
 for (const { left, right } of mixedTiers) {
 	for (const l of left) for (const r of right) {
-		check(`括らずに混ぜると断る k ${r} m ${l} 1`, refused(G + `k ${r} m ${l} 1`), "断る");
-		check(`括らずに混ぜると断る m ${l} 0 ${r} m`, refused(G + `m ${l} 0 ${r} m`), "断る");
-		check(`括りの中でも同じ (k ${r} m ${l} 1)`, refused(G + `(k ${r} m ${l} 1)`), "断る");
-		check(`関数の本体でも同じ`, refused(G + `f : i ? i ${r} m ${l} 1\nf 0`), "断る");
-		check(`3つ以上でも最初の割れ目で断る k ${r} 1 ${r} m ${l} 0`, refused(G + `k ${r} 1 ${r} m ${l} 0`), "断る");
+		check(`同じ行に混ぜると断る k ${r} m ${l} 1`, refused(G + `k ${r} m ${l} 1`), "行");
+		check(`同じ行に混ぜると断る m ${l} 0 ${r} m`, refused(G + `m ${l} 0 ${r} m`), "行");
+		check(`括りの中でも同じ (k ${r} m ${l} 1)`, refused(G + `(k ${r} m ${l} 1)`), "行");
+		check(`関数の本体でも同じ`, refused(G + `f : i ? i ${r} m ${l} 1\nf 0`), "行");
+		check(`3つ以上でも断る k ${r} 1 ${r} m ${l} 0`, refused(G + `k ${r} 1 ${r} m ${l} 0`), "行");
 	}
 }
 // **字句の段の書き換えも抜け道にならない。** 関数を並べた器の `p ' 1` は pass2 より前に
 // スロットへ貼られる（compile.js の `pasteVisiblePipelines`）。隣を見ずに貼っていたので、
 // データだけの器なら断る `1 @ d ' 0` が、関数を持つ器では `1 @ p ' 1` のまま 8 を返していた。
-check("関数を並べた器でも断る 1 @ p ' 1", refused("p : [+ 2] , [7 8 9] , 3\n1 @ p ' 1"), "断る");
-check("データだけの器でも断る 1 @ d ' 0", refused("d : [7 8 9] , [1 2] , 3\n1 @ d ' 0"), "断る");
+check("関数を並べた器でも断る 1 @ p ' 1", refused("p : [+ 2] , [7 8 9] , 3\n1 @ p ' 1"), "行");
+check("データだけの器でも断る 1 @ d ' 0", refused("d : [7 8 9] , [1 2] , 3\n1 @ d ' 0"), "行");
 // **撒いた字句が混在を作らない。** 積の中で撒くとき、スロットを裸で並べると書いてもいない
 // `' 0 @` が字句の段で生まれていた。スロットは括って置く（断るなら混在以外の理由で）。
-check("撒いたスロットが混在を作らない", refused("m : [10 20] , [30 40]\np : 0 @ m , [+ 1]\nm ' p~ , 3") !== "断る", true);
-// **並置も連なりを切る。** get は並置より強いので `f 0 @ l l ' 2` は `f (0 @ l) (l ' 2)`——
-// 読みは1つである。隣り合う2つの項を切れ目と見ていなかったので断っていた。
+// ここは**行の門より後**で起きるので、連なりの門が最後の網になる。
+check("撒いたスロットが混在を作らない", refused("m : [10 20] , [30 40]\np : 0 @ m , [+ 1]\nm ' p~ , 3") === "通った", true);
+
+// **括っても、並置で切れていても、同じ行なら断る**（利用者の裁定 2026-09-23）。
+//
+// 括れば式の読みは1つに決まる。それでも断るのは、**行を左から読む側が向きの裏返りを
+// 見落とす**からである——`(0 @ m) ' 1` は「0 の m」と「その 1 番目」で主語が途中で入れ替わる。
+// 読みが1つかどうかではなく、**1行の中で綴りを混ぜないこと**を規則にした。
 const F = "l : [1 2 3]\nf : x y ? x + y\ng : x ? x\n";
-check("並置で切れていれば通る f 0 @ l l ' 2", refused(F + "f 0 @ l l ' 2"), "通った");
-check("並置の中でも1つの連なりなら断る g 0 @ l ' 1", refused(F + "g 0 @ l ' 1"), "断る");
-// 読みが1つに決まる形は通る。括りは順序を明示し、弱い段の演算子は連なりを切る。
-check("括れば通る (0 @ m) ' 1", refused(G + "(0 @ m) ' 1"), "通った");
-check("括れば通る 0 @ (m ' 1)", refused(G + "0 @ (m ' 1)"), "通った");
+check("並置で切れていても断る f 0 @ l l ' 2", refused(F + "f 0 @ l l ' 2"), "行");
+check("並置の中の1つの連なりも断る g 0 @ l ' 1", refused(F + "g 0 @ l ' 1"), "行");
+check("括っても断る (0 @ m) ' 1", refused(G + "(0 @ m) ' 1"), "行");
+check("括っても断る 0 @ (m ' 1)", refused(G + "0 @ (m ' 1)"), "行");
+check("弱い段で切れていても断る m ' 0 ' 1 + 1 @ 0 @ m", refused(G + "m ' 0 ' 1 + 1 @ 0 @ m"), "行");
+check("等式の左右でも断る (2 @ l) = (l ' 2)", refused(F + "(2 @ l) = (l ' 2)"), "行");
+
+// **通るのは、綴りを揃えた形と、行を分けた形である。**
 check("綴りを揃えれば通る m ' 0 ' 1", refused(G + "m ' 0 ' 1"), "通った");
 check("綴りを揃えれば通る 1 @ 0 @ m", refused(G + "1 @ 0 @ m"), "通った");
-check("弱い段で切れていれば通る m ' 0 ' 1 + 1 @ 0 @ m", refused(G + "m ' 0 ' 1 + 1 @ 0 @ m"), "通った");
+check("行を分ければ通る", refused(F + "a : 2 @ l\nb : l ' 2\na = b"), "通った");
+// 2行以上の括りと字下げブロックは、書いた人が行を分けている。
+check("括りの中の別々の行は通る", refused(G + "y : [\n\t0 @ m\n\tm ' 1\n]"), "通った");
+check("字下げブロックの別々の行は通る", refused(F + "h : x ?\n\tx > 1 : 0 @ l\n\tl ' 0"), "通った");
+
+// **数えるのは中置だけである。** 前置 `@`（参照外し・鍵の中身）と後置 `@`（import）は別の
+// 演算子で、段も違うので連なりが切れる——混ぜても読みは1つに決まる。巻き込むと
+// `l ' @i` も `IO@ ' say` も書けなくなる（仕様は「数えるのは中置だけ」と書いてある）。
+check("前置 `@` は当たらない l ' @i", refused("l : [1 2 3]\ni : 1\nl ' @i"), "通った");
+check("後置 `@` は当たらない IO@ ' say", refused("IO@ ' say"), "通った");
+check("前置と中置が同じ行でも、中置が1つなら通る", refused(F + "f (@g 1) (2 @ l)"), "通った");
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

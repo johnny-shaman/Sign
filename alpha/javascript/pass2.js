@@ -894,7 +894,8 @@ function refuseMixedAssociativity(items, tier) {
         `operator_table.md 違反: 結合の向きが違う演算子は括らずに並べられません` +
           // 綴りは「」で囲む。`'` を `'` で囲むと `'''` になって読めない。
           `（「${first}」は${dir(first)}結合、「${x}」は${dir(x)}結合で、同じ段なので読みが2つある）。` +
-          `(a ${first} b) ${x} c か a ${first} (b ${x} c) と括って順序を書いてください`
+          `どちらかの綴りへ揃えてください（get なら a ${first} b ${first} c か c ${x} b ${x} a）` +
+          `——括っても同じ行なら断ります（同じ行に中置の get を混ぜない）`
       );
     }
   }

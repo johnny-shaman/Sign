@@ -124,20 +124,25 @@
 - Right-associative function composition requires explicit parentheses.
 - Infix `'` operator syntax: `(list | struct) ' index`.
 - Infix `@` operator syntax: `index @ (list | struct)`.
-- **Infix `'` and infix `@` must not be mixed in one run without brackets (syntax error).** A chain in one spelling (`a ' b ' c`, `a @ b @ c`) is valid; `a @ b ' c` and `a ' b @ c` are syntax errors.
+- **Infix `'` and infix `@` must not be mixed on one line (syntax error).** Brackets do not help. A chain in one spelling (`a ' b ' c`, `a @ b @ c`) is valid; `a @ b ' c`, `(a @ b) ' c` and `a ' b + c @ d` are all syntax errors.
   - Both are get at the same precedence and differ only in direction: `'` is left-associative and `@` is right-associative. They are the only operators that share a precedence with opposite directions, so an unbracketed mix has two readings: `a @ b ' c` reads as `(a @ b) ' c` or as `a @ (b ' c)`. Either reading can return a value, so a misreading silently yields a different value. Because the writer's intent cannot be determined statically, compilation stops ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4; the same treatment as mixed chained comparisons in [`comparison.md`](../impl/type/comparison.md) §4).
-  - Brackets state the order. Write `(a @ b) ' c` or `a @ (b ' c)`, whichever you mean. Since `x @ p` denotes the same thing as `p ' x`, you may also write the whole chain in one spelling.
-  - Only the infix forms count. Prefix `@` (input) and postfix `@` (import) are different operators and do not form a mix (`IO@ ' say` is valid). Runs separated by a looser operator (`a ' b + c @ d`) are not a mix either: get binds before `+`, so there is only one reading.
+  - **Brackets are not a way around it** (owner's ruling, 2026-09-23). Bracketing does fix the reading of the expression, but **a reader going left to right along the line misses that the direction flipped in the middle** — in `(0 @ m) ' 1` the subject switches from "0 of m" to "its element 1". The rule is not "is there a single reading" but "do not mix the two spellings within one line". To fix it, settle on one spelling (`x @ p` denotes the same thing as `p ' x`) or split the line.
+  - The refusal lives at two stages. The **line gate** (`refuseMixedGetInLine` in `compile.js`) refuses infix `'` and `@` on the same line; the **run gate** (`refuseMixedAssociativity` in `pass2.js`) refuses a mix inside one unbracketed run. Written source hits the line gate first, so only forms synthesised during lexing reach the run gate (`pasteVisiblePipelines`).
+  - A "line" is a processing line. Continuation lines and the head of an indented block are already joined during lexing (`markBlock` in `lexer.js`). Inside brackets, **a single line continues the enclosing line** (`(0 @ m) ' 1`), while **two or more lines are separate lines** (the writer split them).
+  - Only the infix forms count. Prefix `@` (input) and postfix `@` (import) are different operators and do not form a mix (`IO@ ' say` and `l ' @i` are both valid): they sit at different precedences, so the run is cut and there is only one reading.
 
   ```sign
   m : [10 20] , [30 40]
-  ` element 1 of element 0 of m. 20
-  (0 @ m) ' 1
-  ` element 0 of element 1 of m. 30
-  0 @ (m ' 1)
+  ` refused: infix ' and @ on one line (brackets and looser operators do not help)
+  ` (0 @ m) ' 1
+  ` 0 @ (m ' 1)
+  ` m ' 0 ' 1 + 1 @ 0 @ m
   ` one spelling throughout. Both are 20
   m ' 0 ' 1
   1 @ 0 @ m
+  ` split the line, and either spelling is fine
+  a : 0 @ m
+  b : m ' 1
   ```
 - **Do not put postfix `~` on the container side of get (the left of infix `'`, the right of infix `@`) (syntax error).** In `p~ ' 0` the `~` opens the container and spreads its contents into a receiver, so after the spread there is no single container left to index ([`list_model.md`](../impl/type/list_model.md) §5.3: spreading only means something where a receiver takes it). It is refused for the same reason as the receiver form `x~ f` ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4). To index the container, write `p ' 0`. **A `~` on the key side (the right of infix `'`, the left of infix `@`) is valid**, but the spelling alone decides which of three readings you get.
 
