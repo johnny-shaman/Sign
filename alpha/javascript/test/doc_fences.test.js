@@ -56,7 +56,7 @@ const KNOWN = {
 	"documents/ja-jp/guide/function_guide.md": {"仮引数 '<x>' のデフォルト式に '#'（O":1,"分解の形・rest 形の仮引数にデフォルト値は書":1},
 	"documents/ja-jp/guide/list_cheat_sheet.md": {"stack_abi.md §7.1違反: 名前付":1},
 	"documents/ja-jp/guide/pattern_guide.md": {"パラメータ '<x>' のデフォルト式が、まだ束":1},
-	"documents/ja-jp/guide/reference.md": {"行末の ` が閉じていない":1,"パース":2,"`名前 : 値` の左辺は名前でなければなりませ":1},
+	"documents/ja-jp/guide/reference.md": {"行末の ` が閉じていない":1,"パース":2},
 	"documents/ja-jp/impl/build/build_system.md": {"パース":1},
 	"documents/ja-jp/impl/build/entry_point.md": {"インポートを解決する手段がありません（main.":3},
 	"documents/ja-jp/impl/build/preprocessor.md": {"パース":3},
