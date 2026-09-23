@@ -202,7 +202,7 @@ lit_family : s ?
 
 lit_digits : s ?
 	!(lit_family s) : __
-	s ' ((digit_run s 0) + 1)~
+	s ' ((digit_run s 0) + 1)~~
 
 `b（2進）だけが 16 でない。族が無ければそもそも答えが無い`
 

@@ -1950,9 +1950,18 @@ function getPropValue(l, rightNode, env) {
   // 名前付きスロットに順序は無い（`type_system.md` §6.2、位置アクセスを持たない）ので、
   // 添字位置の `N~` が意味する get-rest はそもそも成立しない。空いている綴りである。
   //
-  // 見るのは Pass 2 が残した `desugaredFrom: "index-rest"` の印で、元の添字は左辺に在る。
-  if (l && typeof l === "object" && !Array.isArray(l) && rightNode && rightNode.desugaredFrom === "index-rest") {
-    const key = evaluate(rightNode.left, env);
+  // 見るのは Pass 2 が残した2つの形である。`obj ' k~`（中身を取る）は前置 `@` と同じ節点へ
+  // 均されていて、鍵は `operand` に在る。`obj ' k~~`（中身を取ってから撒く）はレンジで、
+  // 元の鍵は `left` に在る——名前付きスロットに順序は無いので、撒く先はその値しかない。
+  const keyByValue = !rightNode
+    ? null
+    : rightNode.inGetPropKey
+      ? rightNode.operand
+      : rightNode.desugaredFrom === "index-rest"
+        ? rightNode.left
+        : null;
+  if (l && typeof l === "object" && !Array.isArray(l) && keyByValue) {
+    const key = evaluate(keyByValue, env);
     if (isUnit(key)) return UNIT;
     const k = String(observe(key));
     return Object.prototype.hasOwnProperty.call(l, k) ? l[k] : UNIT;
@@ -1969,9 +1978,13 @@ function getPropValue(l, rightNode, env) {
   // ここでも宣言していたが、直後の return が使っていない完全な死にコードだった
   // ——生きているのは getPropByValue の側（規則そのものは `asIndexableList` に1つ）。
   // 同じ問いに答える場所が2つあって、片方は誰も読んでいなかった。
-  // get-rest（`list ' N~`）はここには無い。Pass 2 が `list ' (N ~+ 1)` へ均しており、
+  // 切り出し（`list ' N~`）はここには無い。Pass 2 が `list ' (N ~+ 1)` へ均しており、
   // 「終端の無いレンジで引く＝そこから末尾まで」として `getPropByValue` が1本で扱う。
-  return getPropByValue(l, evaluate(rightNode, env));
+  //
+  // **中身で引く形（`l ' x~` ＝ `l ' @x`）は参照外しではない。** 同じ節点の綴りだが、
+  // 鍵の位置では「x が持っている値を添字にする」であって「x の指す先を読む」ではない
+  // ——`$` で作った参照を渡されたときに、素の `@` として評価すると読みが変わる。
+  return getPropByValue(l, evaluate(keyByValue && rightNode.inGetPropKey ? keyByValue : rightNode, env));
 }
 
 // 添字が**値として**確定している場合の取得。フィールド名（識別子）と get-rest（後置~）は

@@ -3099,6 +3099,11 @@ function genExpr(node, env, em, scope, tail = false) {
 
 	// 前置 `@`——アドレスから読む。niche なら読まずに `__`。
 	if (n.type === "operation" && n.position === "prefix" && n.name === "input") {
+		// **鍵の位置の `@` は参照外しではない。** `l ' @x`（＝`l ' x~`）は「x が持っている値を
+		// 添字にする」であって「x の指す先を読む」ではない（type_system.md §3.5）。Pass 3 が
+		// 印を付けているのに誰も読んでいなかったため、機械は番地として `ldr` を出し、qemu が
+		// 踏み抜いていた（解釈器だけが偶然正しい答えを返していた）。
+		if (n.inGetPropKey) return genExpr(n.operand, env, em, scope, tail);
 		// **`@$x` は恒等射である。**
 		//
 		// `$名前` は束縛の番地であり（演算子表 tier 23）、そこから読めば束縛の値そのもの
@@ -3320,7 +3325,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		return em.fail(
 			n,
 			n.runtimeIndexProblem === "named"
-				? "名前付きスロットへ実行時の添字は引けません（物理配置は名前順、stack_abi.md §7.1）"
+				? "名前付きスロットへ前置 `@` では引けません（物理配置は名前順、stack_abi.md §7.1）。鍵の中身で引くなら `s ' k~`"
 				: "多相な器へ実行時の添字は引けません——ここが動的型付けの要る唯一の場所であり、" +
 					"Sign は実行時ディスパッチを持たない（compiler_pipeline.md §3）。スロットの型を揃えれば List になります"
 		);
@@ -5607,10 +5612,21 @@ function constAddressOf(node, env) {
 // 名前順で決まるので、片方だけ区切りを残すと「レイアウトが言う場所」と
 // 「pass4 が探す名前」がずれる。
 
+// 鍵の中身を持っている節点を返す。**鍵の位置には2つの形しか来ない**（Pass 2 の `desugarKey`）：
+// `obj ' k~`（中身を取る）は前置 `@` と同じ節点で中身は `operand`、`obj ' k~~`（中身を取って
+// から撒く）はレンジで中身は `left` に在る。名前付きスロットにとってはどちらも「k の中身で引く」
+// であり、順序が無いので撒く先はその値しかない。
+function keyInnerNode(key) {
+	if (!key || key.type !== "operation") return null;
+	if (key.inGetPropKey) return key.operand;
+	if (key.desugaredFrom === "index-rest") return key.left;
+	return null;
+}
+
 function slotKeySpelling(key, env) {
 	if (isSlotKeyAtom(key)) return slotName(key.value);
-	if (key && key.desugaredFrom === "index-rest" && env) {
-		const inner = unwrap(key.left);
+	if (keyInnerNode(key) && env) {
+		const inner = unwrap(keyInnerNode(key));
 		if (isSlotKeyAtom(inner) && inner.kind === "string") return slotName(inner.value);
 		if (isIdentifierNode(inner)) {
 			const b = envLookup(env, inner.value);
@@ -5866,7 +5882,8 @@ function genNameSearch(node, env, em, scope, shape) {
 	if (regs === null) return em.fail(node, "鍵が実行時に決まる引き方は、参照で運ぶスロットではまだ出せません");
 	// 鍵は `obj ' k~` の `k`。`~` は添字の糖衣として畳まれているので、その左辺が鍵である。
 	let key = unwrap(node.right);
-	if (key && key.desugaredFrom === "index-rest") key = unwrap(key.left);
+	const inner = keyInnerNode(key);
+	if (inner) key = unwrap(inner);
 	if (!key) return null;
 	// 器の ptr（1本）を積む。
 	const bw = genScalar(node.left, env, em, scope, "積は {ptr} の1本で運びます");

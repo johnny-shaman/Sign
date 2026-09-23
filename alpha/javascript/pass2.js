@@ -1862,14 +1862,16 @@ function resolveBlock(term, env) {
 }
 
 /**
- * 添字位置の `N~` を「N から始まる終端の無いレンジ」へ書き換える（糖衣）。
+ * 添字位置の後置 `~`／前置 `@` を、意味の決まった2つの形へ均す（糖衣）。
  *
- *   s ' 1~   →   s ' (1 ~+ 1)
+ *   s ' 1~    →   s ' (1 ~+ 1)      固定値：中身は自分自身なので「撒く」しか読みが無い＝切り出し
+ *   l ' x~    →   l ' @x            識別子：**中身を取る**。器なら添字、名前付きスロットなら鍵
+ *   l ' x~~   →   l ' (x ~+ 1)      中身を取ってから撒く＝その位置から後ろ
+ *   l ' @x~   →   l ' (x ~+ 1)      同じ（前置 `@` は「中身を取る」の別綴り。単値のときだけ）
  *
- * **後置 `~` の意味を1つにするための書き換えである。** `~` は本来「器を開いて中身を
- * 撒く」だけを意味するべきだが、添字の位置では「N から末尾まで」も意味していた。同じ
- * 記号が置かれた場所で別の意味になるのは、原理1（ソースを読めば命令列が読める）と
- * 相容れない。
+ * **後置 `~` の意味を1つにするための書き換えである。** `~` は「中身を出す」であって、
+ * 添字の位置でもそれは変わらない。変わるのは**何の中身か**で、字面が固定値なら中身は
+ * 自分自身だから「撒く（そこから後ろ）」しか残らず、識別子なら中身は値である。
  *
  * **値では区別できない。** スカラーは1要素の器として読める（`bottom : 0` は長さ1のスタック、
  * 原理8）ので、`st~` の `st` がスカラーの `0` なら `0~` になる——それが「1要素の並びを撒く」
@@ -1877,9 +1879,11 @@ function resolveBlock(term, env) {
  * 同型は器と要素の区別を消し、`~` はまさにその区別を要求する演算だからである。
  * だから**構文の段階で決める**。決まる場所は1つしかない。
  *
+ * **前置 `@` と後置 `~` は鍵の位置では同じ射である**（type_system.md §3.5「中身で引く」）。
+ * 綴りだけは覚えておく——名前付きスロットの鍵は必ず `s ' k~` と書く決まりで、そこだけは
+ * 綴りで断るからである（Pass 3）。
+ *
  * 逆適用（`x f` → `apply(f, x)`）と同じ扱いである——記号は残し、意味論からは消す。
- * これで `~` は演算子表 tier 23 の「展開」だけを意味するようになり、`'`（tier 18）より
- * 内側でなければ壊れるという順位の制約も無くなる（operator_table.md の tier 23 の注）。
  */
 function desugarIndexRest(node) {
   if (!node || typeof node !== "object") return node;
@@ -1908,24 +1912,54 @@ function desugarIndexRest(node) {
   //
   // 均すのは Pass 2 の出口である。逆適用（`x f`）や添字の `N~` と同じ扱い——記号は残し、
   // 意味論からは消す。入れ替えそのものは**子へ降りる前**に済ませてある（上）。
-  const r = node.right;
-  if (
-    node.type === "operation" && node.name === "get_prop" &&
-    r && r.type === "operation" && r.position === "postfix" && r.name === "expand"
-  ) {
-    node.right = {
-      type: "operation",
-      op: "~+",
-      name: "range_arithmetic",
-      position: "infix",
-      left: r.operand,
-      // 歩幅は1。位置は1つずつ進むものであって、飛ばす理由がここには無い。
-      right: { type: "atom", kind: "number", value: "1" },
-      location: r.location,
-      desugaredFrom: "index-rest",
-    };
+  if (node.type === "operation" && node.name === "get_prop" && node.right) {
+    node.right = desugarKey(node.right);
   }
   return node;
+}
+
+// 鍵の位置の1つの節点を、2つの形のどちらかへ均す。**どちらでもない形はそのまま返す**
+// （`l ' i` や `l ' (i + 1)` は元から「中身で引く」形なので、印を足す必要が無い）。
+function desugarKey(r) {
+  if (!r || r.type !== "operation") return r;
+  const isExpand = (n) => n && n.type === "operation" && n.position === "postfix" && n.name === "expand";
+  const isAt = (n) => n && n.type === "operation" && n.position === "prefix" && n.name === "input";
+  const spread = (start, location) => ({
+    type: "operation",
+    op: "~+",
+    name: "range_arithmetic",
+    position: "infix",
+    left: start,
+    // 歩幅は1。位置は1つずつ進むものであって、飛ばす理由がここには無い。
+    right: { type: "atom", kind: "number", value: "1" },
+    location,
+    desugaredFrom: "index-rest",
+  });
+  const byValue = (operand, spelling, location) => ({
+    type: "operation",
+    op: "@",
+    name: "input",
+    position: "prefix",
+    operand,
+    location,
+    inGetPropKey: true,
+    keySpelling: spelling,
+    desugaredFrom: spelling === "tilde" ? "index-value" : undefined,
+  });
+  if (isExpand(r)) {
+    // `x~~` は「中身を取ってから撒く」。内側の `~` は中身を取る印なので剥がす
+    // ——剥がさずに置いていたため、解釈器は「起点が撒かれた並び」で零射へ落ち、
+    // 機械は `~` が 0 命令なので素通しして、同じ字面で答えが割れていた。
+    if (isExpand(r.operand)) return spread(r.operand.operand, r.location);
+    // 固定値の中身は自分自身なので、残る読みは「撒く」だけである。
+    if (r.operand && r.operand.type === "atom" && r.operand.kind === "number") return spread(r.operand, r.location);
+    return byValue(r.operand, "tilde", r.location);
+  }
+  if (isAt(r)) {
+    if (isExpand(r.operand)) return spread(r.operand.operand, r.location);
+    return byValue(r.operand, "at", r.location);
+  }
+  return r;
 }
 
 export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections };

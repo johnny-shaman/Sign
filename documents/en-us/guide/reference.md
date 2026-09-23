@@ -409,6 +409,42 @@ car ' brand ' 0 = `Foo`
 
 Because `@` runs in the opposite direction from `'`, the two cannot be mixed in one run without brackets (syntax error). Instead of `brand @ car ' 0`, bracket the order, as in `(brand @ car) ' 0`, or use one spelling, as in `car ' brand ' 0`.
 
+### The spelling of the key decides the reading
+
+An unmarked key is resolved by the left side: a name for a struct, an index for a list or string. On its own that is not enough — reading `target ' ident` does not tell you **whether it looks up by name or by contents**, because that depends on a type you cannot see. So **marking the key makes the spelling alone decide**.
+
+| Spelling of the key | Reading | Example |
+|---|---|---|
+| Identifier or expression with postfix `~` | Use its **contents** as the key (a name for a struct, an index for a container) | `car ' k~`, `brand ' i~` |
+| Prefix `@` | The same morphism. Writable **only for a single value** | `brand ' @i` |
+| Literal with postfix `~` | Its contents are itself, so the only reading left is to spread — from there to the end | `brand ' 1~` |
+| Two postfix `~` | Take the contents, then spread — from that position to the end | `brand ' i~~` |
+| No mark | The left side decides (the types above) | `car ' brand`, `brand ' 0` |
+
+`~` means "bring out the contents" in every position, and the key position is no exception. What changes is **whose contents**: the contents of a literal are the literal itself, so "take the contents" collapses to the identity and only the spreading reading survives. The second `~` is that spread.
+
+```sign
+car :
+	brand : `Foo`, `Bar`, `Baz`
+k : `brand`
+i : 1
+
+car ' brand ' 0        ` result: Foo              unmarked; index 0
+car ' k~               ` result: [Foo Bar Baz]    looks up by the contents of k (brand)
+car ' brand ' i~       ` result: Bar              uses the contents of i (1) as the index
+car ' brand ' @i       ` result: Bar              the same morphism, in prefix form
+car ' brand ' 1~       ` result: [Bar Baz]        a literal, so it can only spread
+car ' brand ' i~~      ` result: [Bar Baz]        take the contents, then spread
+```
+
+**A runtime key into a struct is always written `car ' k~`.** Prefix `@` is refused there: a struct's physical layout is name-ordered, so it does not line up with the ordinal that `@` spells. Named slots have no order, so `car ' k~~` yields the same value as `car ' k~` — there is nothing to spread into but the value you pulled out.
+
+```sign
+car ' @k   ` error: a named slot cannot be indexed with prefix @ (use car ' k~ instead)
+```
+
+The key side of infix `@` follows the same rule: `1~ @ l` slices, `i~ @ l` pulls one element by the contents of `i`, and `i~~ @ l` takes the contents and then spreads. Only the direction differs — internally both normalize to the `'` form.
+
 ## Bitwise Operators (`<<`, `>>`, `||`, `&&`, `;;`, `!!`)
 
 Mapped directly to hardware register operations:
@@ -435,6 +471,25 @@ Mapped directly to hardware register operations:
   ```sign
   tail : x ~y ? y
   ```
+
+### Postfix `~` in the key position
+
+On the right of `'` (or the left of infix `@`) — the **key position** — `~` still means "bring out the contents". What changes is **whose contents**.
+
+- **On an identifier or expression, `~` uses its contents as the key.** `l ' i~` means "use the value `i` holds as the index and pull out one element", not a slice. It is the same morphism as prefix `@` on the key (`l ' @i`).
+- **On a literal, `~` becomes a slice.** The contents of a literal are the literal itself, so "take the contents" collapses to the identity and only the spreading reading survives. `l ' 1~` is "from index 1 to the end".
+- **Doubling `~` takes the contents and then spreads.** `l ' i~~` is "from the position `i` holds to the end" — this is the spelling for slicing at an identifier.
+
+```sign
+l : 10 20 30
+i : 1
+
+l ' i~     ` result: 20         uses the contents of i (1) as the index
+l ' 1~     ` result: [20 30]    a literal, so it slices
+l ' i~~    ` result: [20 30]    take the contents, then spread
+```
+
+Struct keys follow the same rule: `s ' k~` looks up by the contents of `k` (see the Property Access section).
 
 ## Address Pointer Operator (`$` Prefix)
 

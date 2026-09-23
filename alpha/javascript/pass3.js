@@ -1028,6 +1028,12 @@ function isGetPropValueKey(k) {
   return !!k && k.type === "operation" && k.position === "prefix" && k.name === "input";
 }
 
+// 鍵の位置で「中身を取る」と書かれた形（`obj ' k~` と `l ' @x`）。Pass 2 が同じ節点へ
+// 均しているので、綴りの違いは `keySpelling` にだけ残る。
+function isKeyByValue(k) {
+  return isGetPropValueKey(k) && !!k.inGetPropKey;
+}
+
 function markGetPropKey(node) {
   // **鍵かどうかは、その式が `'` の右辺に在るかで決まる。** ここを見ずに右辺へ印を付けると、
   // あらゆる中置演算の右辺が「鍵」になる——実際 `@$x` の型が Address から Int へ化けた。
@@ -1204,7 +1210,9 @@ function getPropResultType(node, env) {
   //
   // ここを見ていなかったため、演算子表を綴りで引いた結果が器の型（`Struct`）のまま比較へ
   // 渡り、「GPR 幅の値の比較だけを出せます（Struct と Int）」で止まっていた。
-  if (containerType === "Struct" && sliceIndexNode(node)) {
+  // **名前付きスロットの鍵は `s ' k~` と書く。** 同じ「中身で引く」でも前置 `@` は単値
+  // （連番の添字）の綴りなので、名前順に置かれたスロットには当たらない——下の門が名指しで断る。
+  if (containerType === "Struct" && (sliceIndexNode(node) || (isKeyByValue(node.right) && node.right.keySpelling !== "at"))) {
     const keyShape = structShapeOfNode(node.left, env);
     if (keyShape && keyShape.slotKind === "named") {
       const joined = joinArmTypes((keyShape.slots || []).map((sl) => sl.type));
@@ -1337,6 +1345,10 @@ function getPropResultType(node, env) {
     // ここが `null` を返していたため、演算子表を綴りで引く形（自己ホストのパーサ）が
     // 「Struct と Int の比較」で止まっていた。引いた結果に型が付かなかったのが理由である。
     if (isGetPropValueKey(key)) {
+      // **綴りが `k~` なら断らない。** 名前で探す道が在る（Pass 4 の `genNameSearch`）ので、
+      // 型が解けないことと引けないことは別である。引けるかどうかは幅と型で Pass 4 が決める
+      // ——同じ事実を2箇所で決めない。
+      if (key.keySpelling === "tilde") return null;
       node.runtimeIndexProblem = base && base.slotKind === "named" ? "named" : "polymorphic";
     }
     return null;
@@ -4144,8 +4156,9 @@ function collectPolymorphicIndex(nodes, diagnostics) {
         severity: "error",
         message:
           n.runtimeIndexProblem === "named"
-            ? "stack_abi.md §7.1違反: 名前付きスロットへ実行時の添字は引けません" +
-              "（物理配置は名前順なので連番と一致しない）。名前で引くか、連番スロットにしてください"
+            ? "stack_abi.md §7.1違反: 名前付きスロットへ前置 `@` では引けません" +
+              "（物理配置は名前順なので連番と一致しない）。鍵の中身で引くなら `s ' k~`、" +
+              "連番で引くなら連番スロットにしてください"
             : "type_system.md §2違反: 多相な Struct へ実行時の添字は引けません" +
               "（スロットごとに型が違うため命令が決まらない）。スロットの型を揃えれば List になります",
         node: n,

@@ -77,7 +77,7 @@ bar_pos : s i ?
 	(s ' i) = bar_ch : i
 	bar_pos s (i + 1)
 
-alt_rest : s ? s ' ((bar_pos s 0) + 2)~
+alt_rest : s ? s ' ((bar_pos s 0) + 2)~~
 
 `--- §4.6 の問い：枝1つ ---`
 `綴りに縦棒の無い型名だけを答える。直和の枝はここだけを引く——直和へ戻る道が無いので輪ができない`
