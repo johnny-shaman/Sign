@@ -69,19 +69,25 @@ f :
 >
 > Infix `#` (Store) cannot be written inside default argument blocks.  
 > Expressions dependent on preceding parameters (e.g., `y : x + 1`) are resolved statically during compilation via monomorphization/specialization as pure compile-time values (zero runtime side effects).  
-> Consequently, runtime IO expressions are incompatible. All IO side effects must be declared inside the function body (right of `?`).
+> Consequently, Output (`#`), which stores at run time, is incompatible; Input (`@`) is not. All store operations must be declared inside the function body (right of `?`).
 >
 > ```sign
-> ` ❌ Prohibited: IO in default argument block
-> f :
-> ` ← Compile Error
+> some_ptr : 0x40011000
+>
+> ` ❌ Prohibited: Output (#) in a default argument block
+> bad :
+> 		x : some_ptr # 42
+> 	? x
+>
+> ` ✅ Allowed: Input (@) can be written in a default argument block
+> good_in :
 > 		x : @some_ptr
 > 	? x
 >
-> ` ✅ Correct: Place IO inside the body
-> f :
+> ` ✅ Correct: Output belongs in the body
+> good_out :
 > 		x
-> 	? @some_ptr
+> 	? some_ptr # x
 > ```
 
 ### Combining Default Arguments and `match_case`
@@ -106,8 +112,10 @@ Function application exhibits unique, predictable behavior when invoking functio
 
 ```sign
 ` Standard partial application (desugared to lambda via static transformation)
-` Equivalent to $p0 $p1 ? [+] $p0 $p1 3 4 5
-f : [+] _ _ 3 4 5
+` A hole _ stands in an ordinary argument position
+` Equivalent to $p0 $p1 ? add5 $p0 $p1 3 4 5
+add5 : a b c d e ? a + b + c + d + e
+f : add5 _ _ 3 4 5
 ` Result: 15
 f 1 2
 
@@ -149,7 +157,9 @@ Default parameters and `match_case` clauses remain fully compatible.
 
 ```sign
 ` Parameter list enclosed in brackets
-sum_list : [x ~xs] ? xs & x + sum_list xs | x
+` Parenthesize the recursive call — application (tier 10) binds looser than addition (tier 13),
+` so without them x + sum_list xs reads as (x + sum_list) xs
+sum_list : [x ~xs] ? xs & x + (sum_list xs) | x
 
 ` Caller passes a list directly without ~
 ` Result: 15

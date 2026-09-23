@@ -21,7 +21,7 @@
 
 ## 1. Syntax
 
-```sign
+```text
 function_def ?
 	condition1 : result1
 	condition2 : result2

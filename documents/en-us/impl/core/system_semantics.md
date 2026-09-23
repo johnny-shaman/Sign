@@ -33,7 +33,7 @@ This document defines **explicit memory operations** used in system-level implem
 
 ## Explicit Reference Operations
 
-```sign
+```text
 ` Passes function reference without value copying
 map $[* 2] ...
 ` Stores value directly into heap_ptr memory slot

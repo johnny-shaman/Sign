@@ -45,7 +45,8 @@ myPairs = myPairs0 = myPairs1
 ` Space is a coproduct: extend within the same dimension.
 ` Without a tilde the right operand is added as ONE element.
 m : 1 2 , 3 4
-m [5 6]        = 1 2 , 3 4 , 5 6
+` [[[1,2],[3,4]],[5,6]]   the right operand stays one element; m~ [5 6] spreads it ([[1,2],[3,4],[5,6]])
+m [5 6]
 
 ` With a postfix tilde the right operand is spread and joined.
 [1 2]~ [3 4]~  = 1 2 3 4
@@ -101,13 +102,17 @@ In binary operations, **the left-hand operand type determines the type of the op
 
 $$\text{typeof}(L \text{ op } R) = \text{typeof}(L)$$
 
-```sign
-` Numeric LHS converts String RHS to integer
-0 + `123` = 123
+There is **no implicit type conversion**: if the right-hand operand is outside the domain the left-hand one chose, the operation collapses to `__` (diagnosed at information level).
 
-` String LHS + Number fails arithmetic (collapses to __)
-`123` + 0 = __
+```sign
+` __   arithmetic does not swallow String (information: a String operand of '+')
+0 + `123`
+
+` __   the same with the operands swapped — the direction is not what decides
+`123` + 0
 ```
+
+To join a string and a number, use juxtaposition (coproduct) rather than arithmetic: `` `123` 0 `` is `` `1230` ``.
 
 ---
 
@@ -118,9 +123,14 @@ $$\text{typeof}(L \text{ op } R) = \text{typeof}(L)$$
 ```sign
 ` Extracting key 'foo' and collecting remainder into 'obj'
 f : x [foo ~obj] y ?
-	...
+	foo
 
-f 10 [ foo : 1, bar : 2, baz : 3 ] 20
+` A struct literal is written as a block even for one entry (`:` binds looser than `,`)
+f 10 [
+	foo : 1
+	bar : 2
+	baz : 3
+] 20
 ```
 
 ### 5.2 Struct Merging via Coproduct

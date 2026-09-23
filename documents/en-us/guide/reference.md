@@ -281,7 +281,9 @@ g 1 (3 < 2)
 ### 4. Bracketed Parameters (Implicit Tilde Omission)
 
 ```sign
-sum_list : [x ~xs] ? xs & x + sum_list xs | x
+` Parenthesize the recursive call — application (tier 10) binds looser than addition (tier 13),
+` so without them x + sum_list xs reads as (x + sum_list) xs
+sum_list : [x ~xs] ? xs & x + (sum_list xs) | x
 ` Result: 15
 sum_list [1 2 3 4 5]
 ```
@@ -315,12 +317,11 @@ reverse : x ~y ? reverse y~, x
 ` Result: 3, 2, 1
 reverse 1 2 3
 
-length : [x y ~z ?
-	y = __ : x
-	length (x + 1), z~
-] 0
+length : [~xs] ?
+	!xs : 0
+	1 + (length (xs ' 1~))
 ` Result: 3
-length 1, 2, 3
+length [1 , 2 , 3]
 ```
 
 ### 8. Point-Free Style
@@ -330,7 +331,8 @@ length 1, 2, 3
 [!_] (2 < 3)
 ` Result: 120
 [_!] 5
-` Result: -8
+` Composition runs left to right: 3 goes through [7 -] (7 - 3 = 4), then [* 5] (4 * 5 = 20)
+` Result: 20
 [7 -] [* 5] 3
 ```
 
@@ -362,12 +364,15 @@ Infix `~` constructs range lists:
 
 ```sign
 [1 ~ 10]
-[* 2,] [1 ~ 10] ' [3 ~ 5] = 8 , 10 , 12
+` [8 10 12]
+[* 2,] [1 ~ 10] ' [3 ~ 5]
 [\a ~ \z]
 
 ` Stepped arithmetic / geometric progressions
-[2 ~+ 2 ~ 10] = [ 2, 4, 6, 8, 10 ]
-[1 ~* 2 ~ 16] = [ 1, 2, 4, 8, 16 ]
+` [2 4 6 8 10]
+[2 ~+ 2 ~ 10]
+` [1 2 4 8 16]
+[1 ~* 2 ~ 16]
 ```
 
 ## Logical Operators (`|`, `&`, `;`, `!`)
@@ -536,7 +541,7 @@ Direct control of the hybrid value/location machine:
 
 ```sign
 i : `hello`
-@$i = `hello`
+@$i == `hello`
 ```
 
 ### Truthiness of `$Lambda` vs `Lambda`
@@ -560,7 +565,7 @@ IO@ ' say `hello`
 
 Inserts target backend assembly directly:
 
-```sign
+```text
 result : "
    mov     eax, 1
    add     eax, 2

@@ -36,12 +36,13 @@ Side effects are explicit, expression through function composition. Code becomes
 `Unit is the unit element of a bialgebra`
 
 `Partial application`
-` → [+ 3]
-_ + 3
+` 7   a filled hole is itself a function
+[+ 3] 4
 
 `Logical unit element: false`
-` → _
-_ & x
+` __   Unit is the zero of &
+x : 5
+__ & x
 ```
 
 ### List Unification Model
@@ -51,10 +52,10 @@ _ & x
 `Everything is a list, everything is a function`
 
 `map`
-[* 2,] 1 2 3 4 = [2 4 6 8]
+[[* 2,] 1 2 3 4] == [2 4 6 8]
 
 `fold`
-[+] 1 2 3 4 = 10
+[[+] 1 2 3 4] == 10
 ```
 
 ### Value-Returning Comparison Operations
