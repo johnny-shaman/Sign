@@ -74,7 +74,8 @@ f :
 > ```sign
 > ` ❌ Prohibited: IO in default argument block
 > f :
-> 		x : @some_ptr   ` ← Compile Error
+> ` ← Compile Error
+> 		x : @some_ptr
 > 	? x
 >
 > ` ✅ Correct: Place IO inside the body
@@ -105,8 +106,10 @@ Function application exhibits unique, predictable behavior when invoking functio
 
 ```sign
 ` Standard partial application (desugared to lambda via static transformation)
-f : [+] _ _ 3 4 5  ` Equivalent to $p0 $p1 ? [+] $p0 $p1 3 4 5
-f 1 2              ` Result: 15
+` Equivalent to $p0 $p1 ? [+] $p0 $p1 3 4 5
+f : [+] _ _ 3 4 5
+` Result: 15
+f 1 2
 
 g :
 		x
@@ -116,14 +119,17 @@ g :
 
 ` g has default arguments, which are excluded from required arity calculations.
 ` Providing positional arguments for non-default parameters automatically triggers evaluation.
-g 3   ` Result: 3 4 5
+` Result: 3 4 5
+g 3
 
 ` If an unexpected evaluation yields __ (Unit), functions without default arguments collapse to __
 ` (Unit propagation / Short-circuit collapse)
-f (3 < 2) 1   ` 3 < 2 yields __, turning f into f __ 1, collapsing result to __
+` 3 < 2 yields __, turning f into f __ 1, collapsing result to __
+f (3 < 2) 1
 
 ` Passing __ into a parameter with a default value triggers fallback to the default expression.
-g 1 (3 < 2)   ` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
+` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
+g 1 (3 < 2)
 ` Result: 1 2 3
 
 ` Behavior when passing __ to rest parameters (~rest):
@@ -131,7 +137,8 @@ g 1 (3 < 2)   ` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
 ` Passing __ does not collapse the expression; it falls back to the implicit default __ (empty list),
 ` allowing the function to execute normally.
 h : x ~rest ? x rest~
-h 1 __      ` Result: 1 (__ is treated as empty list and vanishes upon rest~ expansion)
+` Result: 1 (__ is treated as empty list and vanishes upon rest~ expansion)
+h 1 __
 ```
 
 ## Bracketed Parameter Lists (Implicit Tilde Omission)
@@ -145,7 +152,8 @@ Default parameters and `match_case` clauses remain fully compatible.
 sum_list : [x ~xs] ? xs & x + sum_list xs | x
 
 ` Caller passes a list directly without ~
-sum_list [1 2 3 4 5]  ` Result: 15
+` Result: 15
+sum_list [1 2 3 4 5]
 
 ` Coexistence with default parameters and match_case
 func_mixed :
@@ -158,9 +166,12 @@ func_mixed :
 		x > 3 : x - y
 		y
 
-func_mixed [5]      ` Result: -1 (x=5, y=6. Since x > 3, evaluates 5 - 6 = -1)
-func_mixed [2]      ` Result: 3  (x=2, y=3. Since x > 3 is __, returns y)
-func_mixed [2 10]   ` Result: 10 (x=2, y=10. Since x > 3 is __, returns y)
+` Result: -1 (x=5, y=6. Since x > 3, evaluates 5 - 6 = -1)
+func_mixed [5]
+` Result: 3  (x=2, y=3. Since x > 3 is __, returns y)
+func_mixed [2]
+` Result: 10 (x=2, y=10. Since x > 3 is __, returns y)
+func_mixed [2 10]
 ```
 
 ## Automatic Struct / Record Key Binding

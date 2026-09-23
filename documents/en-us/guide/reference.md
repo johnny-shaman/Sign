@@ -232,10 +232,12 @@ Constructs lambdas (anonymous functions): `[Parameter List] ? [Body Expression]`
 ```sign
 ` Named binding
 exp2fn : x y ? (x + y) ^ 2
-exp2fn 2 3  ` Result: 25
+` Result: 25
+exp2fn 2 3
 
 ` Anonymous immediate evaluation
-[x y ? (x + y) ^ 2] 2 3  ` Result: 25
+` Result: 25
+[x y ? (x + y) ^ 2] 2 3
 ```
 
 ### 2. Partial Application with Hole (`_`) vs Unit (`__`)
@@ -243,17 +245,21 @@ exp2fn 2 3  ` Result: 25
 * **Hole `_` (Static Desugaring)**: Placeholders in syntax are transformed into lambdas at compile time.
   ```sign
   add : x y ? x + y
-  add_three : add 3 _   ` Desugars statically to $p0 ? add 3 $p0
-  add_three 5           ` Result: 8
+  ` Desugars statically to $p0 ? add 3 $p0
+  add_three : add 3 _
+  ` Result: 8
+  add_three 5
   ```
 * **Unit `__` (Runtime Behavior)**:
   * **Unsaturated (Arity incomplete)**: `__` causes immediate short-circuit collapse to `__`.
     ```sign
-    add 3 __  ` Result: __
+    ` Result: __
+    add 3 __
     ```
   * **Saturated (Arity complete)**: `__` triggers comonadic `extract` (immediate execution).
     ```sign
-    add 2 3 __  ` Result: 5
+    ` Result: 5
+    add 2 3 __
     ```
 
 ### 3. Default Arguments & Arity Exclusion
@@ -266,25 +272,29 @@ g :
 		~rest
 	? x y z rest~
 
-g 3   ` Result: 3 4 5
-g 1 (3 < 2)  ` 3 < 2 evaluates to __ (False), y falls back to 1+1=2. Result: 1 2 3
+` Result: 3 4 5
+g 3
+` 3 < 2 evaluates to __ (False), y falls back to 1+1=2. Result: 1 2 3
+g 1 (3 < 2)
 ```
 
 ### 4. Bracketed Parameters (Implicit Tilde Omission)
 
 ```sign
 sum_list : [x ~xs] ? xs & x + sum_list xs | x
-sum_list [1 2 3 4 5]  ` Result: 15
+` Result: 15
+sum_list [1 2 3 4 5]
 ```
 
 ### 5. Automatic Struct Key Binding
 
 ```sign
 calc_diff : [foo bar ~obj] ? foo - bar
+` Result: 80
 calc_diff [
 	bar : 20
 	foo : 100
-]  ` Result: 80
+]
 ```
 
 ### 6. Pattern Matching (`match_case`)
@@ -294,38 +304,47 @@ ABS : x ?
 	x >= 0 : x
 	x < 0 : -x
 
-ABS -5  ` Result: 5
+` Result: 5
+ABS -5
 ```
 
 ### 7. Recursion & Short-Circuit Termination
 
 ```sign
 reverse : x ~y ? reverse y~, x
-reverse 1 2 3  ` Result: 3, 2, 1
+` Result: 3, 2, 1
+reverse 1 2 3
 
 length : [x y ~z ?
 	y = __ : x
 	length (x + 1), z~
 ] 0
-length 1, 2, 3  ` Result: 3
+` Result: 3
+length 1, 2, 3
 ```
 
 ### 8. Point-Free Style
 
 ```sign
-[!_] (2 < 3)   ` Result: __
-[_!] 5         ` Result: 120
-[7 -] [* 5] 3  ` Result: -8
+` Result: __
+[!_] (2 < 3)
+` Result: 120
+[_!] 5
+` Result: -8
+[7 -] [* 5] 3
 ```
 
 ### 9. Natural Transformations (Map / Fold)
 
 ```sign
-[+] 1 2 3 4     ` Fold. Result: 10
-[* 2,] 1 2 3 4  ` Map. Result: 2 4 6 8
+` Fold. Result: 10
+[+] 1 2 3 4
+` Map. Result: 2 4 6 8
+[* 2,] 1 2 3 4
 
 map : f x ~y ? @f x, map f y~
-map $[+ 2] 1 2 3 4   ` Result: 3, 4, 5, 6
+` Result: 3, 4, 5, 6
+map $[+ 2] 1 2 3 4
 ```
 
 ## Product Operator (`,` Infix, Right-Associative)
@@ -380,7 +399,8 @@ Ternary comparisons like `1 < x < 10` are parsed as AST `ChainCompare(1, <, x, <
 
 ```sign
 ` (1 < 5) and (5 < 10) are both True → returns central value 5
-1 < 5 < 10  ` Result: 5
+` Result: 5
+1 < 5 < 10
 ```
 
 ## Arithmetic Operators (`+`, `-`, `*`, `/`, `%`, `^`)
@@ -429,18 +449,25 @@ car :
 k : `brand`
 i : 1
 
-car ' brand ' 0        ` result: Foo              unmarked; index 0
-car ' k~               ` result: [Foo Bar Baz]    looks up by the contents of k (brand)
-car ' brand ' i~       ` result: Bar              uses the contents of i (1) as the index
-car ' brand ' @i       ` result: Bar              the same morphism, in prefix form
-car ' brand ' 1~       ` result: [Bar Baz]        a literal, so it can only spread
-car ' brand ' i~~      ` result: [Bar Baz]        take the contents, then spread
+` result: Foo              unmarked; index 0
+car ' brand ' 0
+` result: [Foo Bar Baz]    looks up by the contents of k (brand)
+car ' k~
+` result: Bar              uses the contents of i (1) as the index
+car ' brand ' i~
+` result: Bar              the same morphism, in prefix form
+car ' brand ' @i
+` result: [Bar Baz]        a literal, so it can only spread
+car ' brand ' 1~
+` result: [Bar Baz]        take the contents, then spread
+car ' brand ' i~~
 ```
 
 **A runtime key into a struct is always written `car ' k~`.** Prefix `@` is refused there: a struct's physical layout is name-ordered, so it does not line up with the ordinal that `@` spells. Named slots have no order, so `car ' k~~` yields the same value as `car ' k~` — there is nothing to spread into but the value you pulled out.
 
 ```sign
-car ' @k   ` error: a named slot cannot be indexed with prefix @ (use car ' k~ instead)
+` error: a named slot cannot be indexed with prefix @ (use car ' k~ instead)
+car ' @k
 ```
 
 The key side of infix `@` follows the same rule: `1~ @ l` slices, `i~ @ l` pulls one element by the contents of `i`, and `i~~ @ l` takes the contents and then spreads. Only the direction differs — internally both normalize to the `'` form.
@@ -484,9 +511,12 @@ On the right of `'` (or the left of infix `@`) — the **key position** — `~` 
 l : 10 20 30
 i : 1
 
-l ' i~     ` result: 20         uses the contents of i (1) as the index
-l ' 1~     ` result: [20 30]    a literal, so it slices
-l ' i~~    ` result: [20 30]    take the contents, then spread
+` result: 20         uses the contents of i (1) as the index
+l ' i~
+` result: [20 30]    a literal, so it slices
+l ' 1~
+` result: [20 30]    take the contents, then spread
+l ' i~~
 ```
 
 Struct keys follow the same rule: `s ' k~` looks up by the contents of `k` (see the Property Access section).

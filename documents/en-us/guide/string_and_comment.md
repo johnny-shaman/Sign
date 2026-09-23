@@ -126,8 +126,8 @@ A backtick anywhere other than SOL is always a string literal; the lookahead rul
 
 ```sign
 calc_func : x ?
-\t`Docstring (after tab, closing backtick present → evaluated as string but discarded)`
-\tx * 2
+	`Docstring (after tab, closing backtick present → evaluated as string but discarded)`
+	x * 2
 ```
 
 The string is evaluated and then discarded, so it functions as documentation. Sign has no inline comments; this is a string that happens to be unused.
@@ -143,7 +143,8 @@ Therefore, **the final line (the last non-comment expression) of a file is the r
 ```sign
 ` greet.sn
 name : `World`
-`Hello, {name}!`    ← Final line: return value of this file
+` ← Final line: return value of this file
+`Hello, {name}!`
 ```
 
 ```sign
@@ -151,7 +152,8 @@ name : `World`
 add : x y ? x + y
 mul : x y ? x * y
 
-add 3 4    ← Final line: 7 is the return value of this file
+` ← Final line: 7 is the return value of this file
+add 3 4
 ```
 
 ---
@@ -164,7 +166,8 @@ To work with multiline strings, use lists of strings or the coproduct concatenat
 
 ```sign
 ` Constructing multiple strings
-lines : `Line 1` `Line 2` `Line 3`   ` List construction
+` List construction
+lines : `Line 1` `Line 2` `Line 3`
 
 ` Explicit newline character handling
 text  : `Line 1` \
@@ -186,7 +189,8 @@ Strings can be treated as sequences of `0u` literals (Unicode Code Points):
 hello : `Hello`
 
 ` Accessing individual code points
-h : `hello` ' 0   ` → \h (0u48)
+` → \h (0u48)
+h : `hello` ' 0
 ```
 
 ---

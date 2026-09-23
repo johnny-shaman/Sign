@@ -54,5 +54,6 @@ Logical negation `!` transforms between Initial and Terminal object morphisms:
 [] & x
 
 ` Evaluation of invalid comparison collapses to Unit (__)
-3 < 2   ` → __
+` → __
+3 < 2
 ```

@@ -23,10 +23,10 @@
 
 ```sign
 function_def ?
-\tcondition1 : result1
-\tcondition2 : result2
-\t...
-\tdefault_result
+	condition1 : result1
+	condition2 : result2
+	...
+	default_result
 ```
 
 - Blocks indented with tabs immediately following `?` represent `match_case` expressions. The arms sit one TAB deeper than the line with `?`; a line two TABs deeper at once is inside a nested block, which stands in for a bracket, so it is not an arm ([`preprocessor.md`](../build/preprocessor.md) section 0).

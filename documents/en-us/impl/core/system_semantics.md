@@ -34,8 +34,10 @@ This document defines **explicit memory operations** used in system-level implem
 ## Explicit Reference Operations
 
 ```sign
-map $[* 2] ...  ` Passes function reference without value copying
-$heap_ptr # ... ` Stores value directly into heap_ptr memory slot
+` Passes function reference without value copying
+map $[* 2] ...
+` Stores value directly into heap_ptr memory slot
+$heap_ptr # ...
 ```
 
 ### Compiler Rules (Pass 4)

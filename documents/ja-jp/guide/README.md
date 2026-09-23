@@ -56,8 +56,8 @@ guide/
 
 ```sign
 [> 0,] [* 2,] [+] data
- ↓      ↓      ↓
-filter  map   fold
+` ↓      ↓      ↓
+`filter  map   fold
 ```
 
 関数合成は**左から右へデータが流れる**。

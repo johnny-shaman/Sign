@@ -44,40 +44,34 @@ const parser = peggy.generate(fs.readFileSync(path.join(__dirname, "..", "sign.p
  * 知らせなので、門は「減った」も名指しする**（黙って通すと、次に生えたとき気づけない）。
  */
 const KNOWN = {
-	"documents/en-us/guide/README.md": {"パース":1,"行末の ` が閉じていない":3},
-	"documents/en-us/guide/function_guide.md": {"行末の ` が閉じていない":2},
+	"documents/en-us/guide/README.md": {"coproduct_resolver.md §5":1},
+	"documents/en-us/guide/function_guide.md": {"中置演算子 '+' のオペランドに '_' は書":1},
+	"documents/en-us/guide/list_cheat_sheet.md": {"stack_abi.md §7.1違反: 名前付":1},
 	"documents/en-us/guide/pattern_guide.md": {"パラメータ '<x>' のデフォルト式が、まだ束":1},
-	"documents/en-us/guide/reference.md": {"パース":1,"行末の ` が閉じていない":15,"解決できない式です: <F> (式)（演算子の位":1,"解決できない式です: <result> : \" ":1},
-	"documents/en-us/guide/string_and_comment.md": {"パース":3,"行末の ` が閉じていない":2},
-	"documents/en-us/impl/appendix/categorical_truth.md": {"行末の ` が閉じていない":1},
+	"documents/en-us/guide/reference.md": {"パース":2,"解決できない式です: <F> (式)（演算子の位":1,"解決できない式です: <result> : \" ":1},
 	"documents/en-us/impl/build/preprocessor.md": {"パース":1},
-	"documents/en-us/impl/core/execution_model.md": {"パース":1,"行末の ` が閉じていない":1},
-	"documents/en-us/impl/core/integer_overflow.md": {"行末の ` が閉じていない":1},
-	"documents/en-us/impl/core/system_semantics.md": {"行末の ` が閉じていない":1},
-	"documents/en-us/impl/core/tco.md": {"行末の ` が閉じていない":3},
-	"documents/en-us/impl/memory/stack_abi.md": {"行末の ` が閉じていない":1},
+	"documents/en-us/impl/core/execution_model.md": {"インポートを解決する手段がありません（add.s":1},
+	"documents/en-us/impl/core/system_semantics.md": {"パース":1},
 	"documents/en-us/impl/syntax/match_case.md": {"パース":1},
-	"documents/en-us/impl/type/list_model.md": {"行末の ` が閉じていない":2,"パース":1,"`名前 : 値` を値の位置に書けません——束縛":1},
-	"documents/en-us/impl/type/type_system.md": {"パース":1},
-	"documents/ja-jp/guide/README.md": {"パース":1,"coproduct_resolver.md §5":1},
-	"documents/ja-jp/guide/function_guide.md": {"行末の ` が閉じていない":2},
+	"documents/en-us/impl/type/list_model.md": {"パース":1,"`名前 : 値` を値の位置に書けません——束縛":1},
+	"documents/ja-jp/guide/README.md": {"coproduct_resolver.md §5":1},
+	"documents/ja-jp/guide/function_guide.md": {"仮引数 '<x>' のデフォルト式に '#'（O":1},
+	"documents/ja-jp/guide/list_cheat_sheet.md": {"パース":1,"stack_abi.md §7.1違反: 名前付":1},
 	"documents/ja-jp/guide/pattern_guide.md": {"パラメータ '<x>' のデフォルト式が、まだ束":1},
-	"documents/ja-jp/guide/reference.md": {"行末の ` が閉じていない":2,"解決できない式です: <result> : \" ":1},
+	"documents/ja-jp/guide/reference.md": {"行末の ` が閉じていない":1,"パース":5,"`名前 : 値` の左辺は名前でなければなりませ":1,"解決できない式です: <result> : \" ":1},
 	"documents/ja-jp/impl/build/build_system.md": {"パース":1},
 	"documents/ja-jp/impl/build/entry_point.md": {"インポートを解決する手段がありません（main.":3},
 	"documents/ja-jp/impl/build/preprocessor.md": {"パース":3},
 	"documents/ja-jp/impl/build/system_architecture.md": {"行末の ` が閉じていない":1},
 	"documents/ja-jp/impl/core/coproduct_resolver.md": {"coproduct_resolver.md §5":1},
 	"documents/ja-jp/impl/core/system_semantics.md": {"パース":2},
-	"documents/ja-jp/impl/core/unit.md": {"行頭の空白":1},
 	"documents/ja-jp/impl/idiom_to_instructions.md": {"インポートを解決する手段がありません（opera":1},
-	"documents/ja-jp/impl/layer_relations.md": {"行末の ` が閉じていない":2},
-	"documents/ja-jp/impl/memory/stack_abi.md": {"行末の ` が閉じていない":4},
-	"documents/ja-jp/impl/syntax/match_case.md": {"行末の ` が閉じていない":1},
+	"documents/ja-jp/impl/layer_relations.md": {"`名前 : 値` の左辺は名前でなければなりませ":1},
+	"documents/ja-jp/impl/memory/stack_abi.md": {"行末の ` が閉じていない":3},
 	"documents/ja-jp/impl/type/list_model.md": {"行末の ` が閉じていない":1,"パース":2},
-	"documents/ja-jp/impl/type/type_system.md": {"行末の ` が閉じていない":2,"インポートを解決する手段がありません（add.s":2,"'==='（同一性）は廃止されました。ねじれ（宣":3},
-	"documents/manifesto/manifesto.en-us.md": {"パース":1,"`名前 : 値` の左辺は名前でなければなりませ":1},
-	"documents/manifesto/manifesto.ja-jp.md": {"パース":1,"`名前 : 値` の左辺は名前でなければなりませ":1},
+	"documents/ja-jp/impl/type/type_system.md": {"パース":2,"中置演算子 '=' のオペランドに '_' は書":1,"スロット 'tier' が同じ構造体の中で2回定":1,"インポートを解決する手段がありません（add.s":2,"'==='（同一性）は廃止されました。ねじれ（宣":3},
+	"documents/manifesto/manifesto.en-us.md": {"中置演算子 '+' のオペランドに '_' は書":1,"`名前 : 値` の左辺は名前でなければなりませ":1},
+	"documents/manifesto/manifesto.ja-jp.md": {"中置演算子 '+' のオペランドに '_' は書":1,"`名前 : 値` の左辺は名前でなければなりませ":1},
 };
 
 let passed = 0;
@@ -108,13 +102,24 @@ const fencesOf = (text) => {
 	const lines = text.split(CR).join("").split(NL);
 	const out = [];
 	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(/^(\s*)```([A-Za-z]*)\s*$/);
+		// **引用（`> `）の中のフェンスも読む。** 見落としていた間は 36 本が門の外に居て、そこに
+		// 行末バックティックが 59 行残っていた（41 行は1つのファイル）。引用の印は markdown の
+		// 飾りであって、剥がした姿が読者の写すコードである——門が見ない所に腐りが溜まる。
+		// 引用は入れ子になる（`> > ```sign` が1本あった）ので、印が無くなるまで剥がす。
+		const depth = (lines[i].match(/>/g) || []).length && /^\s*>/.test(lines[i]) ? (lines[i].match(/^(?:\s*>\s?)+/) || [""])[0] : "";
+		const strip = (l) => {
+			if (!depth) return l;
+			let s = l;
+			for (let k = 0; k < depth.split(">").length - 1; k++) s = s.replace(/^\s*>\s?/, "");
+			return s;
+		};
+		const m = strip(lines[i]).match(/^(\s*)```([A-Za-z]*)\s*$/);
 		if (!m) continue;
 		const [, indent, tag] = m;
 		const close = new RegExp("^" + indent + "```\\s*$");
 		let j = i + 1;
 		const body = [];
-		while (j < lines.length && !close.test(lines[j])) body.push(lines[j]), j++;
+		while (j < lines.length && !close.test(strip(lines[j]))) body.push(strip(lines[j])), j++;
 		out.push({ tag, line: i + 1, body });
 		i = j;
 	}

@@ -68,8 +68,10 @@
 > ]
 > k : `b`
 >
-> p ' k~     ` result: 2   looks up by the contents of k (b)
-> p ' @k     ` error: a named slot cannot be indexed with prefix @
+> ` result: 2   looks up by the contents of k (b)
+> p ' k~
+> ` error: a named slot cannot be indexed with prefix @
+> p ' @k
 > ```
 >
 > Struct fields go on **block lines** (inside `[…]` or indented). A one-line spelling such as

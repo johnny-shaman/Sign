@@ -32,7 +32,7 @@ Sign言語には `null`, `nil`, `false` などの予約語は存在しません�
 言語組み込みの論理積（`&`）および論理和（`|`）は短絡評価（Short-circuit）を行います。
 
 ```sign
- appendの終了条件と再帰ステップ
+` appendの終了条件と再帰ステップ
 append : [x ~xs] [y ~ys] ?
 	xs & x (append xs (y ys)) | @x y ys
 ```

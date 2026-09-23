@@ -26,8 +26,10 @@ In Sign, the right-hand side of `?` forms the evaluation body, and expressions e
 ```sign
 ` Tail-recursive loop
 loop : n acc ?
-	n = 0 & acc |          ` ← acc returned (base case)
-	 loop (n - 1) (acc + n)  ` ← loop is in tail position → TCE applied
+` ← acc returned (base case)
+	n = 0 & acc |
+` ← loop is in tail position → TCE applied
+	 loop (n - 1) (acc + n)
 ```
 
 ### Non-Tail Position Example
@@ -35,7 +37,8 @@ loop : n acc ?
 ```sign
 ` Result used in subsequent operation
 bad : n ?
-	(f n) + 1   ` ← Result of f n is added to 1 → Not in tail position
+` ← Result of f n is added to 1 → Not in tail position
+	(f n) + 1
 ```
 
 ---
@@ -47,9 +50,12 @@ Sign conditional branching `cond & then | else` evaluates both `then` and `else`
 ```sign
 ` Tail-recursive Collatz sequence
 collatz : n steps ?
-	n = 1     & steps            |  ` Base case
-	 n % 2 = 0 & collatz (n / 2)  (steps + 1) |  ` Even branch → TCE applied
-	             collatz (n * 3 + 1) (steps + 1)   ` Odd branch → TCE applied
+` Base case
+	n = 1     & steps            |
+` Even branch → TCE applied
+	 n % 2 = 0 & collatz (n / 2)  (steps + 1) |
+` Odd branch → TCE applied
+	             collatz (n * 3 + 1) (steps + 1)
 ```
 
 Every tail call in individual `|` clauses is optimized independently.

@@ -51,7 +51,8 @@ m [5 6]        = 1 2 , 3 4 , 5 6
 [1 2]~ [3 4]~  = 1 2 3 4
 
 ` Comma is a product: it raises the dimension (see §3).
-m , [5 6]      ` [[[1,2],[3,4]],[5,6]]
+` [[[1,2],[3,4]],[5,6]]
+m , [5 6]
 ```
 
 > [!IMPORTANT]
@@ -86,8 +87,10 @@ Commas `,` lift dimensions to form multi-dimensional matrices:
 [1 2 , 3 4] , [5 6 , 7 8]
 
 ` Tensor multiplication and exponentiation
-[1 2 3 4] * 2 = 1 2 3 4 1 2 3 4    ` Flat duplication
-[1 2 3 4] ^ 2 = 1 2 3 4 , 1 2 3 4  ` Dimension lifting
+` Flat duplication
+[1 2 3 4] * 2 = 1 2 3 4 1 2 3 4
+` Dimension lifting
+[1 2 3 4] ^ 2 = 1 2 3 4 , 1 2 3 4
 ```
 
 ---

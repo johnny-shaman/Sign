@@ -67,11 +67,13 @@ f : x y ?
 ` Returns 6
 f 2 3
 
-` Returns `Error : x is negative`
+`
+` Returns `Error : x is negative
 f -1 -1
 f -1 2
 
-` Returns `Error : y is negative`
+`
+` Returns `Error : y is negative
 f 2 -1
 ```
 

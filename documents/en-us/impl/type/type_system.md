@@ -37,17 +37,27 @@ Structural types govern space-operator resolution and are **determined directly 
 #### Structural Resolution Rules:
 
 ```sign
-x y ? body          → Lambda  (Presence of ?)
-[+ 2]               → Lambda  (Partial application bracket)
-[f]                 → Lambda  (Function address encapsulation)
-$expr               → Atom    (Address-Of always yields Atom(Address))
-@expr               → Inherits target domain
+` → Lambda  (Presence of ?)
+x y ? body
+` → Lambda  (Partial application bracket)
+[+ 2]
+` → Lambda  (Function address encapsulation)
+[f]
+` → Atom    (Address-Of always yields Atom(Address))
+$expr
+` → Inherits target domain
+@expr
 
-42                  → Atom    (Numeric literal)
-`hello`             → Atom    (String literal)
-x + y               → Atom    (Arithmetic result)
-[1 2 3]             → Atom    (Value list block)
-__                  → Atom    (Unit)
+` → Atom    (Numeric literal)
+42
+` → Atom    (String literal)
+`hello`
+` → Atom    (Arithmetic result)
+x + y
+` → Atom    (Value list block)
+[1 2 3]
+` → Atom    (Unit)
+__
 ```
 
 > [!IMPORTANT]

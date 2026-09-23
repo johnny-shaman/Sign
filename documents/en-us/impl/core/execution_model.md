@@ -32,7 +32,8 @@ main.sn      →  Program entry point
 ## 2. Imports as Inner Function Definitions
 
 ```sign
-`add.sn`@~   ← Imports add.sn
+` ← Imports add.sn
+`add.sn`@~
 ```
 
 This operation does not dynamically load a file at runtime; it statically binds `add` as an inner function in the local scope.
@@ -43,7 +44,8 @@ This operation does not dynamically load a file at runtime; it statically binds 
 
 ```sign
 add3 : add 3
-add3 5   ` → 8
+` → 8
+add3 5
 ```
 
 `add3` does not allocate a runtime closure object. Instead, the compiler generates a specialized static function `add3` inlined into `main`.

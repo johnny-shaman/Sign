@@ -58,8 +58,8 @@ guide/
 
 ```sign
 [> 0,] [* 2,] [+] data
- ↓      ↓      ↓
-filter  map   fold
+` ↓      ↓      ↓
+`filter  map   fold
 ```
 
 Function composition flows **from left to right**.
@@ -71,7 +71,8 @@ Function composition flows **from left to right**.
 ### Basic Function Definition
 ```sign
 add : x y ? x + y
-add 3 5   ` → 8
+` → 8
+add 3 5
 ```
 
 ### Pattern Matching (`match_case`)
@@ -85,13 +86,16 @@ f : x ?
 ### List Manipulation
 ```sign
 ` map: Double each element
-[* 2,] [1 2 3 4 5]~   ` → [2 4 6 8 10]
+` → [2 4 6 8 10]
+[* 2,] [1 2 3 4 5]~
 
 ` filter: Positive numbers only
-[> 0,] [1 -2 3 -4 5]~  ` → [1 3 5]
+` → [1 3 5]
+[> 0,] [1 -2 3 -4 5]~
 
 ` fold: Sum
-[+] [1 2 3 4 5]~       ` → 15
+` → 15
+[+] [1 2 3 4 5]~
 ```
 
 ### Recursion
@@ -99,5 +103,6 @@ f : x ?
 sum : x ~xs ?
 	xs & x + sum xs | x
 
-sum [1 2 3 4 5]   ` → 15
+` → 15
+sum [1 2 3 4 5]
 ```

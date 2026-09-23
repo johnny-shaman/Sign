@@ -47,15 +47,19 @@ In C, signed integer overflow is UB, enabling aggressive compiler passes to brea
 ```sign
 ` Standard Integer (0) — Defined Wraparound
 x : 2147483647
-y : x + 1           ` → Wraps modulo MAX_INT
+` → Wraps modulo MAX_INT
+y : x + 1
 
 ` Raw Binary (0r) — Defined Wraparound
-b : 0rFF            ` 8-bit: 255
-c : b + 0r01        ` → 0r00
+` 8-bit: 255
+b : 0rFF
+` → 0r00
+c : b + 0r01
 
 ` Address Pointer (0x) — Collapse to Unit (__)
 addr : 0xFFFFFFFF
-next : addr + 0x01  ` → __ (Unit, prevents out-of-bounds jump)
+` → __ (Unit, prevents out-of-bounds jump)
+next : addr + 0x01
 ```
 
 **Undefined Behavior does not exist in Sign.**

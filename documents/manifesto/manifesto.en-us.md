@@ -36,10 +36,12 @@ Side effects are explicit, expression through function composition. Code becomes
 `Unit is the unit element of a bialgebra`
 
 `Partial application`
-_ + 3 → [+ 3]
+` → [+ 3]
+_ + 3
 
 `Logical unit element: false`
-_ & x → _
+` → _
+_ & x
 ```
 
 ### List Unification Model

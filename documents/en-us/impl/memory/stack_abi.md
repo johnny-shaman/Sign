@@ -62,8 +62,10 @@ call add
 When fewer arguments are passed than required, the partial application lowers to a contiguous struct on the stack via `alloca`:
 
 ```sign
-add3 : add 3   ` Partial application
-add3 5         ` Full application
+` Partial application
+add3 : add 3
+` Full application
+add3 5
 ```
 
 ```c
