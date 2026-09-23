@@ -554,9 +554,43 @@ function hasPostfixTilde(node) {
 //
 // 断るのは器の側だけである。添字の側の `~` は添字の残り（`s ' 1~`・`1~ @ s`）と動的な鍵
 // （`obj ' k~`）で、どちらも書ける。
-function refuseSpreadGetContainer(name, left, right) {
+//
+// **括りも名前も抜け道にしない。** `~` は値に付く印なので括って渡しても名前に束ねても残る
+// ——構文の直下だけを見ていたときは `(d~) ' 0` と `n : d~` / `n ' 0` が素通りし、解釈器だけが
+// 答えを返していた（機械は「まだ出せない式です」と言っていた）。撒かれたものから 0 番目を
+// 取るには**もう一度積を当てる文脈**が要り、その積は字面のどこにも書かれていない
+// （利用者 2026-09-23）。同じ抜け道は `'` と `@` の混在の門でも塞いである（a506db9a）。
+//
+// **`String` だけは例外である。** μ が強制なので `s~` と `s` は同じ値であり
+// （`isomorphism.test.js`「撒いた文字列は元の文字列」）、撒いた後にも器が残っている
+// ——引くのに積を当て直す必要が無い。ここを一律に断ると `(s~) ' 1 = s ' 1` という法が
+// 書けなくなる（機械の答えを解釈器で照合する軸が1本消える）。
+function spreadsToString(node, env) {
+  const x = unwrapSoloBlock(node);
+  if (!x) return false;
+  if (x.type === "atom" && x.kind === "string") return true;
+  const b = identifierBinding(x, env);
+  return !!(b && b.atomType === "String");
+}
+
+function spreadContainer(node, env) {
+  const inner = unwrapSoloBlock(node);
+  if (hasPostfixTilde(inner)) return !spreadsToString(inner.operand, env);
+  // 名前に束ねた撒き（`n : l~`）。Pass 1 が右辺の綴りを持っているので、末尾の後置 `~` を見る。
+  const b = identifierBinding(inner, env);
+  const toks = b && b.rhsTokens;
+  // **右辺が撒きそのものの形だけを見る。** 末尾が `~` であることは「その値が撒かれた並びで
+  // ある」を意味しない——`q : [foo : 99]~ p~` は2つを撒いて**組んだ器**であり、`q ' foo` は
+  // 正しい綴りである（実測で名前付きスロットのマージ 10 本を誤って断った）。1項＋`~` に限る。
+  if (!(Array.isArray(toks) && toks.length === 2 && toks[1] === "_~")) return false;
+  // 名前の右辺が文字列を撒いた形（`n : s~`）なら同じ例外が当たる。
+  const src = toks.length === 2 && typeof toks[0] === "string" ? { type: "atom", kind: "identifier", value: toks[0] } : null;
+  return !(src && spreadsToString(src, env));
+}
+
+function refuseSpreadGetContainer(name, left, right, env) {
   const container = name === "get_prop" ? left : name === "get_at" ? right : null;
-  if (!hasPostfixTilde(container)) return;
+  if (!spreadContainer(container, env)) return;
   const spelled = name === "get_prop" ? "p~ ' 0" : "0 @ p~";
   throw new SyntaxError(
     `get の器の側に後置 '~' は書けません。'${spelled}' の '~' は器を開いて中身を受け手へ撒く指示で、` +
@@ -963,7 +997,7 @@ function reduceOnce(items, tier, env, phase) {
         }
         const left = toNode(a, env);
         const right = toNode(items[i + 2], env);
-        refuseSpreadGetContainer(entry.name, left, right);
+        refuseSpreadGetContainer(entry.name, left, right, env);
         const node = { type: "operation", op: b, name: entry.name, position: "infix", left, right };
         items.splice(i, 3, node);
         return true;
@@ -1446,7 +1480,7 @@ function headBinarySection(node) {
 }
 
 // **tier 11 で、連なりの頭を畳む。**
-function foldHeadSections(items) {
+function foldHeadSections(items, env) {
   for (let i = 0; i < items.length; i++) {
     const sec = typeof items[i] === "string" ? null : headBinarySection(items[i]);
     if (!sec) continue;
@@ -1461,7 +1495,7 @@ function foldHeadSections(items) {
     // `[1 2 3]`）、`[@] 0 1 m` が `1 @ m` の器を返していた——区間と中置が同じ木になるという
     // 約束（`[[op] L R]` ≡ `L op R`）が、3項から割れていた。
     const mk = (l, r) => {
-      refuseSpreadGetContainer(sec.name, l, r);
+      refuseSpreadGetContainer(sec.name, l, r, env);
       return { type: "operation", op: sec.op, name: sec.name, position: "infix", left: l, right: r };
     };
     const right = (lookup(sec.op, "infix") || {}).assoc === "right";
@@ -1663,7 +1697,7 @@ function reduceAll(rawItems, env) {
   for (let tier = 27; tier >= 1; tier--) {
     let guard = 0;
     if (tier === COPRODUCT_TIER) {
-      foldHeadSections(items);
+      foldHeadSections(items, env);
       // coproduct_resolver.md §3.0 の5段（内側から compose → 未飽和の適用 → 構築 →
       // 適用 → 逆適用）を順に見る（COPRODUCT_PHASES）。
       // **還元が起きたら段の先頭へ戻る。** 適用が新しい Atom-Atom の対を生むので、

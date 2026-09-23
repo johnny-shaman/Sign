@@ -1527,6 +1527,21 @@ function iteratorOutOfRange(it, v) {
  * `origin` は名前付きスロットを撒いたときの元の器。**スロットを撒くとは名前ごと撒く
  * ことである**——値だけにすると名前が落ちてマージできない（list_model.md §5.3）。
  */
+/**
+ * **後置 `~` は段を1つ下ろす**（list_model.md §3.2「展開演算子は内側を1段階展開する」）。
+ *
+ * 器を開いて中身を撒くとき、中身がまた器なら**その中身が外の余積へ流れ込む**
+ * ——`[1 2 , 3 4]~ = 1 2 3 4` である。印と操作は素直に対応する：`,` が段を上げ、
+ * 後置 `~` が下ろし、空白は段を変えない。だから `m~ 5 6` は一次元、`m~ [5 6]` は
+ * 括ったぶんが1項として残る。
+ *
+ * **1段だけである。** 3次元を撒けば2次元になる。文字列は文字の列だが JS の文字列
+ * （器ではない値）なので、ここでは開かない——`String` の μ は連結側が持つ。
+ */
+function lowerOneLevel(items) {
+  return items.flatMap((x) => (Array.isArray(x) ? x : [x]));
+}
+
 function makeWalk(items, origin = null) {
   const it = makeIterator(0, (i) => i + 1, items.length - 1, 1, items);
   it.spread = true;
@@ -1854,7 +1869,9 @@ function evalUnaryOp(name, v) {
         w.text = true;
         return w;
       }
-      if (Array.isArray(v)) return makeWalk(v);
+      // **段を下ろすのはここ1か所である。** 撒いた並びを読む所（余積・直積・`||…||`・
+      // 観測）は全部この並びを見るので、消費する側に同じ規則を書かない。
+      if (Array.isArray(v)) return makeWalk(lowerOneLevel(v));
       // 名前付きスロットの展開は「スロットを名前ごと撒く」ことである（§5.3）。
       if (isNamedSlots(v)) return makeWalk(Object.values(v), v);
       // **1要素はスカラーと同型**（`[x]` ≅ `x`）。撒いても1つなので器へ戻る。
@@ -2243,7 +2260,15 @@ function asList(v) {
  * `[1,[2,3]]` のままである）。
  */
 function textAbsorb(l, r) {
-  if (typeof l === "string" || typeof r === "string") return stringifyForConcat(l) + stringifyForConcat(r);
+  // **撒いても文字列は文字列である。** `String` の μ は強制なので `s~` と `s` は同じ値であり
+  // （`isomorphism.test.js`「撒いた文字列は元の文字列」）、片方を撒いたかどうかで吸収の効き方が
+  // 変わってはならない。撒いた印の付いた並びを文字列として見ていなかったため、**両方撒いた
+  // ときだけ**吸収が外れていた——`s t~` は `abcde` なのに `s~ t~` は文字の列で、`s~ = s` を
+  // 代入しただけで値が変わっていた（利用者 2026-09-23「String でも撒く動作や積む動作は
+  // きちんと指定して演算してほしい。いわゆるモナドになるわけだから」）。
+  const a = collapseText(l);
+  const b = collapseText(r);
+  if (typeof a === "string" || typeof b === "string") return stringifyForConcat(a) + stringifyForConcat(b);
   return null;
 }
 
