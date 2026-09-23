@@ -7841,7 +7841,7 @@ function applyParts(node) {
 	return { head, args };
 }
 
-function selfConsumes(part, name, params, restNames, group, defaults = null, indexedBy = null) {
+function selfConsumes(part, name, params, restNames, group, defaults = null, indexedBy = null, why = null) {
 	const bare = (s) => String(s).replace(/[<>]/g, "");
 	const { head, args } = applyParts(part);
 	// 自分か、呼び合う塊の中の誰かなら「食っている」。器の減り方は同じである。
@@ -7935,7 +7935,11 @@ function selfConsumes(part, name, params, restNames, group, defaults = null, ind
 		for (const arg of args) {
 			if (!arg || !isIdentifierNode(arg) || !params.includes(arg.value)) continue;
 			if (!isBoxType(arg.atomType)) continue;
-			if (indexedBy.has(arg.value + String.fromCharCode(0) + moved)) return arg.value;
+			if (indexedBy.has(arg.value + String.fromCharCode(0) + moved)) {
+				// 上の段落が言っているとおり、これは証明ではなく**見積もり**である。印を持ち帰る。
+				if (why) why.add("添字で回る再帰の段数を、その添字が走る器で抑えた");
+				return arg.value;
+			}
 		}
 	}
 	return null;
@@ -8163,6 +8167,8 @@ function boundedCallOf(part, known, params) {
 	if (!isIdentifierNode(head)) return null;
 	const p = known.get(bareName(head.value));
 	if (!p) return null;
+	// 呼び先の上界が見積もりなら、それを合成したこちらも見積もりである。
+	const why = new Set(p.estimated || []);
 	// **呼び先も器ごとの項を持つ。** ここが `sizeOfIndex` を読んだままだと、計画が項の
 	// 並びになった時点で `undefined` に落ち、**器の項を黙って捨てる**——上界が痩せて
 	// 確保が足りなくなり、照合が `__` を返す。実際それで preprocess が回った。
@@ -8238,13 +8244,14 @@ function boundedCallOf(part, known, params) {
 		}
 		const inner = boundedCallOf(a, known, params);
 		if (!inner) return null;
+		for (const w of inner.estimated || []) why.add(w);
 		konstAcc += t.coef * inner.konst;
 		for (const it of inner.terms) {
 			const c = t.coef * it.coef;
 			addMerged(it.sizeOf, c);
 		}
 	}
-	return { konst: konstAcc, terms: [...merged].map(([sizeOf, coef]) => ({ sizeOf, coef })) };
+	return { konst: konstAcc, terms: [...merged].map(([sizeOf, coef]) => ({ sizeOf, coef })), estimated: [...why] };
 }
 
 /**
@@ -8353,11 +8360,20 @@ function returnSizeBound(lam, name, known, group, env = null) {
 	scanCalls(lam.right);
 	const ringEvidence = new Set(ownEats);
 	if (group && known) for (const m of group) for (const e of (known.get(m) || {}).eats || []) ringEvidence.add(e);
+	// **上界が証明ではなく見積もりになった道を覚えておく。** 見積もりは外れうる——外れても
+	// 踏み抜かないが（書く前に照合して `__` へ落ちる）、その `__` は呼ぶ側の連結に吸われて
+	// **黙って短い器**になる。だから「ここは見積もりだ」と言える場所で拾い、計画まで運んで
+	// information で名指しする（利用者の裁定 2026-09-23）。
+	const why = new Set();
 	const ringEaten = (q) => {
 		const { head, args } = applyParts(q);
 		if (!isIdentifierNode(head) || !group || !group.has(bareName(head.value))) return null;
 		for (const a of args) {
-			if (a && isIdentifierNode(a) && params.includes(a.value) && isBoxType(a.atomType) && ringEvidence.has(a.value)) return a.value;
+			if (a && isIdentifierNode(a) && params.includes(a.value) && isBoxType(a.atomType) && ringEvidence.has(a.value)) {
+				// 輪の相手が食っているという証拠は、自分の本体には書かれていない。
+				why.add("輪の相手が食っていることを根拠にした");
+				return a.value;
+			}
 		}
 		return null;
 	};
@@ -8441,10 +8457,14 @@ function returnSizeBound(lam, name, known, group, env = null) {
 					? { k: 1, refs: new Map(), rec: null }
 					: { k: 0, refs: new Map([[q.value, 1]]), rec: null };
 			}
-			const eaten0 = selfConsumes(q, name, params, restNames, group, defaults, indexedBy) || ringEaten(q);
+			const eaten0 = selfConsumes(q, name, params, restNames, group, defaults, indexedBy, why) || ringEaten(q);
 			if (eaten0) return { k: 0, refs: new Map(), rec: eaten0 };
 			const b0 = known ? boundedCallOf(q, known, params) : null;
-			if (b0) return { k: b0.konst, refs: new Map(b0.terms.map((t) => [t.sizeOf, t.coef])), rec: null };
+			// 呼び先の上界が見積もりなら、合成したこちらも見積もりである（印は消えない）。
+			if (b0) {
+				for (const w of b0.estimated || []) why.add(w);
+				return { k: b0.konst, refs: new Map(b0.terms.map((t) => [t.sizeOf, t.coef])), rec: null };
+			}
 			const lit0 = literalElemCount(q, elemType);
 			if (lit0 !== null) return { k: lit0, refs: new Map(), rec: null };
 			if (isBoxType(q.atomType) && !(elemType && isBoxType(elemType))) {
@@ -8503,7 +8523,7 @@ function returnSizeBound(lam, name, known, group, env = null) {
 			}
 			// **自己呼び出しは、食っている器の要素数ぶん。** ここで諦めていたのが、
 			// 器を返す関数のほとんどが再帰である以上そのまま sret を塞いでいた。
-			const eaten = selfConsumes(q, name, params, restNames, group, defaults, indexedBy) || ringEaten(q);
+			const eaten = selfConsumes(q, name, params, restNames, group, defaults, indexedBy, why) || ringEaten(q);
 			if (eaten) {
 				if (rec && rec !== eaten) return null; // 1枝で2つ食う形はまだ扱わない
 				rec = eaten;
@@ -8518,6 +8538,8 @@ function returnSizeBound(lam, name, known, group, env = null) {
 			//
 			// 定義の順序で決まらないよう、計画は不動点で回している（`collectSretPlan`）。
 			const bounded = known ? boundedCallOf(q, known, params) : null;
+			// 呼び先の上界が見積もりなら、合成したこちらも見積もりである（印は消えない）。
+			for (const w of (bounded && bounded.estimated) || []) why.add(w);
 			if (bounded) {
 				// 定数のぶんは要素数として数える。器に比例するぶんは「撒く器」と同じ扱い。
 				k += bounded.konst;
@@ -8605,6 +8627,7 @@ function returnSizeBound(lam, name, known, group, env = null) {
 			addTerm(rec, step);
 			// 食いながら撒く枝は、撒く器のぶんも項として持つ。**別々の器でも和で書ける**
 			// ——1変数しか持てなかったので、ここで諦めていた。
+			if (refs.size > 0) why.add("撒きながら食う枝を、段ごとに消えたぶんで見積もった");
 			for (const [nm, c] of refs) if (nm !== rec) addTerm(nm, c);
 			continue;
 		}
@@ -8668,12 +8691,13 @@ function returnSizeBound(lam, name, known, group, env = null) {
 		}
 		const bb = known ? boundedCallOf(defaults.get(nm), known, params) : null;
 		if (!bb) return false;
+		for (const w of bb.estimated || []) why.add(w);
 		extra += c * bb.konst;
 		for (const t of bb.terms) if (!resolveTerm(t.sizeOf, c * t.coef, depth + 1)) return false;
 		return true;
 	};
 	for (const [nm, c] of terms) if (!resolveTerm(nm, c, 0)) return null;
-	return { konst: konst + extra, terms: [...resolved].map(([sizeOf, coef]) => ({ sizeOf, coef })), eats: [...ownEats] };
+	return { konst: konst + extra, terms: [...resolved].map(([sizeOf, coef]) => ({ sizeOf, coef })), eats: [...ownEats], estimated: [...why] };
 }
 
 // **覗き穴の家族が共有する読み方。** 行から命令だけを取り出す（行末の注記を落とす）、
@@ -10129,7 +10153,7 @@ function collectSretPlan(nodes, em, stats = null) {
 	// と言うことになり、名指しで断られる。伸びている途中の値を使うことはもう無い。
 	const sig = (v) => JSON.stringify([v.konst, v.width, v.builds, v.needsSlot,
 		v.terms.map((t) => [t.coef, t.sizeOf, t.sizeOfIndex, t.measure]),
-		(v.content || []).map((t) => [t.coef, t.sizeOf, t.sizeOfIndex, t.measure]), v.eats || []]);
+		(v.content || []).map((t) => [t.coef, t.sizeOf, t.sizeOfIndex, t.measure]), v.eats || [], v.estimated || []]);
 	const banned = new Set();
 	const LIMIT = 64;
 	for (let round = 1; ; round++) {
@@ -10324,7 +10348,7 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 		const content = m && m.size === 16 && b.konst === 0 && terms.length > 0
 			? terms.map((x) => ({ coef: x.coef, sizeOf: x.sizeOf, sizeOfIndex: x.sizeOfIndex, measure: "content" }))
 			: null;
-		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot, content, eats: b.eats || [] });
+		plan.set(name, { konst: b.konst, terms, width: m && m.size ? m.size : null, builds, needsSlot, content, eats: b.eats || [], estimated: b.estimated || [] });
 	}
 	return plan;
 }
@@ -10964,6 +10988,30 @@ function generateAsm(nodes, env, options = {}) {
 	// 返す器の置き場所（sret）。呼ぶ側と呼ばれる側の両方が同じ表を引く必要がある
 	// ——2箇所で別々に大きさを数えると、片方だけが正しい命令列を出す。
 	em.sretPlan = collectSretPlan(nodes, em, options.sretPlanStats);
+
+	// **上界が見積もりなら、黙って通さずに名指しする**（利用者の裁定 2026-09-23）。
+	//
+	// 上界は証明ではなく見積もりで通している（stack_abi.md §4.7「外れたときに何が起きるか」）。
+	// 外れても踏み抜かない——書く直前に x15 と比べて `__` を返す——が、その `__` は呼ぶ側の
+	// 連結で吸われる（`x , __ = x` は余積の法である）ので、**外側には短い器が黙って返る**。
+	// 踏み抜かないことと黙らないことは別なので、見積もりで通した関数をここで1件ずつ挙げる。
+	//
+	// **断りではなく information である。** 実際に外れたかどうかは実行時にしか分からないし、
+	// 見積もりを断ると添字で回る再帰が丸ごと出せなくなる（それがこの見積もりの理由である）。
+	// 危険は書けるが気付ける、という側に置く。
+	for (const [name, v] of em.sretPlan || []) {
+		if (!(v.estimated || []).length || !v.needsSlot) continue;
+		em.diagnostics.push({
+			severity: "information",
+			reason: "sret-bound-is-an-estimate",
+			spec: "stack_abi.md §4.7",
+			message:
+				`${name}: 返す器の上界は見積もりです（${v.estimated.join("・")}）——外れると書く直前の` +
+				"照合で `__` を返し、その `__` は呼ぶ側の連結に吸われるので、踏み抜かない代わりに" +
+				"**短い器が黙って返り**ます（stack_abi.md §4.7）",
+			node: null,
+		});
+	}
 
 	em.lines.push("// Sign — AArch64 (AAPCS64)");
 	if (options.source) em.lines.push(`// source: ${options.source}`);

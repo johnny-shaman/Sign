@@ -50,6 +50,22 @@ function bound(src) {
 	const parts = b.terms.map((t) => `${t.coef === 1 ? "" : `${t.coef} × `}||${String(t.sizeOf).replace(/[<>]/g, "")}||`);
 	return `${b.konst} + ${parts.join(" + ")}`;
 }
+// **その関数の上界が見積もりで通った道**（`returnSizeBound` の `estimated`）。証明で通れば空である。
+function estimated(src) {
+	const { nodes } = compile(src, { charset: "ascii" });
+	const nm = (n) => String(n.left.value).replace(/[<>]/g, "");
+	const d = nodes.find((n) => n.name === "define" && /^f($|$)/.test(nm(n)));
+	const known = new Map();
+	// 呼び先の上界を先に入れておく（合成の道を見るため）。`known` は名前 → 上界である。
+	for (const n of nodes) {
+		if (n.name !== "define" || !n.right || n.right.name !== "lambda") continue;
+		const b0 = returnSizeBound(n.right, nm(n));
+		if (b0) known.set(nm(n), b0);
+	}
+	const b = returnSizeBound(d.right, nm(d), known);
+	return b ? b.estimated || [] : [];
+}
+
 function value(src) {
 	const { nodes } = compile(src, { parse: parser.parse });
 	const env = newRuntimeEnv(null);
@@ -221,6 +237,35 @@ check("呼び出しを含む形は求めない", bound("g : x ? x\nf : a b ? a (
 	// 混ぜていた版は 5 を返した（正しくは 6）。
 	check("数と綴りを混ぜたら求めない", boundE("a : 51\nb : `add`\nf : n ? `\t` b a\nf 1"), null);
 }
+
+
+// ---- 見積もりで通した上界は、黙らずに名指しする（利用者の裁定 2026-09-23） ----
+//
+// 上界は**証明ではなく見積もり**で通す道が3つある（stack_abi.md §4.7「外れたときに
+// 何が起きるか」）。外れても踏み抜かない——書く直前に x15 と比べて `__` を返す——が、
+// **その `__` は呼ぶ側の連結に吸われる**（`x , __ = x` は余積の法である）ので、外側には
+// 短い器が黙って返る。踏み抜かないことと黙らないことは別なので、見積もりで通した関数を
+// 後段が information で1件ずつ挙げる。
+//
+// ここで見るのは「印が付くか」である。診断そのものは `asm_gate.test.js` がコーパスの
+// 9件を言い分ごと golden に持っている（`corpus.js` の `asm`）。
+{
+	// 撒きながら食う枝。`s~` を撒きつつ `s ' 1~` で食うので、線形の漸化式にならない
+	// ——段ごとに消えたぶんを超えないと**見積もる**。
+	const spreadAndEat = "f : s ?\n\t!s : ``\n\ts~ (f (s ' 1~))~\nf `abc`";
+	checkTrue("撒きながら食う枝は見積もりの印が付く", estimated(spreadAndEat).length > 0, JSON.stringify(estimated(spreadAndEat)));
+	check("印はその道の名前を持つ", estimated(spreadAndEat).some((w) => /撒きながら食う/.test(w)), true);
+	// 素直に食うだけの再帰は証明で通る（印は付かない）。
+	check("食うだけの再帰に印は付かない", estimated("f : s ?\n\t!s : ``\n\t(s ' 0) (f (s ' 1~))\nf `abc`"), []);
+	// 器を組まない関数にも付かない。
+	check("器を返さない関数に印は付かない", estimated("f : n ? n + 1\nf 1"), []);
+}
+// **印は呼ぶ側へも伝わる**（見積もりの上界を合成した上界も見積もりである）。合成の道は4つ
+// あり、コーパス9枚で実際に通っている（実測：呼び先の印 43 回・実引数の合成 28 回・枝の中の
+// 呼び出し 15 回・入れ子の合成 4 回）。**ここに単体の証人は置けなかった**——手で書いた小さな形は
+// どれも上界そのものが出ず（`f : s ? g s` は `null`）、合成に入る前に終わってしまう。証人は
+// コーパスの側に在る：`parser.sn` の `out_one` は3つの道の印を持ち（`corpus.js` の `asm`）、
+// `out` / `out_at` / `out_as` / `out_jk` は輪を通って同じ印を受け取っている。
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

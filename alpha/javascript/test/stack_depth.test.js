@@ -26,6 +26,7 @@
  * 実行: node test/stack_depth.test.js（`npm test` からも呼ばれる）
  */
 import fs from "fs";
+import { blockingOf } from "../errors.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
@@ -63,7 +64,9 @@ function check(note, ok, detail) {
 function machine(source, opts = {}) {
 	const { nodes, env } = compile(source, { readImport });
 	const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-	if (r.diagnostics.length) throw new Error("出せない：" + r.diagnostics[0].message);
+	// **止める診断だけを見る。** information（上界が見積もりである、など）は出力が在るので走らせる。
+	const bad = blockingOf(r.diagnostics);
+	if (bad.length) throw new Error("出せない：" + bad[0].message);
 	return asInt(runAsm(r.text, opts)[0]);
 }
 

@@ -15,6 +15,7 @@
  * 実行: node test/qemu.test.js
  */
 import peggy from "peggy";
+import { blockingOf } from "../errors.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -64,7 +65,9 @@ function interp(source, charset = "ascii") {
 function machine(source, charset = "ascii", layer = 1) {
 	const { nodes, env } = compile(source, { charset, readImport });
 	const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset, layer });
-	if (r.diagnostics.length) return "出せない：" + r.diagnostics[0].message;
+	// **止める診断だけを見る。** information（上界が見積もりである、など）は出力が在るので走らせる。
+	const bad = blockingOf(r.diagnostics);
+	if (bad.length) return "出せない：" + bad[0].message;
 	const v = asInt(runAsm(r.text)[0]);
 	return v === null ? "__" : String(v);
 }
@@ -105,11 +108,13 @@ function checkNamed(note, source, charset = "ascii", reason = null, layer = 1) {
 	try {
 		const { nodes, env } = compile(source, { charset, readImport });
 		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset, layer });
-		if (r.diagnostics.length > 0 && reason && !r.diagnostics[0].message.includes(reason)) {
-			msg = "別の理由：" + r.diagnostics[0].message;
-		} else if (r.diagnostics.length > 0) {
+		// 断りの理由を見るので、**止める診断だけ**を読む（information は出力が在る）。
+		const bad = blockingOf(r.diagnostics);
+		if (bad.length > 0 && reason && !bad[0].message.includes(reason)) {
+			msg = "別の理由：" + bad[0].message;
+		} else if (bad.length > 0) {
 			passed++;
-			console.log(`ok   ${note.padEnd(34)} ${r.diagnostics[0].message.replace(/（.*/, "")}`);
+			console.log(`ok   ${note.padEnd(34)} ${bad[0].message.replace(/（.*/, "")}`);
 			return;
 		}
 	} catch (e) {
@@ -232,7 +237,8 @@ function buildsOnce(note, source) {
 	try {
 		const { nodes, env } = compile(source, { charset: "ascii", readImport });
 		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-		got = r.diagnostics.length ? "出せない：" + r.diagnostics[0].message : (r.text.match(/sub\s+sp, sp/g) || []).length;
+		const bad = blockingOf(r.diagnostics);
+		got = bad.length ? "出せない：" + bad[0].message : (r.text.match(/sub\s+sp, sp/g) || []).length;
 	} catch (e) {
 		got = "機械で例外：" + e.message;
 	}
@@ -1719,7 +1725,8 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	const machineDesugared = (source) => {
 		const { nodes, env } = compile(source, { charset: "ascii", desugarStreams: true, readImport });
 		const r = generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1 });
-		if (r.diagnostics.length) return "出せない：" + r.diagnostics[0].message;
+		const bad = blockingOf(r.diagnostics);
+		if (bad.length) return "出せない：" + bad[0].message;
 		const v = asInt(runAsm(r.text)[0]);
 		return v === null ? "__" : String(v);
 	};
