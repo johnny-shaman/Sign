@@ -615,7 +615,7 @@ Signには `if` 文や `loop` 予約語は存在しません。Unit が論理値
 
 * **リストを反転する再帰関数**:
   ```sign
-  reverse : x ~y ? reverse y~, x
+  reverse : x ~y ? (reverse y~)~ x
 
   ` 評価結果: 3, 2, 1
   reverse 1 2 3
@@ -627,7 +627,7 @@ Signには `if` 文や `loop` 予約語は存在しません。Unit が論理値
   	1 + (length (xs ' 1~))
 
   ` 評価結果: 3
-  length [1 , 2 , 3]
+  length 1 2 3
   ```
 
 
@@ -1064,7 +1064,7 @@ f a~
 （例２　残余引数リストの展開）
 ```sign
 a : 1 2 3 4 5
-reverse : x ~y ? reverse y~, x
+reverse : x ~y ? (reverse y~)~ x
 
 reverse a~
 ```
@@ -1122,7 +1122,7 @@ length : [~xs] ?
 	1 + (length (xs ' 1~))
 
 ` 評価結果: 3
-length [1 , 2 , 3]
+length 1 2 3
 ```
 
 ## `!`	（not　前置演算子） []({#　!　（not　前置演算子）})

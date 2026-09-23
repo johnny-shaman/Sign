@@ -313,7 +313,7 @@ ABS -5
 ### 7. Recursion & Short-Circuit Termination
 
 ```sign
-reverse : x ~y ? reverse y~, x
+reverse : x ~y ? (reverse y~)~ x
 ` Result: 3, 2, 1
 reverse 1 2 3
 
@@ -321,7 +321,7 @@ length : [~xs] ?
 	!xs : 0
 	1 + (length (xs ' 1~))
 ` Result: 3
-length [1 , 2 , 3]
+length 1 2 3
 ```
 
 ### 8. Point-Free Style

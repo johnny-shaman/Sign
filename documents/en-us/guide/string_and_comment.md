@@ -67,6 +67,23 @@ string  =     ` [^\n\r`]* `                          ← anywhere but SOL, alway
 x : `Hello`                     ← not at SOL → string literal
 ```
 
+> [!TIP]
+> **Inside a comment, do not close a quote.** Closing buys nothing — a comment already runs to the
+> end of the line — so a closer is a different instruction: it ends a string there. If what follows
+> the closer is a postfix operator or a space, the line is an expression, not a comment.
+>
+> Measured (each written from column 0):
+>
+> | Line | How it reads |
+> |---|---|
+> | `` ` not allowed: (`#`) `` | comment (`#` is not a postfix operator) |
+> | `` ` allowed: (`@`) `` | **expression** — the closer is followed by postfix `@`; it fails with "the string is not closed before the end of the line" |
+> | `` ` spread (`~`) `` / `` ` not (`!`) `` | expressions, for the same reason |
+> | `` ` input is @ here `` | comment (a bare `@` is not after a closer) |
+>
+> So when you name a postfix operator (`@` `~` `!`) in a comment, write it **unquoted**, or leave the
+> quote open. This trap was hit for real (2026-09-23, while cleaning the guides).
+
 ### Why "a postfix operator or a space"
 
 **An expression that starts with a string at column 1 is either an import or a concatenation.**
