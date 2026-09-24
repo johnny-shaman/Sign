@@ -88,7 +88,7 @@ export const CORPUS = [
 	// 自身の枠に在り、返るときに捨てられていた——器へ入るのはその番地なので `len` は正しく、
 	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
 	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる。
-	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [{ severity: "information", includes: "take_word: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "tokens: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 933, plain: 1631 }, digest: { full: "605c5a6293ccc524", plain: "72b517df53975bc3" } },
+	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [{ severity: "information", includes: "take_word: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "tokens: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 949, plain: 1669 }, digest: { full: "8a6fb1b080afe0fd", plain: "4e960f7519256fde" } },
 	{ rel: "alpha/sign/parser.sn", front: 0, asm: [{ severity: "information", includes: "out: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_as: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_one: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした・添字で回る再帰の段数を、その添字が走る器で抑えた・撒きながら食う枝を、段ごとに消えたぶんで見積もった）" }, { severity: "information", includes: "out_jk: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }], insn: { full: 1931, plain: 2792 }, digest: { full: "01c443127f5c7ff0", plain: "0a6975d90cd5e9bf" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は

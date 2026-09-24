@@ -286,7 +286,21 @@ function parseMs(text) {
 	};
 	return block(true);
 }
+/**
+ * **葉を木へ均す。ただし括りの葉は `parser.sn` の仕事ではない。**
+ *
+ * `parser.sn` は括り（`[ … ]` `( … )`）を**1語のまま**返す——中へ降りる再帰がまだ書かれて
+ * いない。ここはその葉の字面を **pass2 に食わせて**木にしているので、中身がどうであれ必ず
+ * 一致する。**測る道具が、測られる側の仕事を肩代わりしている**（「寄生したオラクル」と同じ形）。
+ *
+ * 肩代わりそのものはすぐには外せない——外すと行の比較が丸ごと赤くなって、**今できている
+ * 段の組み立ても見えなくなる**。代わりに**何回肩代わりしたかを数えて名指しする**。
+ * `parser.sn` が括りの中へ降りられるようになれば数が減り、門が「減った」と言う。
+ */
+let outsourcedLeaves = 0;
+const GROUPED = /^[[(]/;
 function leafCanon(text, paramSide) {
+	if (GROUPED.test(String(text).trim())) outsourcedLeaves++;
 	const n = compile(text, { parse: parser.parse }).nodes[0];
 	if (paramSide && n && n.type === "block") {
 		const ln = n.lines && n.lines[0];
@@ -384,6 +398,17 @@ function fromMs(v, paramSide) {
 		}
 	}
 	check("parser.sn = pass2: 自分のソースの行を全部（食い違い 0）", bad, 0);
+	// **緑が何を言っていないかを名指しする。** 括りの葉は pass2 が木にしている——
+	// `parser.sn` の仕事ではない。降りられるようになったら、この数は減る。
+	//
+	// 降りる版は書いて実測まで済んでいる（解釈器では pass2 の木と一致し、肩代わりは 87→3）。
+	// 実機で踏み抜いたので入れていない——`tokens` が返す `List(String)` を String を返す関数の
+	// 中で受ける形、つまり**置き場の中にさらに置き場が要る**形で、pass4 が「断る」と書きながら
+	// 断っていない所である（データを番地として読む：FAR が `1+2+3+4` の文字並びだった）。
+	check("そのうち括りの葉は pass2 が木にした（parser.sn はまだ降りない）", outsourcedLeaves, 87);
+	// 1語だけの列は `[x] ≅ x` で String に潰れるので、2語以上で訊く。
+	check("括りは1語のまま返る（器）", astText("expr [`[1 2 3]` , `+` , `1`]"), "ast : [\nop : `+`\nl : [1 2 3]\nr : 1\n]");
+	check("括りは1語のまま返る（丸括弧）", astText("expr [`(1 + 2)` , `*` , `3`]"), "ast : [\nop : `*`\nl : (1 + 2)\nr : 3\n]");
 	// **前提も見る。** 比べた行が少なければ、緑は何も言っていない。
 	check("parser.sn = pass2: 比べた行数（前提）", compared >= 70, true);
 
