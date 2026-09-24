@@ -11198,4 +11198,8 @@ function generateAsm(nodes, env, options = {}) {
 
 // `RESERVED_*` を出すのは門のためである——同じ事実が `qemu/link.ld` と `qemu/start.s` にも
 // 在るので、`test/export_symbol.test.js` が両方を読んでここが覆えているかを見る。
+// **命令の綴り手は門のために出す。** `alpha/sign/emit.sn` が同じ綴りを書けるかを見る門
+// （`test/emit_sn.test.js`）が、答えを書き写さずにその場で呼ぶためである——答えを門に
+// 書くと、綴りの事実が2箇所で決まる（`layout.js` の `slotCellSize` を出したのと同じ理由）。
+export { memMnemonic, storeElem, loadElem, loadAt, storeAt, slotLoadInsn, slotStoreInsn };
 export { returnSizeBound, generateAsm, ARG_REGS, SCRATCH, MAX_SLOTS, RESERVED_SYMBOLS, RESERVED_ORIGIN };

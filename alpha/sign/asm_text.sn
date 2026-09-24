@@ -1,0 +1,163 @@
+`asm_text.sn — 命令を綴りとして書く。emit.sn（UART へ1文字ずつ流す道）の一段上
+
+`後段を Sign で書く計画は「表が命令の綴りを持ち、生成は文字列連結、アセンブラには頼る」
+`である。emit.sn は書き出し先（out # c）を持つが、書くものを組み立てる所はまだ字面で
+`埋めてあった——put_alu が alu の1形だけを知っていて、他の16の形は誰も書いていない。
+
+`この枚は pass4.js の綴り手（memMnemonic / storeElem / loadElem / loadAt / storeAt /
+`slotLoadInsn / slotStoreInsn）と1対1で対応する。門（test/emit_sn.test.js）は答えを
+`書かず、JS の綴り手をその場で呼んで突き合わせる。
+
+`emit.sn と分けてあるのは、こちらが String を返す関数の塊だからである。器を返す関数を
+`重ねる道は機械がまだ出せない（上界と枝の幅）ので、emit.sn の命令数の門を巻き込まない
+`ようにここへ置く。解釈器では全部通る
+
+`operator_table.sn`@~
+
+`target_info.sn`@~
+
+`--- 10進の綴り。桁数で場合分けして非再帰で書く ---`
+`再帰で書くと「返す器の上界が出せなかったので計画に載っていない」で機械が断る。段数が`
+`n / 10 で決まる形は上界の不動点に載らない。桁で割れば器は毎回1〜5文字である`
+dg : `0123456789`
+dgt : n ? dg ' (n - ((n / 10) * 10))
+dec : n ?
+	n < 10 : dgt n
+	n < 100 : (dgt (n / 10)) (dgt n)
+	n < 1000 : (dgt (n / 100)) (dgt (n / 10)) (dgt n)
+	n < 10000 : (dgt (n / 1000)) (dgt (n / 100)) (dgt (n / 10)) (dgt n)
+	(dgt (n / 10000)) (dgt (n / 1000)) (dgt (n / 100)) (dgt (n / 10)) (dgt n)
+
+`--- 綴り手。レジスタ・即値・場所 ---`
+`幅で名前が変わるのはレジスタだけで、場所の綴りは幅に依らない`
+rg : n ? `x` (dec n)
+rw : n ? `w` (dec n)
+imm : n ? `#` (dec n)
+at : b ? `[` b `]`
+at_off : b o ? `[` b `, #` (dec o) `]`
+at_reg : b i ? `[` b `, ` i `]`
+at_idx : b i s ? `[` b `, ` i `, lsl #` (dec s) `]`
+
+`--- 幅から命令の綴りを引く。表は operator_table.sn が持っている ---`
+`鍵を綴りで組んで引く道（' (`gpr_w` (dec w))~）は取らない——幅は4通りしかなく、`
+`場合分けの方が表の欄の名前をそのまま書けるので、表が変わったとき門が名指しで落ちる`
+st_row : asm_infix_width ' `#`~
+ld_row : asm_prefix_width ' `@`~
+st_mn : w ?
+	w = 1 : st_row ' gpr_w1
+	w = 2 : st_row ' gpr_w2
+	w = 4 : st_row ' gpr_w4
+	st_row ' gpr_w8
+ld_mn : w ?
+	w = 1 : ld_row ' gpr_w1
+	w = 2 : ld_row ' gpr_w2
+	w = 4 : ld_row ' gpr_w4
+	ld_row ' gpr_w8
+
+`--- 狭い幅は w レジスタで運ぶ（8 byte だけ x のまま） ---`
+narrow : w ? w < 8
+reg_w : n w ?
+	narrow w : rw n
+	rg n
+
+`--- 行を組む。オペランドの形ごとに1つ ---`
+ln1 : op a ? op ` ` a
+ln2 : op a b ? op ` ` a `, ` b
+ln3 : op a b c ? op ` ` a `, ` b `, ` c
+ln4 : op a b c d ? op ` ` a `, ` b `, ` c `, ` d
+
+`--- 命令。pass4.js の綴り手と1対1に対応する ---`
+`storeElem（器の k 番目へ書く）`
+store_elem : s b o w ? ln2 (st_mn w) (reg_w s w) (at_off b o)
+`storeElem のバイト位置をレジスタで指す形`
+store_elem_at : s b i w ? ln2 (st_mn w) (reg_w s w) (at_reg b i)
+`loadElem（器の k 番目を読む。刻みは幅の対数、1 byte なら lsl が出ない）`
+shift_of : w ?
+	w = 1 : 0
+	w = 2 : 1
+	w = 4 : 2
+	3
+load_elem : d b i w ?
+	w = 1 : ln2 (ld_mn w) (rg d) (at_reg b i)
+	ln2 (ld_mn w) (rg d) (at_idx b i (shift_of w))
+`loadAt / storeAt（幅ぶんを番地そのものから）`
+load_at : d b w ? ln2 (ld_mn w) (reg_w d w) (at b)
+store_at : s b w ? ln2 (st_mn w) (reg_w s w) (at b)
+`slotLoadInsn（スロット1つを読む。符号ありなら符号拡張する綴りへ変わる）`
+`真偽は仮引数で渡さない。否定の印は値ではなく射なので、実引数の位置に置くと合成になる
+`（実測：slot_load へ否定の印を渡したら閉包が返った）。型の名前を渡して表を引けば、
+`真偽はその場で signed か Unit になる——target_info.sn の is_signed がその形である
+sg_of : ty ? is_signed ' (signedness ' ty~)~
+sl_ld_mn : w ty ?
+	w = 1 : (sg_of ty) & `ldrsb` | `ldrb`
+	w = 2 : (sg_of ty) & `ldrsh` | `ldrh`
+	w = 4 : (sg_of ty) & `ldrsw` | `ldr`
+	`ldr`
+sl_ld_reg : n w ty ?
+	w >= 8 : rg n
+	(sg_of ty) & (rg n) | (rw n)
+slot_load : d b o w ty ? ln2 (sl_ld_mn w ty) (sl_ld_reg d w ty) (at_off b o)
+`slotStoreInsn（読む側の対。8 byte を超える幅は 8 で書く）`
+slot_store : s b o w ?
+	w >= 8 : store_elem s b o 8
+	store_elem s b o w
+
+`--- R,R と R,I（いちばん多い2つの形） ---`
+mov_rr : d n ? ln2 `mov` (rg d) (rg n)
+mov_ri : d n ? ln2 `mov` (rg d) (imm n)
+cmp_rr : d n ? ln2 `cmp` (rg d) (rg n)
+cmp_ri : d n ? ln2 `cmp` (rg d) (imm n)
+`R,I,S（movz は 830 本すべてがこの形で、シフト無しは 1 本も出ていない）`
+movz_ris : d n s ? ln3 `movz` (rg d) (imm n) (`lsl #` (dec s))
+`R,R,R と R,R,I`
+alu_rrr : op d n m ? ln3 op (rg d) (rg n) (rg m)
+alu_rri : op d n m ? ln3 op (rg d) (rg n) (imm m)
+`R,R,M（ldp / stp）`
+pair : op a b base o ? ln3 op (rg a) (rg b) (at_off base o)
+`R,R,R,C（csel）`
+csel_c : d n m c ? ln4 `csel` (rg d) (rg n) (rg m) c
+`L と R,L`
+br : op l ? ln1 op l
+adrp_l : d l ? ln2 `adrp` (rg d) l
+
+`--- 駆動 ---
+
+`呼ばれない関数は出せない（仮引数 X の渡し方が決まりません）ので、この枚は自分を使い切る。
+`取り込んだ枚の駆動も呼ぶ——取り込みは名前を持ってくるだけで、呼び出しは持ってこない
+`（layout.sn の drive_layout が drive 0 を先頭で呼んでいるのと同じ理由である）。
+`枝は最初の非 Unit で返るが、出す／出さないは静的に決まるので、並べれば全部が届く
+
+drive_asm : x ?
+	drive 0 : 1
+	||dec 65535|| : 1
+	||rg 29|| : 1
+	||rw 9|| : 1
+	||imm 42|| : 1
+	||at `x10`|| : 1
+	||at_off `x29` 176|| : 1
+	||at_reg `x10` `x13`|| : 1
+	||at_idx `x10` `x11` 3|| : 1
+	||st_mn 4|| : 1
+	||ld_mn 1|| : 1
+	||reg_w 9 4|| : 1
+	||store_elem 9 `x10` 8 4|| : 1
+	||store_elem_at 9 `x10` `x13` 8|| : 1
+	||load_elem 9 `x10` `x11` 8|| : 1
+	||load_at 9 `x10` 2|| : 1
+	||store_at 9 `x10` 1|| : 1
+	||slot_load 9 `x29` 16 4 `Int`|| : 1
+	||slot_store 9 `x29` 16 2|| : 1
+	||mov_rr 0 1|| : 1
+	||mov_ri 0 42|| : 1
+	||cmp_rr 0 1|| : 1
+	||cmp_ri 0 42|| : 1
+	||movz_ris 9 4660 16|| : 1
+	||alu_rrr `add` 0 1 2|| : 1
+	||alu_rri `sub` 0 1 8|| : 1
+	||pair `stp` 19 20 `x29` 16|| : 1
+	||csel_c 0 1 2 `eq`|| : 1
+	||br `b.eq` `.L3`|| : 1
+	||adrp_l 9 `x0`|| : 1
+	0
+
+drive_asm 0

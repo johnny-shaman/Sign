@@ -307,6 +307,7 @@ const asmOfFile = (name) => {
 		"emit.sn": { own: [], globals: [] },
 		"target_info.sn": { own: [], globals: [] },
 		"layout.sn": { own: [], globals: [] },
+		"asm_text.sn": { own: [], globals: [] },
 	};
 	// 表が `alpha/sign` の全部を覆っていること（増えた日に忘れない）。
 	check("表はコーパスの `alpha/sign` を全部覆っている", fs.readdirSync(SIGN_DIR).filter((f) => f.endsWith(".sn")).sort(), Object.keys(SHAPE).sort());
