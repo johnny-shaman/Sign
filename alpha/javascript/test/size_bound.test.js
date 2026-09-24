@@ -16,7 +16,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
-import { returnSizeBound } from "../pass4.js";
+import { returnSizeBound, generateAsm } from "../pass4.js";
 import { evaluate, newRuntimeEnv, UNIT, observe, isUnit } from "../interpreter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +35,24 @@ function checkTrue(note, cond, extra) {
 	check(note, !!cond, true);
 	if (!cond && extra) console.log(`     ${extra}`);
 }
+// **上界の見た目は1か所で決める。** 項は `len`（要素の個数）と `chars`（μ＝要素の長さの
+// 総和）の2通りで測られるのに、ここは長らく名前しか出していなかった——**道具が μ を
+// 見られないので、μ が黙って消えても検査は同じ字面を出す**。μ は `μ||x||` と書き分ける。
+// 印は計画へ入る直前に `measure` の欄になるので、`returnSizeBound` から直に来た項では
+// 名前の頭に付いたままである（どちらの姿でも読む）。
+function showBound(b) {
+	if (!b) return null;
+	// **上界は器ごとの項の和である**（`konst + Σ coef_i × ||器_i||`）。1項なら今まで通りの
+	// 見た目になる——`walk` のように2つの器を同時に食う形が書けるようになっただけである。
+	if (!b.terms || b.terms.length === 0) return String(b.konst);
+	const parts = b.terms.map((t) => {
+		const nm = String(t.sizeOf).replace(/[<>]/g, "");
+		const mu = t.measure === "chars" || nm.startsWith("μ:");
+		const box = mu ? `μ||${nm.replace(/^μ:/, "")}||` : `||${nm}||`;
+		return `${t.coef === 1 ? "" : `${t.coef} × `}${box}`;
+	});
+	return `${b.konst} + ${parts.join(" + ")}`;
+}
 // `f` の返値の上界を `k` か `k + ||p||` の形で返す。
 function bound(src) {
 	const { nodes } = compile(src, { charset: "ascii" });
@@ -42,14 +60,26 @@ function bound(src) {
 	// （compile.js の specializeRefCalls）。測るのはその実体である。
 	const nm = (n) => String(n.left.value).replace(/[<>]/g, "");
 	const d = nodes.find((n) => n.name === "define" && /^f(\$|$)/.test(nm(n)));
-	const b = returnSizeBound(d.right, nm(d));
-	if (!b) return null;
-	// **上界は器ごとの項の和である**（`konst + Σ coef_i × ||器_i||`）。1項なら今まで通りの
-	// 見た目になる——`walk` のように2つの器を同時に食う形が書けるようになっただけである。
-	if (!b.terms || b.terms.length === 0) return String(b.konst);
-	const parts = b.terms.map((t) => `${t.coef === 1 ? "" : `${t.coef} × `}||${String(t.sizeOf).replace(/[<>]/g, "")}||`);
-	return `${b.konst} + ${parts.join(" + ")}`;
+	return showBound(returnSizeBound(d.right, nm(d)));
 }
+// **輪を渡ったあとの上界は、計画の段でしか見えない。** `returnSizeBound` を単体で呼ぶと
+// 項の `sizeOfIndex`（呼ぶ側から見た引数の位置）がまだ埋まっていないので、呼び先の上界を
+// こちらの仮引数へ言い換える道が閉じたままになる——それを知らずに測ると「輪を渡ると上界が
+// 丸ごと消える」と読めてしまう。**道具の作り物と本物の穴は違う**（実際そう読み違えた）。
+// ここは `collectSretPlan` の不動点を通した姿を見る。
+function planBound(src, who) {
+	const { nodes, env } = compile(src, { charset: "ascii" });
+	const stats = [];
+	generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 1, sretPlanStats: stats });
+	const st = stats[0];
+	if (!st || !st.plan.has(who)) return null;
+	return showBound(st.plan.get(who));
+}
+// 輪の証人の骨。`f` は添字で回りながら、尽きたら葉を返す——`parser.sn` の `out` と同じ形で、
+// 葉の枝だけを差し替えて「直に置く」と「輪の相手を1つ挟む」を比べる。
+const RING = (leaf) => `f : [~ts] i ?\n\ti > 9 : ${leaf}\n\t\`ab\` (f ts (i + 1))`;
+const RING_G = "\ng : w ? `xy` w";
+const RING_CALL = "\nf [`xy` , `zw`] 0";
 // **その関数の上界が見積もりで通った道**（`returnSizeBound` の `estimated`）。証明で通れば空である。
 function estimated(src) {
 	const { nodes } = compile(src, { charset: "ascii" });
@@ -95,6 +125,44 @@ check("器の後ろにスカラー", bound("f : d st ? st~ d\nf 1 `abc`"), "1 + 
 check("器が2つなら和で書く", bound("f : a b ? a~ b~\nf `ab` `cd`"), "0 + ||a|| + ||b||");
 // 呼び出しを含む形も、まだ扱わない（再帰の深さが要る）。
 check("呼び出しを含む形は求めない", bound("g : x ? x\nf : a b ? a (g b)\nf 1 `ab`"), null);
+
+// ---- 測り方は輪を渡らなければならない ----
+//
+// **`||ts||` と μ||ts|| は別の量である。** 前者は語の個数、後者は全語の文字数の和で、
+// `List(String)` の要素を1つ置くのに要るのは後者——「どの要素も μ||ts|| を超えない」とは
+// 言えるが、`||ts||`（語の個数）とは何の関係も無い。同じことを `lenDominatingParam` の
+// 頭が既に書いている：「**同じ形でも測り方が違えば別の話**である」。
+//
+// ところが**輪の相手を1つ挟むと、その μ が落ちていた**。`selfConsumes` が `ts ' i` を
+// 「`ts` を食った」と読んで枝の寄与を丸ごと 0 にするためで、落ちても踏み抜かず、書く直前の
+// 照合で `__` になって呼ぶ側の連結に吸われる——つまり**短い器が黙って返る**。`parser.sn` を
+// 括りの中へ降ろすと `out` の葉の枝が `ts ' i` から `leaf_of (ts ' i)` に変わり、それだけで
+// 木の後半が空になっていた（解釈 75 文字／機械 29 文字、診断は information だけ）。
+//
+// **道具が見られなければ門にならない。** 上の `bound` は長らく測り方を出さず `||ts||` と
+// しか書かなかったので、μ が消えても字面は同じだった。`showBound` が μ を書き分けるように
+// したのが先で、この3本はその上に載っている。
+{
+	check("直に置く要素は μ で測る", planBound(RING("ts ' i") + RING_CALL, "f"), "0 + μ||ts|| + 2 × ||ts||");
+	check("輪の相手を1つ挟んでも μ は落ちない", planBound(RING("g (ts ' i)") + RING_G + RING_CALL, "f"), "2 + μ||ts|| + 2 × ||ts||");
+	// 前提も見る。挟む相手そのものは今まで通り `len` で測る（要素を取り出していない）。
+	check("挟んだ相手は len のまま", planBound(RING("g (ts ' i)") + RING_G + RING_CALL, "g"), "2 + ||w||");
+	// **この3本が言っていないこと。** 変異を6本当てたところ、赤くなったのは3本だけだった：
+	//   ・μ への言い換えを外す ……………… 赤（この3本）
+	//   ・μ の印を付けずに足す …………… 赤（`len` に化ける）
+	//   ・切片まで「食っていない」にする … 赤（切片の道が壊れる）
+	// 残る3本のうち2本は**本当に効いているのに、ここでは赤くならない**：
+	//   ・`selfConsumes` の「要素の取り出しは食っていない」門を外す
+	//   ・μ の係数を 1 に固定する（`t.coef` を捨てる）
+	// どちらも**輪が本当に閉じていないと現れない**——上の `g` は `f` へ戻らないので
+	// `mutualGroups` が輪と認めず、`selfConsumes` がそもそも当たらない。閉じた輪を合成で
+	// 書こうとすると上界が収束せず（`[w]` を組む形になる）、証人にならなかった。
+	// 実物では両方とも効く：`parser.sn` を括りの中へ降ろすと、門を外せば μ が丸ごと消え、
+	// 係数を 1 にすれば `6 + μ||ts||` になって深い入れ子で足りなくなる。
+	// **その2本の証人は降りる版が入るまで無い。** 入れたらここへ戻ること。
+	// 等価だった1本：`isBoxType(base.atomType)` を見ない——`' ` の底が器でない形が
+	// 資料に無いので同じ結果になる。門の言い分（要素の取り出し）を保つために残す。
+}
 
 // ---- まだ sret には使えない ----
 //

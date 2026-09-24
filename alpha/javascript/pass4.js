@@ -7937,6 +7937,26 @@ function selfConsumes(part, name, params, restNames, group, defaults = null, ind
 			const u = unwrap(arg);
 			if (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name)) continue;
 		}
+		// **要素の取り出しは「食う」ではない。** `ts ' i` は器を短くして渡していない——
+		// 取り出しているのは**要素1つ**であり、その大きさを抑えるのは `||ts||`（語の個数）
+		// ではなく μ||ts||（全語の文字数の和）である。同じことを `lenDominatingParam` の
+		// 頭が既に書いている：「同じ形でも測り方が違えば別の話」。
+		//
+		// ここを「食っている」と読むと、その枝の寄与が**まるごと 0 になる**——輪の相手へ
+		// 渡す形（`leaf_of (ts ' i)`）で μ の項が黙って消えていた。落ちても踏み抜かず、
+		// 書く直前の照合で `__` になって呼ぶ側の連結に吸われるので、**短い器が黙って返る**。
+		// `parser.sn` を括りの中へ降ろすと木の後半が空になっていたのがこれである。
+		//
+		// 切片（`ts ' 1~`）はそのままでよい——あちらは器を短くして渡している。
+		{
+			const u = unwrap(arg);
+			if (u && u.type === "operation" && u.name === "get_prop") {
+				const base = unwrap(u.left);
+				const idx = unwrap(u.right);
+				const slice = idx && idx.atomType === "Iterator";
+				if (!slice && isIdentifierNode(base) && params.includes(base.value) && isBoxType(base.atomType)) continue;
+			}
+		}
 		let found = null;
 		const walk = (x) => {
 			if (!x || typeof x !== "object" || found) return;
@@ -8287,6 +8307,19 @@ function boundedCallOf(part, known, params) {
 		const lb = lenDominatingParam(a, params);
 		if (lb) {
 			addMerged(lb, t.coef);
+			continue;
+		}
+		// **言えないのは `len` の言葉でだけである。** すぐ上の `lenDominatingParam` の頭が
+		// 「要素の取り出しは入れてはならない……μ の側なら『どの要素も μ||p|| を超えない』と
+		// **言える**が、`len` では言えない」と書いている。言えると書いてあるのに、**言う道が
+		// 無かった**——器の要素を呼び先へ渡す形はここで諦めて、上界そのものが出なかった。
+		//
+		// 呼び先が `len` で測る項でも、渡している実引数が**器の要素**なら、その `len` を
+		// 抑えるのは μ||p|| である。測り方を跨ぐのはここ1か所で、跨いだことは印に残す。
+		const mb = muDominatingParam(a, params);
+		if (mb) {
+			why.add("要素の大きさを、それを含む器の μ で言い換えた");
+			addMerged(muKey(mb), t.coef);
 			continue;
 		}
 		const inner = boundedCallOf(a, known, params);
