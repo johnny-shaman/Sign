@@ -2295,9 +2295,8 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 位置が決まらない——`walk s bottom 0 0` は9個の仮引数のうち4個しか渡さないが、
 		// 残り5個も引数域の場所を占める。
 		const sigAll = em.signatures ? em.signatures.get(baseName) : null;
-		const sigW = sigAll
-			? sigAll.filter((_, i) => !drop.includes(i)).map((x) => (x.error || !x.regs ? null : x.regs))
-			: null;
+		const sigKept = sigAll ? sigAll.filter((_, i) => !drop.includes(i)) : null;
+		const sigW = sigKept ? sigKept.map((x) => (x.error || !x.regs ? null : x.regs)) : null;
 		// **同型は型では無償、表現では有償**（0_design_principles.md 原理8）。
 		//
 		// `[7]` は型の上では `7` であり（`[x] ≅ x`）、`unwrap` はそれを畳んでレジスタ1本の
@@ -2342,6 +2341,41 @@ function genExpr(node, env, em, scope, tail = false) {
 			if (bad >= 0) {
 				em.pop(total);
 				return em.fail(n, `${callee} の第${bad + 1}引数の幅が合いません（渡す側 ${parts[bad].w} 本／受ける側 ${sigW[bad]} 本）`);
+			}
+		}
+		// **本数が合っていても、要素の幅が違えば読み方が違う。**
+		//
+		// `{ptr, len}` の2本まで揃っていても、並べた要素が 1 byte で、受ける側が「要素は
+		// `{ptr, len}`（16 byte）」だと思っていれば、呼び先は**文字を番地として読む**。
+		// 型の上では `String ≅ List(Char)` で同じものだが、**同型は型では無償、表現では
+		// 有償**である（原理8）——幅を揃える持ち上げは器そのものを作り直す操作で、置き場所が
+		// 要るのでここではまだ出せない。
+		//
+		// 黙って出すと踏み抜く。`parser.sn` を括りの中へ降ろすと `out` の仮引数が `tokens` の
+		// `List(String)` と合流して 16 byte になり、`_.main` が 3 byte で並べた3文字の並びを
+		// そのまま渡していた——FAR に `1+2+3+4` の文字並びが出る（データを番地として読んだ）。
+		// **診断はゼロだった。**
+		if (sigKept) {
+			const cellOfArg = (a) => {
+				const et = a ? elementTypeOfNode(a, env) : null;
+				const c = et ? elementCellSize(et, em.conf) : null;
+				return c && c.size ? { et, size: c.size } : null;
+			};
+			const cellBad = parts.findIndex((p, i) => {
+				const e = sigKept[i];
+				if (!e || e.error || p.w !== 2 || !e.cell) return false;
+				const c = cellOfArg(passed[i] ? unwrap(passed[i]) : null);
+				return !!(c && c.size !== e.cell);
+			});
+			if (cellBad >= 0) {
+				const c = cellOfArg(unwrap(passed[cellBad]));
+				em.pop(total);
+				return em.fail(
+					n,
+					callee + " の第" + (cellBad + 1) + "引数の要素の幅が合いません（渡す側の要素 " + c.et + " は " + c.size +
+						" byte、受ける側は " + sigKept[cellBad].cell + " byte。同型でも表現は同じではありません" +
+						"——要素の幅を揃える持ち上げはまだ出せません）"
+				);
 			}
 		}
 		const widths =
@@ -9964,6 +9998,16 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 		const b = lambdaNode.scope ? envLookup(lambdaNode.scope, raw) : null;
 		return b ? b.atomType : null;
 	};
+	// **要素をどの幅で並べるかも署名である。** 本数（1本か2本か）が合っていても、要素の
+	// 幅が違えば呼び先は違う読み方をする——1 byte の並び（`String`）を「要素は
+	// `{ptr, len}`」だと思っている仮引数へ渡せば、呼び先は**文字を番地として読む**。
+	// 呼ぶ側に確かめさせるため、ここで測って持たせる。
+	const cellOf = (raw, t, el) => {
+		const b = raw && lambdaNode.scope ? envLookup(lambdaNode.scope, raw) : null;
+		const et = el || (b && b.elementType) || (t === "String" ? "Char" : null);
+		const c = et ? elementCellSize(et, em.conf) : null;
+		return c && c.size ? c.size : null;
+	};
 	return keep.map((idx) => {
 		let sh = allShapes[idx];
 		if (!sh) return { shape: null, error: "裸の仮引数・デフォルト付き・`[h ~t]`・`[~x]` を出せます（裸の rest はまだ）" };
@@ -9981,7 +10025,7 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 				// そのまま渡すと器が1本になってしまう——宣言が「器である」と言っている
 				// 以上、決まらないなら要素の並び（2本）として扱う方が宣言に忠実である。
 				const t = allTypes[idx] ?? typeOf(sh.name);
-				return { shape: sh, regs: t ? slotsOf(t, em.conf) ?? 2 : 2 };
+				return { shape: sh, regs: t ? slotsOf(t, em.conf) ?? 2 : 2, cell: cellOf(sh.name, t) };
 			}
 			// **束縛が実体の種類を知っている場合がある。** 規則を受ける仮引数（`f : c ? c ' 3`
 			// を `f [0 ~+ 1]` と呼ぶ形）は、型が `Iterator` でも運ぶのは `{start, step}` の
@@ -9992,7 +10036,7 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 			if (w === null) return { shape: sh, error: `仮引数 ${bareName(sh.name)} の渡し方が決まりません（直和か族）` };
 			// **規則かどうかは入口の判定を変える。** 尽きているかを `len` で見るか
 			// `start` と `end` の関係で見るかが違う（`emitIsUnit`）。
-			return { shape: sh, regs: w, rule: isRuleNode(view, em.conf, lambdaNode.scope) };
+			return { shape: sh, regs: w, rule: isRuleNode(view, em.conf, lambdaNode.scope), cell: cellOf(sh.name, view.atomType, view.elementType) };
 		}
 		// **構文だけでは読み方が決まらない。** `[bar ~this]` は `[h ~t]`（器の頭と残り）とも
 		// `[名前 ~残り]`（構造体を名前で分ける）とも読める——同じ形である。決めるのは型だと
