@@ -600,6 +600,31 @@ function refuseSpreadGetContainer(name, left, right, env) {
   );
 }
 
+//
+// **適用と積を括らずに混ぜられない。** 空白（余積）には2つの読みがある——器を作る
+// （余積 ⇒ 積への一意な射）と、値を食う（評価射）である。前者は積より内側、後者は積より
+// 外側に居るのが筋だが、表では同じ1段に同居している。だから `f 1, 2, 3` は今
+// `(f 1) , 2 , 3` と読まれ、**書き手が意図した `f (1, 2, 3)` とは別の関数呼び出しになる**
+// ——`f : x ~xs ?` に対しては x に 1 だけが入り、残りは呼び出しの**結果**と積を作る。
+//
+// 読みが2つ立つ所は括りで決めさせる（利用者 2026-09-24「`f 1, 2, 3` は断るべき」）。
+// 実測では、この門を当てても検査は1本も落ちない——`alpha/sign` の実コードは既に
+// `(take_word 0 s) , (tokens …)~` と括って書いてあり、落ちたのは文書のフェンスだけだった。
+// **括って書いてあれば、段を差し替えても読みが変わらない**ので、この門はそのまま
+// 「後で差し替えられる」ことの保証になっている。
+function refuseApplyNextToProduct(name, left, right) {
+  if (name !== "product") return;
+  const bare = (x) => !!(x && x.type === "operation" && APPLY_OR_PARTIAL.has(x.name));
+  const side = bare(left) ? "左" : bare(right) ? "右" : null;
+  if (!side) return;
+  throw new SyntaxError(
+    `適用と積（','）を括らずに同じ行へ混ぜられません（${side}辺が適用です）。空白には` +
+      `「器を作る」と「値を食う」の2つの読みがあり、前者は積より内側・後者は外側に居ます` +
+      `——'f 1, 2, 3' は今 '(f 1) , 2 , 3' と読まれます。どちらに読ませたいかを括りで` +
+      `書いてください（3つ並べて渡すなら 'f 1 2 3'、積を1項として渡すなら 'f (1, 2, 3)'）`
+  );
+}
+
 function mk(name, left, right) {
   return { type: "operation", op: " ", name, position: "infix", left, right };
 }
@@ -998,6 +1023,7 @@ function reduceOnce(items, tier, env, phase) {
         const left = toNode(a, env);
         const right = toNode(items[i + 2], env);
         refuseSpreadGetContainer(entry.name, left, right, env);
+        refuseApplyNextToProduct(entry.name, left, right);
         const node = { type: "operation", op: b, name: entry.name, position: "infix", left, right };
         items.splice(i, 3, node);
         return true;
@@ -1496,6 +1522,7 @@ function foldHeadSections(items, env) {
     // 約束（`[[op] L R]` ≡ `L op R`）が、3項から割れていた。
     const mk = (l, r) => {
       refuseSpreadGetContainer(sec.name, l, r, env);
+      refuseApplyNextToProduct(sec.name, l, r);
       return { type: "operation", op: sec.op, name: sec.name, position: "infix", left: l, right: r };
     };
     const right = (lookup(sec.op, "infix") || {}).assoc === "right";

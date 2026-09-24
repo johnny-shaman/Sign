@@ -1,4 +1,5 @@
 import { literalDigits, literalParts } from "./target_info.js";
+import { OPERATOR_DICT } from "./operator_table.js";
 // ノードの形を見るだけの述語は layout.js が唯一の置き場である（理由はそこの
 // `isDefineNode` のコメント）。ここに写しがあったときは「循環 import 回避のため」と
 // 書いてあったが、循環は無い——layout.js が引くのは葉の2つだけである。
@@ -225,6 +226,15 @@ function evalArgValues(argNode, env) {
     // 1文字は展開しても1つなので特別扱いは要らず（それは `Char` である）、空文字列は
     // 0個になる——`__` を渡したのと同じで、完全性公理がそこで止める。
     if (typeof v === "string") return [...v];
+    // **規則も展開する。** `余積のリスト化 ＝ イテレータの生成` なので（利用者 2026-09-24）、
+    // `1 2 3` と `[1 ~ 3]` は同じ列の2つの綴りである。実測でも ||…||・添字・切り出し・撒き・
+    // 畳み込み・構築・比較・括りの rest まで**18 形のうち 17 形が同じ答え**で、割れていたのは
+    // ここだけだった——`f : x ~xs ?` へ `f [1 ~ 3]~` と撒くと、規則が1つの実引数として渡って
+    // `x` が列ごと飲んでいた（`f 1 2 3` なら `x` は 1）。
+    //
+    // 終端の無い規則は位置引数にできない（個数が無い）。ここは `asList` が空にするので
+    // `__` が渡り、完全性公理がその場で止める。
+    if (isIterator(v)) return asList(v);
     return [v];
   }
   return [evaluate(argNode, env)];
@@ -2126,6 +2136,20 @@ function getPropByValue(l, r) {
   return UNIT;
 }
 
+// 演算子の名前から結合の向きを引く（表が1つの事実を持つ）。
+const RIGHT_ASSOC_NAMES = new Set(
+  Object.values(OPERATOR_DICT)
+    .flatMap((e) => (Array.isArray(e) ? e : [e]))
+    .filter((e) => e && e.assoc === "right" && e.name)
+    .map((e) => e.name)
+);
+
+function foldByAssoc(name, values, combine) {
+  return RIGHT_ASSOC_NAMES.has(name)
+    ? values.reduceRight((acc, v) => (isUnit(acc) ? UNIT : combine(v, acc)))
+    : values.reduce((acc, v) => (isUnit(acc) ? UNIT : combine(acc, v)));
+}
+
 function applyPointfree(node, closureEnv, argValues, pfbound) {
   // 束縛側が既に評価済みなら、それを使う（`!__` で開けた穴の場合——上の注記）。
   const boundOf = (side) =>
@@ -2220,7 +2244,15 @@ function applyPointfree(node, closureEnv, argValues, pfbound) {
 
   if (!leftBound && !rightBound) {
     if (argValues.length === 0) return UNIT;
-    return argValues.reduce((acc, v) => (isUnit(acc) ? UNIT : combine(acc, v)));
+    // **畳む向きは表が言う。** `[^] 2 3 2` は `2 ^ (3 ^ 2)` ＝ 512 であって、左から畳んだ
+    // 64 ではない——`^` も `,` も右結合だからである（`operator_table.js` の `assoc`）。
+    //
+    // 同じ事実が2か所で決まっていた。区間を**その場で畳む**道（`pass2.js` の
+    // `foldHeadSections`）は表を見ていたが、**実行時に器を走る**この道は左畳みの決め打ちで、
+    // `[^] 2 3 2` が 512、`[^] [2 3 2]~` が 64 という割れ方をしていた。`+` や `*` では
+    // 差が出ず、`-` は左結合なので合う——**右結合の演算子を器で渡したときだけ**黙って違う
+    // 答えになる（実測：`[,] 1 2 3` は `[1 2 3]`、`[,] [1 2 3]~` は `[[1 2] 3]`）。
+    return foldByAssoc(node.name, argValues, combine);
   }
   // 片側だけ束縛（右辺束縛 `[- 1]` = `x ? x - 1` / 左辺束縛 `[1 -]` = `x ? 1 - x`）。
   // 両者は対称で、非可換な演算子では両方が要る——**違うのはオペランドの順序だけ**である。

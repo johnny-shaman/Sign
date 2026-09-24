@@ -321,6 +321,32 @@ function checkMultipleRest(note, source) {
 checkMultipleRest("[~u ~v] は境目が決まらない", "f : [~u ~v] ? v\nf [1 2 3 4]");
 checkMultipleRest("[~l x ~r] も焦点の位置が決まらない", "f : [~l x ~r] ? x\nf [1 2 3 4]");
 checkMultipleRest("裸の可変引数でも同じ", "f : x ~xs ~ys ? xs\nf 1 2 3");
+
+// **裸の並びでは rest が最後である。** 括りの中なら rest の後ろに固定スロットを置ける
+// ——器の長さは呼ぶ側で決まるので端から数えれば位置が決まる（上の文面の `[~u v]` `[a ~b c]`）。
+// 裸の並びに端は無い：実引数は余積で並んでいるだけなので rest が全部飲み、後ろの仮引数は
+// 永久に埋まらない。実測で `k : y ~ys z ? z` を `k 1 2 3` と呼ぶと、**診断ゼロで `__`**
+// だった（JavaScript の rest が最後でなければならないのと同じ理由、利用者 2026-09-24）。
+{
+	const after = (src) => {
+		try {
+			compile(src, { parse: parser.parse });
+			return "通った";
+		} catch (e) {
+			return e.reason === "param-after-bare-rest" ? "断る" : "別の理由：" + String(e.message).slice(0, 36);
+		}
+	};
+	const w = (note, got, want) => {
+		extra++;
+		if (got === want) { console.log(`OK   ${note}`); extraPassed++; }
+		else { console.log(`FAIL ${note}`); console.log(`     got: ${got} / want: ${want}`); }
+	};
+	w("rest の後ろに裸の仮引数は断る", after("k : y ~ys z ? z\nk 1 2 3"), "断る");
+	w("rest の後ろの括りも断る", after("k : y ~ys [x ~xs] ? xs\nk 1 2 [3 4]"), "断る");
+	w("rest が最後なら通る", after("k : y z ~ys ? ys\nk 1 2 3 4"), "通った");
+	w("括りの中は rest の後ろに置ける", after("k : [y ~ys z] ? z\nk [1 2 3]"), "通った");
+	w("括りが2つ並ぶのは通る", after("g : [x ~xs] [y ~ys] ? ys\ng [1 2] [3 4]"), "通った");
+}
 checkMultipleRest("3つ並んでも止まる", "f : [~a ~b ~c] ? a\nf [1 2 3]");
 checkMultipleRest("器を2つ受ける形でも、その並びの中で見る", "g : [a ~b] [~c ~d] ? b\ng [1 2] [3 4]");
 // 端から数えて決まる形は通す。
@@ -388,7 +414,7 @@ checkWriteArg("その要素の場所なら通る", "f : p ? p # 7\ng : s ? f $(s
 // **位置が1対1にならない受け方は見ない。** `~y` は残りをまとめて受けるので、3番目の実引数と
 // 3番目のスロットは同じものではない——器を受ける位置の型は `Address` になりうるので、ここを
 // 外すと可変引数の関数が軒並み断られる（実測：`preprocessor.md` の `map` の例）。
-checkWriteArg("可変引数の位置は見ない", "map : f x ~y ? @f x , map y~\nmap $[* 2] 1 2 3 4 5", 0);
+checkWriteArg("可変引数の位置は見ない", "map : f x ~y ? (@f x) , (map y~)\nmap $[* 2] 1 2 3 4 5", 0);
 checkWriteArg("分解で受ける位置も見ない", "f : p [h ~t] ? p # h\nx : 5\nf $x [1 2 3]", 0);
 
 console.log(`\n${passed + extraPassed}/${cases.length + extra} passed`);

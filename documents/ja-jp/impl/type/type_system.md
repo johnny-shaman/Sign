@@ -2171,7 +2171,7 @@ describe : col ?
 ```sign
 ` [Point,] 1 2 , 3 4 , 5 6
 `  → Point 1 2 , Point 3 4 , Point 5 6（3要素の Pointリスト）
-points : [Point,] 1 2 , 3 4 , 5 6
+points : [Point,] (1 2 , 3 4 , 5 6)
 
 ` アクセス
 ` → 3（2番目の要素の x フィールド）

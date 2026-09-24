@@ -592,6 +592,30 @@ function checkOneRestPerGroup(node) {
       { spec: "0_design_principles.md 原理4", reason: "multiple-rest-params" }
     );
   }
+  // **裸の並びでは rest が最後である。**
+  //
+  // 括りの中なら rest の後ろに固定スロットを置ける——器の長さが呼ぶ側で決まるので、端から
+  // 数えれば位置が決まる（`[~u v]` `[a ~b c]`、下の文面のとおり）。裸の並びには**端が無い**。
+  // 実引数は余積で並んでいるだけなので、rest が全部飲んでしまい後ろの仮引数は永久に埋まらない
+  // ——実測で `k : y ~ys z ? z` を `k 1 2 3` と呼ぶと、診断ゼロで `__` が返っていた。
+  // JavaScript の rest が最後でなければならないのと同じ理由である（利用者 2026-09-24）。
+  if (!node.left.bracket) {
+    const es = node.left.entries;
+    const ri = es.findIndex((e) => e && e.rest && e.name);
+    const after = ri >= 0 ? es.slice(ri + 1).filter(Boolean) : [];
+    if (after.length) {
+      const restName = `~${bareKey(es[ri].name)}`;
+      const tail = after.map((e) => (e.pattern ? `[…]` : bareKey(e.name))).join(" ");
+      throw new OperationError(
+        `裸の仮引数の並びでは rest（\`${restName}\`）が最後でなければなりません` +
+          `（後ろに \`${tail}\` が在ります）。括りの中なら器の端から数えて位置が決まるので` +
+          `rest の後ろに固定スロットを置けますが（\`[~u v]\` \`[a ~b c]\`）、裸の並びに端は` +
+          `ありません——実引数は余積で並んでいるだけなので、rest が全部飲んで後ろは永久に` +
+          `埋まりません。器で受けるなら \`[y ~ys z]\` と括ってください`,
+        { spec: "0_design_principles.md 原理4", reason: "param-after-bare-rest" }
+      );
+    }
+  }
 }
 
 // **スロットの名前になれるノード**（`isSlotKeyNode`）は layout.js から引く。かつては

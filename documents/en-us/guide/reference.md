@@ -346,7 +346,7 @@ length 1 2 3
 ` Map. Result: 2 4 6 8
 [* 2,] 1 2 3 4
 
-map : f x ~y ? @f x, map f y~
+map : f x ~y ? (@f x) , (map f y~)
 ` Result: 3, 4, 5, 6
 map $[+ 2] 1 2 3 4
 ```

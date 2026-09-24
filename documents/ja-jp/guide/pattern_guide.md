@@ -123,7 +123,7 @@ f 1 2 3
 
 ```sign
 
-map : f x ~y ? @f x , map f y~
+map : f x ~y ? (@f x) , (map f y~)
 
 map $[* 2] 1 2 3 4 5
 

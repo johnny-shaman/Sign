@@ -577,7 +577,7 @@ natural_transform : f list ?
 `   通常の処理
 	f list
 
-example : natural_transform [* 2,] 1, 2, 3
+example : natural_transform [* 2,] (1, 2, 3)
 ```
 
 ## 7. 設計原則と理論的意義

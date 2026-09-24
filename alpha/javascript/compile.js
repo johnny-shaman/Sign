@@ -1607,6 +1607,19 @@ function foldSource(op) {
   //    それを吸収して先頭の `a` を返してしまう。
   //
   // **単位元と誤りの印は、同じ位置で兼ねられない。** `!xs` はその2つを分けるために在る。
+  // **右結合なら右から畳む。** 累算器の形は左畳みそのものなので使えない——後ろから潰す
+  // 形（`x OP (自分 xs)`）になる。末尾呼び出しではなくなるぶん段が積むが、**向きは値の
+  // 話で、速さの話ではない**（`[^] [2 3 2]~` が 64 になるのは誤答である）。
+  //
+  // 終端は左畳みと同じく `!xs` で名指しする。完全性公理（`x OP __` ＝ `x`）に任せると
+  // 「列が尽きた」と「計算が正当に `__` を返した」が同じ形になる。
+  if (isRightAssocOp(op)) {
+    // **再帰の結果は撒いて渡す。** `x , (自分 xs)` の右辺は呼び出しであって `,` のノードでは
+    // ないので、構文で連鎖を見ている側からは**1スロット**に見える（器を作る演算子でだけ効く）。
+    // 値に印を付ければ跨げる——`~` は値を見るからである。スカラーを撒いても1つのままなので、
+    // 器を作らない `^` でも同じ綴りで通る。
+    return [`${f} : [x ~xs] ?`, `\t!xs : x`, `\tx ${op} (${f} xs)~`].join("\n");
+  }
   return [
     `${go} : acc [x ~xs] ?`,
     `\t!xs : acc ${op} x`,
@@ -1698,6 +1711,21 @@ function greedyMapOf(node) {
   return { op: n.op, name: n.name, operand: String(r.value), node: n };
 }
 
+/**
+ * **畳む向きは表が言う**（`operator_table.js` の `assoc`）。
+ *
+ * 同じ事実が3か所で決まっていた——区間をその場で畳む道（`pass2.js` の `foldHeadSections`）は
+ * 表を見ていたが、字面を展開する道（`expandGreedyFold`）と実行時に器を走る道（`foldSource`）は
+ * 左畳みの決め打ちだった。`+` `*` では差が出ず、`-` は左結合なので合う——**右結合の演算子を
+ * 器で渡したときだけ**黙って違う答えになる（実測：`[^] 2 3 2` は 512、`[^] [2 3 2]~` は 64。
+ * `[,] 1 2 3` は `[1 2 3]`、`[,] [1 2 3]~` は `[[1 2] 3]`）。
+ */
+function isRightAssocOp(op) {
+  const e = OPERATOR_DICT[op];
+  const entries = Array.isArray(e) ? e : e ? [e] : [];
+  return entries.some((x) => x && x.position === "infix" && x.assoc === "right");
+}
+
 function foldNameFor(op) {
   return `_pf_fold_${[...op].map((c) => c.charCodeAt(0).toString(16)).join("")}`;
 }
@@ -1732,14 +1760,11 @@ function expandGreedyFold(node) {
   const inner = solo(node.left);
   const leaves = constructLeaves(node.right);
   if (!leaves || leaves.length < 2) return null; // 1つだけの形は畳む相手が無く、器かもしれない
-  return leaves.reduce((acc, x) => ({
-    type: "operation",
-    name: inner.name,
-    op: inner.op,
-    position: "infix",
-    left: acc,
-    right: x,
-  }));
+  // **向きは表が言う**（`isRightAssocOp`）。`[^] 2 3 2` は `2 ^ (3 ^ 2)` ＝ 512 である。
+  const mk = (left, right) => ({ type: "operation", name: inner.name, op: inner.op, position: "infix", left, right });
+  return isRightAssocOp(inner.op)
+    ? leaves.reduceRight((acc, x) => mk(x, acc))
+    : leaves.reduce((acc, x) => mk(acc, x));
 }
 
 /**
