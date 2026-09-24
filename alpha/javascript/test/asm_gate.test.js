@@ -41,7 +41,7 @@ import { fileURLToPath } from "url";
 import { compile } from "../compile.js";
 import { generateAsm } from "../pass4.js";
 import { diffAsm, digestOf, formatDiff, normalizeAsm, mnemonicCounts } from "../asmdiff.mjs";
-import { CORPUS, NOT_COVERED, ROOT, ASM_OPT, REACHED_MNEMONICS, readImport, sourceOf, countInstructions } from "./corpus.js";
+import { CORPUS, NOT_COVERED, ROOT, ASM_OPT, SELF_OPTION_WARNINGS, REACHED_MNEMONICS, readImport, sourceOf, countInstructions } from "./corpus.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const parser = peggy.generate(fs.readFileSync(path.join(__dirname, "..", "sign.pegjs"), "utf8"));
@@ -124,6 +124,15 @@ function checkTrue(note, cond, extra) {
 	check("ラベルはまとめて数える", [...mnemonicCounts("f:\n\tret\n.L0:\n")].sort(), [["(ラベル)", 2], ["ret", 1]]);
 	check("注釈だけの行と空行は列に入らない", normalizeAsm("// 全部注釈\n\n\tret\n"), ["ret"]);
 }
+
+// ---- 1b. 身元はファイルが言う ----
+//
+// 機械へ落とす条件（的・層・文字幅）は `alpha/sign/option.ms` から来る。長らくここの
+// 門は `{ layer: 1 }` を手で持っていたが、それはファイルが宣言していない仮定だった。
+// **読めたが妥当でない**（未知の的・範囲外の層）なら黙って既定へ落ちるので、0件を見る。
+check("option.ms は警告なしで読める", SELF_OPTION_WARNINGS, []);
+check("セルフホストの身元：層", ASM_OPT.layer, 1);
+check("セルフホストの身元：的", ASM_OPT.target, "aarch64_qemu");
 
 // ---- 2. コーパス：診断・出し直しの安定・命令数 ----
 //

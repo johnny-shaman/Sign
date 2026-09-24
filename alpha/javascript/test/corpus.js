@@ -26,6 +26,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { readOptionMs } from "../option_ms.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, "..", "..", "..");
@@ -34,8 +35,20 @@ export const SIGN_DIR = path.join(ROOT, "alpha", "sign");
 // **インポートを解く手段は呼ぶ側が渡す**（build_system.md §4.2——`compile.js` は fs に触らない）。
 export const readImport = (p) => fs.readFileSync(path.join(SIGN_DIR, p), "utf8").replace(/\r\n/g, "\n");
 
-/** 機械へ落とすときの既定。**層は 1**——理由は `asm_gate.test.js` の頭に書いた。 */
-export const ASM_OPT = { target: "aarch64_qemu", charset: "ascii", layer: 1 };
+/**
+ * 機械へ落とすときの条件は **`alpha/sign/option.ms` が言う**（層は 1——理由は
+ * `asm_gate.test.js` の頭に書いた）。
+ *
+ * 長らくここに `{ layer: 1 }` を手で置いていたが、それは**ファイルが宣言していない仮定**
+ * だった。仕様どおりに読めば `option.ms` の無いファイル群は既定の layer 4（OS が要る層）で、
+ * 裸の qemu では走らない——つまり門は、誰も宣言していない層でコンパイラを走らせていた。
+ * 身元はファイルの側に置き、門はそれを読むだけにする。読み手は `option_ms.js` の
+ * `readOptionMs` で、専用パーサを持たず Sign の Pass 1〜2 をそのまま通す。
+ */
+const SELF_OPTION = readOptionMs(fs.readFileSync(path.join(SIGN_DIR, "option.ms"), "utf8"));
+export const ASM_OPT = { target: SELF_OPTION.target, charset: SELF_OPTION.charset, layer: SELF_OPTION.layer };
+/** `option.ms` を読んで出た警告（読めたが妥当でないもの）。門が0件であることを見る。 */
+export const SELF_OPTION_WARNINGS = SELF_OPTION.warnings;
 
 /**
  * @property rel    リポジトリの根からの道
