@@ -1064,6 +1064,35 @@ const COMPARE_OPS = {
   more: (l, r) => l > r,
 };
 
+/**
+ * **比べるのは値である。文字は符号位置（`Int` と同じ値）として比べる。**
+ *
+ * `COMPARE_OPS` を直に引くと JS の比較になり、1字の文字列は `Number("…")` で読み替えられる。
+ * `Number("\b")` は 0 なので `0u0008 > 7` が `__`、`0u0038 > 7` は「8 > 7」として**偶然**
+ * 合っていた（機械はどちらも符号位置で比べる）。`=` も `"8" === 56` で外れる。BigInt と
+ * Number の `===` も JS では外れるので、どちらかが BigInt なら揃えてから比べる。
+ *
+ * 中置（`compareOnValues`）・ポイントフリー・連鎖の3か所が同じ表を直に引いていたので、
+ * ここを1か所にする。
+ */
+function scalarForCompare(x) {
+  return typeof x === "string" && [...x].length === 1 ? x.codePointAt(0) : x;
+}
+function alignForCompare(a, b) {
+  let x = scalarForCompare(a);
+  let y = scalarForCompare(b);
+  if (typeof x === "bigint" || typeof y === "bigint") {
+    const bx = toBig(x);
+    const by = toBig(y);
+    if (bx !== null && by !== null) return [bx, by];
+  }
+  return [x, y];
+}
+function compareValues(name, a, b) {
+  const [x, y] = alignForCompare(a, b);
+  return COMPARE_OPS[name](x, y);
+}
+
 // list_cheat_sheet.md「重複した要素の作成/リフト/分割」: `*`（repeat）・`^`（lift）・
 // `/`（split）はList左辺に対して固有の意味を持つ。それ以外の算術演算子（+ - %）は
 // Stringの場合（下記）と同様、Listに対しては未定義のため型エラーとしてUnitへ収束する。
@@ -1818,7 +1847,8 @@ function compareOnValues(name, op, l, r, leftNode) {
     // 真の場合の返値選択は他の比較演算子と同じ §2.1 の規則に従う（comparison.md §1が
     // `!=` を対象の比較演算子として列挙しており、§2.1の適用外とされているのは
     // 構造比較の `==`/`!==` だけ）。ここだけ左辺固定になっていた。
-    return l !== r ? (isArithmeticUnitElement(l, leftNode) ? r : l) : UNIT;
+    const [lx, rx] = alignForCompare(l, r);
+    return lx !== rx ? (isArithmeticUnitElement(l, leftNode) ? r : l) : UNIT;
   }
   if (op === "==") {
     // type_system.md §6.2: 型シグネチャ (L -> R) -> (L | __)。真なら左辺、偽ならUnit
@@ -1836,7 +1866,7 @@ function compareOnValues(name, op, l, r, leftNode) {
     return structuralEqual(l, r) ? UNIT : l;
   }
   if (isUnit(l) || isUnit(r)) return UNIT; // 両辺とも吸収元
-  const truthy = COMPARE_OPS[name](l, r);
+  const truthy = compareValues(name, l, r);
   // §2.1: 左辺が算術単位元(0/1、Intドメインに限る)なら右辺、それ以外は左辺を返す
   return truthy ? (isArithmeticUnitElement(l, leftNode) ? r : l) : UNIT;
 }
@@ -2201,7 +2231,7 @@ function applyPointfree(node, closureEnv, argValues, pfbound) {
       // で「元の要素を残す/捨てる」ことが目的のポイントフリー文脈にはそぐわない
       // （`[< 3,] [1 2 3]~`が要素の1,2ではなく評価結果の3,2になってしまう）。
       if (isUnit(a) || isUnit(b)) return UNIT;
-      const truthy = COMPARE_OPS[node.name](a, b);
+      const truthy = compareValues(node.name, a, b);
       return truthy ? a : UNIT;
     }
     // `[' 0]`（インデックス取得）・`[' foo]`（フィールド取得）のポイントフリー。
@@ -2967,7 +2997,7 @@ return items.filter((v) => !isUnit(v));
       if (isUnit(c)) return UNIT;
       const r = evaluate(node.right, env);
       if (isUnit(r)) return UNIT; // 比較演算子の吸収則（§3.3）
-      return COMPARE_OPS[node.compareName](l, c) && COMPARE_OPS[node.compareName](c, r) ? c : UNIT;
+      return compareValues(node.compareName, l, c) && compareValues(node.compareName, c, r) ? c : UNIT;
     }
 
     if (ARITH_OPS[node.name]) return evalArith(node, env);
