@@ -117,7 +117,10 @@ export const CORPUS = [
 	// 値の置き方と渡し方。型の名前と数だけで答えられる問い（渡し方の表・構造体の詰め方・番地の域）を
 	// `layout.js` から移した枚で、`target_info.sn` を取り込んで幅を引く。表を引く枝と、直和の綴りを
 	// 1文字ずつ歩く枝と、平行2本の数の列を歩く枝が同居する。`layout_sn.test.js` が JS 側と答えを突き合わせる。
-	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4347, plain: 6890 }, digest: { full: "6c83ca0ce9576299", plain: "914fb10a82612415" } },
+	// 2026-09-25：置き場をもらった関数から、置き場を受け取らない呼び先（alt_head / atom_mode）への
+	// 末尾の `b` が2つ、`bl`＋出口の着地に変わった（4347 → 4334）。追記で呼ばれると出口を飛ばした
+	// 器が宛先に無かった形で、ここでは直に呼ばれていたので値は元から合っていた（layout_sn は同じ答え）。
+	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4334, plain: 6892 }, digest: { full: "6573de687d2ef4a7", plain: "c986b5bb721eb372" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,

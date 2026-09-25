@@ -2789,5 +2789,43 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	checkNamed("字面で渡しても断る", "f : p ? p # 7\nf 5", "ascii", "は番地です");
 }
 
+// ---- 置き場の食い違い（2026-09-25 の洗い出し） ----
+//
+// 静的な上界の門が断っていたのは「組む側」だけで、呼ぶ側と呼ばれた側で置き場の読みが
+// 食い違う形は、門の手前で診断ゼロのまま出ていた。長さは合って中身だけ違う形が多いので、
+// 器は端から端まで辿る（`agreeText`）。直せたものは一致を、まだ直していないものは断りの
+// **理由**まで見る。
+{
+	const DG = "dg : `0123456789`\nrg : n ? `x` (dg ' n)\n";
+	// 写す器（String）の中の仮引数は参照を運ばない。以前は「そのまま返す」と数えて、引数と
+	// 返値を同じ宛先に組んでいた（"neg x7" が "neg ne"）。asm_text.sn の alu_rrr の形も同じ。
+	agreeText("連結の中の仮引数は写すだけ", DG + "ln1 : op a ? op ` ` a\nmv : op d ? ln1 op (rg d)", "mv `neg` 7");
+	agreeText("組んだ引数3つを連結へ（alu_rrr）", DG + "ln3 : op a b c ? op ` ` a `, ` b `, ` c\nalu : op d n m ? ln3 op (rg d) (rg n) (rg m)", "alu `add` 0 1 2");
+	// 返しうる位置が2つあるとき、宛先へ組めるのは1本だけ。
+	const TWO = "f : [~s] ? `<` s\ng : [~s] ? `>` s\nh : [~a] [~b] ?\n\t||a|| > 2 : a\n\tb\nk : [~s] ? h (f s) (g s)";
+	agreeText("返しうる引数2つ（a の枝）", TWO, "k `ab`");
+	agreeText("返しうる引数2つ（b の枝）", TWO, "k `a`");
+	// 出口を飛ばさない：追記をループにした関数から相互末尾で抜ける／着地しない呼び先へ抜ける。
+	const LOOPX = "g : [~s] ? `<` s\nf : [~s] ?\n\t||s|| < 2 : g s\n\t(s ' 0) (f (s ' 1~))";
+	agreeText("追記のループから相互末尾で抜ける", LOOPX, "f `abc`");
+	agreeText("追記のループから相互末尾で抜ける（長い）", LOOPX, "f `abcdef`");
+	const LAND = "h : [~t] ? t\nf : [~s] ?\n\t||s|| < 2 : h s\n\t`x` s\nk : [~s] ? `<` (f s)";
+	agreeText("着地しない呼び先へ抜けてから追記", LAND, "k `a`");
+	agreeText("着地しない呼び先（組む枝）", LAND, "k `ab`");
+	// 蓄積子の対照：後ろへ積む形は元を踏まない。
+	agreeText("蓄積子（後ろへ積む）", "r : [~s] [~acc] ?\n\t||acc|| > 2 : acc\n\tr (s ' 1~) (acc~ (s ' 0))", "r [1 2 3 4] [0]");
+
+	// **呼ぶ側の門。** 置き場の要る関数へ、置き場をもらっていない中継から末尾で飛ぶ形。
+	const NOSLOT = "置き場をもらっていません";
+	checkNamed("Container 型の中継から末尾で飛ぶ", "try : c [~b] ?\n\tc > 3 : __\n\tpl (c b~)\npl : [~b] ?\n\t||b|| > 3 : b\n\ttry 1 b\n||pl [0]||", "ascii", NOSLOT);
+	checkNamed("字面の引数で上界が組めない中継", "mk : a b ? a~ b~\nh : [~l] ? mk `ab` l\n(h `cd`) ' 3", "ascii", NOSLOT);
+	checkNamed("& の右辺の中継", "wr : [~l] ? `<` l `>`\nh2 : [~l] ? (||l|| > 0) & (wr l)\n(h2 `ab`) ' 3", "ascii", NOSLOT);
+	// 自分の枠に取った器を返す（`|` の左辺も返値になる）。
+	checkNamed("| の左辺で自分の枠の器を返す", "mk : [~l] ? l~ `z`\nh : [~l] ? (mk l) | (l ' 1~)\npair : a b ? a~ b~\n(pair (h `ab`) (h `cd`)) ' 0", "ascii", "自分の枠に置いたまま返す");
+	// 前に置いてから、宛先に在るかもしれない元を読む（後ろから写す道が要る）。切り出しを
+	// 渡すだけの形（上の「着地：切片の底」）は元の場所に在るので断らない。
+	checkNamed("蓄積子（前へ積む）", "r : [~s] [~acc] ?\n\t||acc|| > 2 : acc\n\tr (s ' 1~) ((s ' 0) acc~)\n(r [1 2 3 4] [0]) ' 1", "ascii", "後ろから写す道");
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

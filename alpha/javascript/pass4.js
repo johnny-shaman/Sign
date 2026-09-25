@@ -2105,7 +2105,14 @@ function genExpr(node, env, em, scope, tail = false) {
 		// **幅は問わない。** 見るのは「`__` かどうか」だけで、その判定は幅ごとに決まって
 		// いる。左右の幅が揃っていることだけが要る——どちらの経路を通っても同じ場所に
 		// 同じ本数の値がある、が結果の置き方だからである。
+		// **`|` の左辺は末尾ではないが、値はそのまま返値になる。** 飛び先を決めるために評価
+		// しきるので `tail` は渡せない。それでも左が `__` でなければ左が結果なので、そこで
+		// 自分のフレームに取った器を返すことになるかは、呼び出しを出す側が知っていなければ
+		// ならない。印は左辺のノードに付けて、出し終えたら消す（同じ木から2度出すことがある）。
+		const leftNode = unwrap(n.left);
+		if (leftNode && !isAnd && tail) leftNode._orValueReturns = true;
 		const lw = genExpr(n.left, env, em, scope);
+		if (leftNode) delete leftNode._orValueReturns;
 		if (lw === false) return false;
 		if (lw === TAIL) return em.fail(n.left, "短絡の左辺に末尾呼び出しは置けません（結果を見て飛び先を決めるため）");
 		const lo = (em.slot - lw) * 8;
@@ -2240,9 +2247,22 @@ function genExpr(node, env, em, scope, tail = false) {
 		if (tail && em.sretDest !== null && em.sretDest !== undefined) {
 			const ce = em.sretPlan && (em.sretPlan.get(callee) || em.sretPlan.get(baseName));
 			if (handsBack && handsBack.size) {
+				// **宛先は1つなので、そこへ組めるのは1本だけである。** 返しうる位置が2つあると
+				// 2つ目の生産者が1つ目を上書きし、どちらの枝を返しても片方は壊れている：
+				//
+				//     h : [~a] [~b] ? / ||a|| > 2 : a / b
+				//     k : [~s] ? h (f s) (g s)
+				//     (k `ab`) ' 0         解釈 60 ／実機 62
+				//
+				// 2本以上なら誰も通さない。自分の枠に作れば呼び先へ渡る参照になるので `bl` に
+				// 下がり、返った器は出口で宛先へ写る。
+				const cand = [];
 				for (let i = 0; i < passed.length; i++) {
 					if (!handsBack.has(i) || !appendableCallee(passed[i], em)) continue;
-					const t = stripExpand(passed[i]);
+					cand.push(i);
+				}
+				if (cand.length === 1) {
+					const t = stripExpand(passed[cand[0]]);
 					t._sretInto = em.sretDest;
 					through.push(t);
 				}
@@ -2472,6 +2492,35 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 条件である（呼び先の方が広ければ、呼び出し元の領分へはみ出す）。
 		const mutualFits = !!(scope && plan.stackBytes <= (scope.incomingStackBytes || 0));
 		if (tail && plan.stackBytes > 0 && !selfTail && !mutualFits) tail = false;
+		// **置き場をもらっている関数は、出口を通らずに抜けてはいけないことがある。**
+		//
+		// 返す器を x8 の宛先に揃えるのは出口の仕事である（呼び先が別の場所に返したら写す
+		// `emitSretLanding`、追記をループにした関数なら底と合計を戻す）。相互末尾の `b` は
+		// 出口を飛ばすので、飛び先がそれを肩代わりしない形では `bl` にして出口を通す：
+		//
+		//   - 飛び先が置き場を受け取らない（組まずに返す）。返る器は宛先ではない所に在り、
+		//     追記で呼んだ側は「宛先に書いた」と読んで個数だけ足す。
+		//
+		//         h : [~t] ? t
+		//         f : [~s] ? / ||s|| < 2 : h s / `x` s
+		//         k : [~s] ? `<` (f s)
+		//         (k `a`) ' 1          解釈 97 ／実機 0（書かれていない場所）
+		//
+		//   - 自分が追記をループにしている。進めたカーソルを宛先として渡すので、飛び先は
+		//     続きに書いて**カーソルからの**器を返す——底も合計も戻らない。
+		//
+		//         g : [~s] ? `<` s
+		//         f : [~s] ? / ||s|| < 2 : g s / (s ' 0) (f (s ' 1~))
+		//         f `abc`              解釈 "ab<c" ／実機 "<c"
+		//
+		// **代金は末尾呼び出しを1つ失うこと。** 飛び先がまた末尾でこちらへ戻る輪なら段ごとに
+		// 1フレーム積む（tco.md の保証から外れる）。黙って違う器を返すよりは深さで落ちる方が
+		// よい——フレームが尽きればハードウェアが名指しする（STKOVFLT）。
+		if (tail && scope && callee !== scope.selfLabel && em.sretDest !== null && em.sretDest !== undefined) {
+			const ceLand = em.sretPlan && (em.sretPlan.get(callee) || em.sretPlan.get(baseName));
+			if (em.sretTotal !== null && em.sretTotal !== undefined) tail = false;
+			else if (!(ceLand && ceLand.needsSlot) && through.length === 0) tail = false;
+		}
 		if (tail && scope && !argCarries) {
 			// **`sp` を動かしたなら戻してから飛ぶ。** 自己再帰でそのままにすると毎周
 			// `sub sp` が積み上がって伸び続け、相互では畳む命令が前提を失う。
@@ -2516,6 +2565,25 @@ function genExpr(node, env, em, scope, tail = false) {
 				if (ce && ce.needsSlot && em.sretDest !== null && em.sretDest !== undefined) {
 					em.load("x8", em.sretDest, "返値スロットを渡し直す（末尾呼び出し）");
 					if (em.sretLimit !== null && em.sretLimit !== undefined) em.load(SRET_LIMIT, em.sretLimit, "残りも渡し直す");
+				} else if (ce && ce.needsSlot) {
+					// **渡すものが無いなら飛ばない。** 飛び先は置き場を x8/x15 で受け取るのに、
+					// この関数は置き場をもらっていない（計画に載っていない）。黙って飛ぶと、
+					// 途中の `bl` が残した x8/x15 を宛先と容量として読む——容量の照合で `__` に
+					// なるか、どこか知らない場所へ書く。長さも中身も診断ゼロで割れていた：
+					//
+					//     try : c [~b] ? / c > 3 : __ / pl (c b~)
+					//     pl : [~b] ? / ||b|| > 3 : b / try 1 b
+					//     ||pl [0]||          解釈 4 ／実機 0
+					//
+					// 門は組む側（計画に無い構築）にしか無かったので、組まない中継が計画から
+					// 落ちると素通しだった。中継が計画に載れない理由は色々ある（返り値の型が
+					// Container、字面の引数で上界が組めない、`&` の右辺）——ここはその全部が
+					// 行き着く1か所なので、ここで名指しする。
+					return em.fail(
+						n,
+						`器の構築はまだ出せません（${callee} は返す器の置き場を要りますが、呼ぶ側の関数が置き場を` +
+							`もらっていません——計画に載っていない中継から末尾で飛ぶと、置き場の無いまま書かれます）`
+					);
 				}
 			}
 			em.emit(`ldp x29, x30, [sp], #${FRAME_MARK}`, "自分のフレームを畳む");
@@ -2585,6 +2653,22 @@ function genExpr(node, env, em, scope, tail = false) {
 			const room = n._sretContentRoom;
 			limit = () => em.load(SRET_LIMIT, room, "置き場の残り（バイト）");
 		} else if (sp) {
+			// **ここで取る場所は自分の枠の中である。** 値が自分の返値になるなら、返した先では
+			// エピローグの `mov sp, x29` が捨てた場所を指す。置き場をもらっていれば上の枝で
+			// そちらへ書くので、ここへ落ちるのは**もらっていない**（計画に載っていない）とき
+			// だけである。1回だけ呼ぶなら死んだ場所がまだ読めて値が合ってしまい、2回呼ぶと
+			// 2回目が1回目を上書きする——診断ゼロで中身だけ違っていた：
+			//
+			//     mk : [~l] ? l~ `z`
+			//     h : [~l] ? (mk l) | (l ' 1~)
+			//     (pair (h `ab`) (h `cd`)) ' 0     解釈 97 ／実機 99
+			if ((returnsHere || n._orValueReturns) && (em.sretDest === null || em.sretDest === undefined)) {
+				return em.fail(
+					n,
+					`器の構築はまだ出せません（${callee} の返す器を自分の枠に置いたまま返すことになります——` +
+						`呼ぶ側の関数が置き場をもらっていない（計画に載っていない）ので、返した先では捨てた場所を指します）`
+				);
+			}
 			// 返値スロットも `sub sp` で取る場所である（門番）。
 			if (!allocaAllowed(em, n, callee + " の返値スロット（sret）")) return false;
 			if (sp.terms && sp.terms.length > 0) {
@@ -3725,6 +3809,33 @@ function genExpr(node, env, em, scope, tail = false) {
 		// いるのはそのためである。
 		for (let k = parts.length - 1; k >= 0; k--) {
 			if (isUnitAtom(peel(parts[k]))) parts.splice(k, 1);
+		}
+		// **元が宛先そのものかもしれない器を、前に何か置いてから読んではいけない。**
+		//
+		// そのまま返す仮引数は、呼ぶ側が**自分の宛先に**組んで渡してくる（逃がす先がそこしか
+		// 無い）。自己末尾の蓄積子なら2周目から必ずそうなる。前から順に書くと、先に置いた
+		// ぶんが元の頭を踏んでから写すことになる——長さは合って中身だけ違っていた：
+		//
+		//     r : [~s] [~acc] ? / ||acc|| > 2 : acc / r (s ' 1~) ((s ' 0) acc~)
+		//     r [1 2 3 4] [0]      解釈 [2 1 0] ／実機 [2 2 2]
+		//
+		// 後ろから写す道（memmove の向き）はまだ無いので、それまでは名指しで断る。先頭に
+		// 置く形（`acc~ x`、追記）は元を踏まないので通る。
+		if (sretHere && scope && scope.maybeAtDest && scope.maybeAtDest.size) {
+			const mentions = (x) => {
+				if (!x || typeof x !== "object") return false;
+				if (isIdentifierNode(x)) return scope.maybeAtDest.has(x.value);
+				for (const k of ["left", "right", "operand"]) if (mentions(x[k])) return true;
+				for (const l of x.lines || []) if (mentions(l)) return true;
+				return false;
+			};
+			const hit = parts.findIndex((p, i) => i > 0 && mentions(p));
+			if (hit > 0)
+				return em.fail(
+					n,
+					`器の構築はまだ出せません（${scope.selfLabel} がそのまま返しうる器を、前に要素を置いてから読んで組み直す形——` +
+						`元が自分の宛先に在ると写す前に踏むので、後ろから写す道が要る）`
+				);
 		}
 		const et = n.elementType || (n.atomType === "String" ? "Char" : null);
 		const em1 = elementCellSize(et, em.conf);
@@ -7615,6 +7726,74 @@ function frameAddressInTail(node) {
  * 走る先が分からない呼び出し（アドレス経由）は「返しうる」と見なす——決まらないものを
  * 「安全だ」と決めてはいけない（原理4は安全側にだけ倒す）。
  */
+/**
+ * **自分の宛先に置かれて届くかもしれない仮引数**（関数名 → 位置の集合）。
+ *
+ * そのまま返す位置（`collectReturnedParams`）であっても、呼ぶ側が素の名前を渡すだけなら
+ * 器は元の場所に在る。宛先に組まれうるのは、その位置に**式**（組んだ器・呼び出し・切り出し）
+ * が来るときか、呼ぶ側で既に宛先に在るかもしれない名前が来るときである。名前は渡るたびに
+ * 奥へ逃げるので、不動点まで回す。字面（`.rodata`）は組まれない。
+ *
+ * 呼び出しが末尾かどうかは見ない——末尾でない呼び出しは自分の枠に組むので、ここは広めに
+ * 取っている（断りが増える側にだけ倒れる）。
+ */
+function collectParamsMaybeAtDest(nodes, returnedParams) {
+	const bodies = new Map();
+	for (const node of nodes) {
+		if (!isDefineNode(node) || !isIdentifierNode(node.left)) continue;
+		const rhs = node.right;
+		if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
+		bodies.set(bareName(node.left.value), rhs);
+	}
+	const paramsOf = (lam) => paramShapesOf(lam.left).map((sh) => (sh && sh.kind === "bare" ? sh.name : sh && sh.head ? sh.head : null));
+	const table = new Map();
+	for (const name of bodies.keys()) table.set(name, new Set());
+	const calls = (x, out = []) => {
+		if (!x || typeof x !== "object") return out;
+		if (x.type === "operation" && (x.name === "apply" || x.name === "partial_apply")) out.push(x);
+		for (const k of ["left", "right", "operand"]) calls(x[k], out);
+		for (const l of x.lines || []) calls(l, out);
+		return out;
+	};
+	let changed = true;
+	let guard = 0;
+	while (changed && guard++ < 50) {
+		changed = false;
+		for (const [caller, lam] of bodies) {
+			const mine = paramsOf(lam);
+			const atMine = table.get(caller);
+			for (const c of calls(lam.right)) {
+				const { base, args } = applyChain(c);
+				if (!isIdentifierNode(base)) continue;
+				const callee = bareName(base.value);
+				const rp = returnedParams.get(callee);
+				const set = table.get(callee);
+				if (!rp || !set) continue;
+				args.forEach((a, i) => {
+					if (!rp.has(i) || set.has(i)) return;
+					// **切り出しは元の器の中を指す。** `s ' 1~` は新しく組まれるのではなく `s` の
+					// 場所に在るので、宛先に在りうるかは `s` と同じである（取った要素も同じ）。
+					let u = unwrap(a);
+					while (u && u.type === "operation" && (u.name === "get_prop" || u.name === "expand")) u = unwrap(u.name === "expand" ? u.operand : u.left);
+					if (!u) return;
+					if (isIdentifierNode(u)) {
+						const j = mine.indexOf(u.value);
+						if (j < 0 || !atMine.has(j)) return;
+					} else if (u.type === "atom") return;
+					set.add(i);
+					changed = true;
+				});
+			}
+		}
+	}
+	return table;
+}
+
+function copiesContents(t) {
+	if (t.atomType === "String") return true;
+	return t.atomType === "List" && !!t.elementType && !CONTAINER_TYPES.has(t.elementType);
+}
+
 function collectReturnedParams(nodes) {
 	// 関数名 → 返値になりうる仮引数の位置の集合
 	const table = new Map();
@@ -7667,6 +7846,18 @@ function collectReturnedParams(nodes) {
 				//
 				// 見るのは参照を運べる位置だけである。`i`（数）は場所を持たない。
 				if (t.type === "operation" && COPRODUCT_BUILD_OPS.has(t.name)) {
+					// **中身を写す器は、仮引数の参照を運ばない。** `String` は μ が強制なので
+					// 連結は文字を写し（``op ` ` a`` の `a` は字が写るだけ）、値の並びも撒いた
+					// 要素を写す。出て行くのは要素が `{ptr, len}` で並ぶ器や積の欄——参照そのものが
+					// 返値の中に残る形だけである。
+					//
+					// ここが写す器まで「出て行く」と数えていたので、呼ぶ側はその引数を**自分が
+					// もらった宛先に**組み、呼び先も同じ宛先に返値を書いた。写す前に引数を潰す：
+					//
+					//     ln1 : op a ? op ` ` a
+					//     mv : op d ? ln1 op (rg d)
+					//     mv `neg` 7            解釈 "neg x7" ／実機 "neg ne"（長さは合う）
+					if (copiesContents(t)) continue;
 					const seen = [];
 					const dig = (x) => {
 						const u = unwrap(x);
@@ -10832,6 +11023,17 @@ function genFunction(name, lambdaNode, env, em, mono) {
 		// 同じ事実を2箇所で決めていた形である。証明した側が黙っていたので、使う側は
 		// 何も知らないまま毎回払っていた。
 		total,
+		// **自分の宛先に置かれて届くかもしれない仮引数**（`collectParamsMaybeAtDest`）。
+		maybeAtDest: (() => {
+			const rp = em.paramsMaybeAtDest && (em.paramsMaybeAtDest.get(bareName(name)) || em.paramsMaybeAtDest.get(sretKey));
+			const out = new Set();
+			if (!rp || !rp.size || em.sretDest === null || em.sretDest === undefined) return out;
+			paramShapesOf(lambdaNode.left).forEach((sh, i) => {
+				const nm = sh && sh.kind === "bare" ? sh.name : sh && sh.head ? sh.head : null;
+				if (nm && rp.has(i)) out.add(nm);
+			});
+			return out;
+		})(),
 		selfLabel: name,
 		loopLabel,
 		bracketPairs,
@@ -11070,6 +11272,7 @@ function generateAsm(nodes, env, options = {}) {
 	// **どの位置の仮引数がそのまま返るか**は呼び出しサイトでも要る——渡す器の場所を
 	// 決めるのは、呼び先がそれを返すかどうかだからである。
 	em.returnedParams = collectReturnedParams(nodes);
+	em.paramsMaybeAtDest = collectParamsMaybeAtDest(nodes, em.returnedParams);
 	markEscapes(nodes, em.returnedParams);
 	// 呼び出しサイトが省略された引数の位置を知るための署名表。本体を出す前に要る。
 	em.signatures = collectSignatures(nodes, em, monos);
