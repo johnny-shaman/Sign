@@ -1261,6 +1261,10 @@ function arithOnValues(name, l, r, resultType) {
       const fn = ARITH_OPS[name];
       if (!fn) return UNIT;
       out = fn(lv, rv);
+      // **除算は割り目の丈である**（§3.2）。数どうしの道は結果の型が `Int` のときに evalArith が
+      // 丈で切るが、左辺が文字だと結果の型が `Char` なのでそこを通らず、JS の小数が漏れていた
+      // （`0u0064 / 0u0007` が 14.2857…、機械の `udiv` は 14）。
+      if (name === "div" && Number.isFinite(out) && !Number.isInteger(out)) out = Math.trunc(out);
       if (Number.isInteger(out) && !Number.isSafeInteger(out) && BIG_ARITH[name]) {
         const exact = BIG_ARITH[name](BigInt(lv), BigInt(rv));
         if (exact !== null) out = fromBig(exact);
@@ -1437,6 +1441,11 @@ function evalArith(node, env) {
   // は `__`）。負の丈は番地ではない。
   if (typeof value === "number" && (node.atomType === "Int" || node.atomType === "Address") && !Number.isInteger(value)) {
     return applyOverflowRule(node.atomType, Math.trunc(value));
+  }
+  // **左辺が `Char` の割り算も丈で切る。** 値が描けない符号位置（負など）に落ちた `Char` は数として
+  // 運ばれるので、文字の道（`arithOnValues` の中で切る）を通らずにここへ来る。
+  if (typeof value === "number" && node.atomType === "Char" && name === "div" && Number.isFinite(value) && !Number.isInteger(value)) {
+    return Math.trunc(value);
   }
   // **溢れ方は型が決める**（integer_overflow.md §1）。`Int` はラップアラウンド、`Address` は
   // `__` へ収束する——不正アドレスの伝播を止めるためである。JS の数値は f64 しか無いので、
