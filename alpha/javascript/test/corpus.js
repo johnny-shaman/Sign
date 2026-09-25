@@ -102,25 +102,26 @@ export const CORPUS = [
 	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
 	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる。
 	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [{ severity: "information", includes: "take_word: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "tokens: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 949, plain: 1669 }, digest: { full: "8a6fb1b080afe0fd", plain: "4e960f7519256fde" } },
-	{ rel: "alpha/sign/parser.sn", front: 0, asm: [{ severity: "information", includes: "out: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_as: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_one: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした・添字で回る再帰の段数を、その添字が走る器で抑えた・撒きながら食う枝を、段ごとに消えたぶんで見積もった）" }, { severity: "information", includes: "out_jk: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }], insn: { full: 1931, plain: 2792 }, digest: { full: "01c443127f5c7ff0", plain: "0a6975d90cd5e9bf" } },
+	{ rel: "alpha/sign/parser.sn", front: 0, asm: [{ severity: "information", includes: "out: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_as: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_one: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした・添字で回る再帰の段数を、その添字が走る器で抑えた・撒きながら食う枝を、段ごとに消えたぶんで見積もった）" }, { severity: "information", includes: "out_jk: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }], insn: { full: 1939, plain: 2800 }, digest: { full: "a13365d219e8c026", plain: "f836dd72f375631b" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
 	// 「`ret` が1つ」としか言わない——`asmdiff` がディレクティブを残す理由も、命令数だけの
 	// golden では足りない理由も、そのままこの行に立っている。
 	{ rel: "alpha/sign/operator_table.sn", front: 0, asm: [], insn: { full: 1, plain: 1 }, digest: { full: "0a54415ea5f080d3", plain: "0a54415ea5f080d3" } },
-	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 576, plain: 849 }, digest: { full: "f4688041c2f40252", plain: "458fded99a28e667" } },
+	{ rel: "alpha/sign/emit.sn", front: 0, asm: [], insn: { full: 578, plain: 851 }, digest: { full: "07bcfa2323b1abf0", plain: "3e6bc5afa44b8b84" } },
 	// 型システムと Pass 4 の継ぎ目。表が8つと、そこから1つの還元、それに字面のプリフィックスを
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
 	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
-	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1295, plain: 2055 }, digest: { full: "69375f472b243370", plain: "fa42d490d1e02f89" } },
+	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1303, plain: 2063 }, digest: { full: "35e939071f071c38", plain: "873aaf3a3e0ec287" } },
 	// 値の置き方と渡し方。型の名前と数だけで答えられる問い（渡し方の表・構造体の詰め方・番地の域）を
 	// `layout.js` から移した枚で、`target_info.sn` を取り込んで幅を引く。表を引く枝と、直和の綴りを
 	// 1文字ずつ歩く枝と、平行2本の数の列を歩く枝が同居する。`layout_sn.test.js` が JS 側と答えを突き合わせる。
 	// 2026-09-25：置き場をもらった関数から、置き場を受け取らない呼び先（alt_head / atom_mode）への
 	// 末尾の `b` が2つ、`bl`＋出口の着地に変わった（4347 → 4334）。追記で呼ばれると出口を飛ばした
 	// 器が宛先に無かった形で、ここでは直に呼ばれていたので値は元から合っていた（layout_sn は同じ答え）。
-	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4334, plain: 6892 }, digest: { full: "6573de687d2ef4a7", plain: "c986b5bb721eb372" } },
+	// 同日：比較の右辺が `__` になり得るとき吸収する2命令が入った（4334 → 4369。parser・emit・target_info も同じ理由）。
+	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4369, plain: 6920 }, digest: { full: "f815faf27fd275a7", plain: "c7194628b394cac9" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,

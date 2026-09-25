@@ -2008,6 +2008,35 @@ function genExpr(node, env, em, scope, tail = false) {
 		em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
 		const cond = emitAddressIntCondition(n, em) || asmOf(n.name).gpr[unsignedCompare(n, em.conf, env) ? "unsigned" : "signed"];
 		em.emit(`csel ${SCRATCH[0]}, ${eqOnly ? SCRATCH[0] : "x11"}, x12, ${cond}`, "真なら値、偽なら __");
+		// **右辺の `__` も吸収する**（比較族は両辺とも吸収元、operator_table.md の Unit 欄）。
+		//
+		// 左辺の `__` は上の並びで勝手に niche へ落ちる（候補が左辺そのものか niche しか無い）。
+		// 右辺は違う——niche は符号付きで最小の数なので `a > __` は必ず真になり、候補の左辺が
+		// 返っていた。符号なし（番地）なら niche は真ん中の数で、順序4つとも当たり外れが出る：
+		//
+		//     h : x ? / x > 5 : x / __
+		//     g : a ? a > (h a)
+		//     g 2                  解釈 __ ／機械 2（最適化の有無によらず）
+		//
+		// `=` は要らない（niche と等しいのは niche だけで、そのとき候補も niche）。
+		// `!=` は規則が違って**両辺とも単位元**である——片側が `__` なら反対側を返す。
+		// 左辺が先に見られる（`__ != __` は右辺＝`__`）ので、右を見てから左で上書きする。
+		if (n.name === "not_equal") {
+			const rMay = !cannotBeUnit(n.right, env, scope);
+			const lMay = !cannotBeUnit(n.left, env, scope);
+			if (rMay || lMay) em.load("x13", lo, "左辺（`!=` は __ の反対側を返す）");
+			if (rMay) {
+				em.emit(`cmp ${SCRATCH[1]}, x12`, "右辺は __ か");
+				em.emit(`csel ${SCRATCH[0]}, x13, ${SCRATCH[0]}, eq`, "なら左辺");
+			}
+			if (lMay) {
+				em.emit("cmp x13, x12", "左辺は __ か");
+				em.emit(`csel ${SCRATCH[0]}, ${SCRATCH[1]}, ${SCRATCH[0]}, eq`, "なら右辺");
+			}
+		} else if (!eqOnly && !cannotBeUnit(n.right, env, scope)) {
+			em.emit(`cmp ${SCRATCH[1]}, x12`, "右辺は __ か");
+			em.emit(`csel ${SCRATCH[0]}, x12, ${SCRATCH[0]}, eq`, "なら __（吸収）");
+		}
 		em.pop(1);
 		em.store(SCRATCH[0], lo);
 		return 1;
