@@ -1,0 +1,5 @@
+gcd : a b ?
+	a = b : a
+	a > b : gcd (a - b) b
+	gcd a (b - a)
+gcd 48 18

@@ -1,0 +1,166 @@
+`lower.sn — 段1：前処理した字面から、後置の中間語（語の並び）を出す`
+
+`parser.sn の out / out_at / out_as / out_one / out_j と同じ形で範囲を歩き、.ms の雛形の代わりに`
+`後置の順で語を積む。状態は持たない（仮引数の名前 ps・末尾かどうか tc・字面全体 p だけを下ろす）`
+
+`語は積（,）で1つずつ並べる——余積（空白）で並べると String が吸収元なので1本の文字列に潰れる。`
+`1語の断片は x , __ で返す（(String)~ は文字へ撒かれる）`
+
+`部分集合：Int の字面と __、仮引数、呼び出しを含まない定数、+ - * / と比較6つ、既知の関数を`
+`引数の数どおりに呼ぶこと（末尾なら飛ぶ）、? のブロック、トップレベルの式。外れたものは`
+`! 理由 の語で名指しし、段2（codegen.sn）が .err の行にする`
+
+`parser.sn`@~
+
+`lexer.sn`@~
+
+`asm_text.sn`@~
+
+lw_1 : x ? x , __
+lw_none : `%` , __
+
+`--- 文と行の切れ目：深さ 0 の CR ---`
+lw_qend : p i ?
+	i >= ||p|| : i
+	(p ' i) = quote : i + 1
+	lw_qend p (i + 1)
+lw_send : p i d ?
+	i >= ||p|| : i
+	(d = 0) & ((p ' i) = cr) : i
+	(p ' i) = quote : lw_send p (lw_qend p (i + 1)) d
+	open_br (p ' i) : lw_send p (i + 1) (d + 1)
+	close_br (p ' i) : lw_send p (i + 1) (d - 1)
+	lw_send p (i + 1) d
+lw_stoks : p i ? tokens (p ' (i ~ ((lw_send p i 0) - 1)))
+lw_next : p i ? (lw_send p i 0) + 1
+
+`--- 語を探す ---`
+lw_find : [~ts] i w ?
+	i >= ||ts|| : __
+	(ts ' i) == w : i
+	lw_find ts (i + 1) w
+
+`--- 範囲を歩く（parser.sn の out と同じ形） ---`
+lw_x : [~ts] i j t [~ps] tc p ?
+	t > top_tier : lw_leaf (ts ' i) ps tc p
+	t = juxt_tier : lw_j ts i j ps tc p
+	lw_at ts i j t (end_of ts i (t + 1)) ps tc p
+
+lw_at : [~ts] i j t k [~ps] tc p ?
+	k = j : lw_x ts i j (t + 1) ps tc p
+	lw_as ts i j t k (assoc_at ts k) ps p
+
+lw_as : [~ts] i j t k a [~ps] p ?
+	a = -1 : lw_one ts i j k (t + 1) t ps p
+	lw_one ts i j ((last_of ts i j t) - 1) t (t + 1) ps p
+
+lw_unit1 : [~ts] i j ? ((j - i) = 1) & ((ts ' i) == `__`)
+lw_iscond : op ? ((asm_infix_signed ' op~) ' form) == `cond`
+lw_isalu : op ? ((asm_infix_signed ' op~) ' form) == `alu`
+`表に無い綴り（%・ビット演算など）は段2へ渡さずここで名指しする`
+lw_one : [~ts] i j o tl tr [~ps] p ?
+	(ts ' o) == `==` : lw_1 (`! op ` (ts ' o))
+	(ts ' o) == `!==` : lw_1 (`! op ` (ts ' o))
+	!((lw_iscond (ts ' o)) | (lw_isalu (ts ' o))) : lw_1 (`! op ` (ts ' o))
+	(lw_iscond (ts ' o)) & ((lw_unit1 ts i o) | (lw_unit1 ts (o + 1) j)) : lw_1 `! unit-compare`
+	(lw_x ts i o tl ps 0 p)~ , (lw_x ts (o + 1) j tr ps 0 p)~ , (`O ` (ts ' o))
+
+`--- 並置：部分集合では飽和した呼び出しだけ。頭の名前を最後に置く ---`
+lw_j : [~ts] i j [~ps] tc p ? lw_jk ts i j (end_of ts i (juxt_tier + 1)) ps tc p
+`頭は1語の既知の関数で、引数の数が仮引数の数と合うときだけ呼び出しにする。`
+`頭が塊（n * fact (n - 1) の n * fact）なら、最初の1語だけ拾うと * fact が黙って消える`
+lw_jk : [~ts] i j k [~ps] tc p ?
+	k = j : lw_x ts i j (juxt_tier + 1) ps tc p
+	k != (i + 1) : lw_1 (`! head ` (ts ' i))
+	lw_find ps 0 (ts ' i) : lw_1 (`! head ` (ts ' i))
+	(lw_arity p 0 (ts ' i)) < 0 : lw_1 (`! head ` (ts ' i))
+	(lw_arity p 0 (ts ' i)) != (lw_nargs ts k j 0) : lw_1 (`! arity ` (ts ' i))
+	(lw_args ts k j ps p)~ , (lw_call ts i (lw_nargs ts k j 0) tc)
+
+`仮引数の数。定義の文が無ければ -1（__ を返すと次の呼び出しが完全性公理で消える）`
+lw_arity : p i w ?
+	i >= ||p|| : 0 - 1
+	lw_arity_st (lw_stoks p i) p i w
+lw_arity_st : [~ts] p i w ?
+	((ts ' 0) == w) & ((ts ' 1) == `:`) & (lw_find ts 2 `?`) : (lw_find ts 2 `?`) - 2
+	lw_arity p (lw_next p i) w
+lw_args : [~ts] k j [~ps] p ?
+	k >= j : __
+	(lw_x ts k (end_of ts k (juxt_tier + 1)) (juxt_tier + 1) ps 0 p)~ , (lw_args ts (end_of ts k (juxt_tier + 1)) j ps p)~
+lw_nargs : [~ts] k j n ?
+	k >= j : n
+	lw_nargs ts (end_of ts k (juxt_tier + 1)) j (n + 1)
+lw_call : [~ts] i n tc ?
+	tc = 1 : `J ` (dec n) ` ` (ts ' i)
+	`C ` (dec n) ` ` (ts ' i)
+
+`--- 葉 ---`
+lw_leaf : w [~ps] tc p ?
+	w == `__` : lw_1 `U`
+	(w ' 0) = \( : lw_e (tokens (w ' (1 ~ (||w|| - 2)))) ps tc p
+	(w ' 0) = blk_open : lw_blk (w ' (1 ~ (||w|| - 2))) ps tc p
+	((digit_run w 0) = ||w||) & (lw_big w) : lw_1 (`! big ` w)
+	(digit_run w 0) = ||w|| : lw_1 (`N ` w)
+	lw_find ps 0 w : lw_1 (`P ` (dec (lw_find ps 0 w)))
+	(lw_cst p 0 w)~ , `X`
+lw_e : [~ts] [~ps] tc p ? lw_x ts 0 ||ts|| 2 ps tc p
+
+`Int の上限（2^63 - 1）を越える字面。19 桁なら頭の 18 桁で比べる（18 桁は必ず収まる）`
+`——digit_num は回るので、越えた値を読んでから比べることはできない`
+lw_big : w ?
+	||w|| > 19 : w
+	||w|| < 19 : __
+	(digit_num (w ' (0 ~ 17)) 0 0) > 922337203685477580 : w
+	((digit_num (w ' (0 ~ 17)) 0 0) = 922337203685477580) & (((w ' 18) - zero_ch) > 7) : w
+	__
+
+`--- 定数：字面から k : 値 の文を探して中身を撒く ---`
+lw_cst : p i w ?
+	i >= ||p|| : lw_1 (`! ` w)
+	lw_cst_st (lw_stoks p i) p i w
+lw_cst_st : [~ts] p i w ?
+	((ts ' 0) == w) & ((ts ' 1) == `:`) : lw_pure (lw_x ts 2 ||ts|| 2 lw_none 0 p) 0
+	lw_cst p (lw_next p i) w
+
+`呼び出しを含む定数は .data に一度だけ置く形（部分集合の外）。撒くと呼ぶ回数が変わる`
+lw_pure : il i ?
+	i >= ||il|| : il
+	((il ' i) ' 0) = \C : lw_1 `! call-in-const`
+	lw_pure il (i + 1)
+
+`--- 字下げのブロック：行ごとに ---`
+lw_blk : b [~ps] tc p ?
+	lw_find (lw_stoks b 0) 0 `:` : `M` , (lw_lines b 0 ps tc p)~ , `Z`
+	lw_e (tokens b) ps tc p
+lw_lines : b i [~ps] tc p ?
+	i >= ||b|| : __
+	(lw_line (lw_stoks b i) ps tc p)~ , (lw_lines b (lw_next b i) ps tc p)~
+lw_line : [~ts] [~ps] tc p ?
+	lw_find ts 0 `:` : lw_arm ts (lw_find ts 0 `:`) ps tc p
+	`W` , (lw_val ts 0 ||ts|| ps tc p)~
+lw_arm : [~ts] c [~ps] tc p ? `A` , (lw_x ts 0 c 2 ps 0 p)~ , `T` , `W` , (lw_val ts (c + 1) ||ts|| ps tc p)~ , `E`
+lw_val : [~ts] i j [~ps] tc p ?
+	((j - i) = 1) & ((ts ' i) == `__`) : lw_1 `V`
+	lw_x ts i j 2 ps tc p
+
+`--- 文：関数・定数・式 ---`
+lw_fn : [~ts] q p ? lw_fn2 (ts ' 0) (q - 2) (lw_x ts (q + 1) ||ts|| 2 (ts ' (2 ~ (q - 1))) 1 p)
+lw_fn2 : name k b ? (`F ` (dec k) ` ` name) , b~ , (lw_rq (b ' (||b|| - 1)))
+lw_rq : t ?
+	(t ' 0) = \J : `Q`
+	`R`
+lw_fst : [~ts] p ?
+	((ts ' 1) == `:`) & (lw_find ts 2 `?`) : lw_fn ts (lw_find ts 2 `?`) p
+	__
+lw_mst : [~ts] p ?
+	((ts ' 0) ' 0) = quote : __
+	((ts ' 1) == `:`) & (lw_find ts 2 `?`) : __
+	(ts ' 1) == `:` : (lw_x ts 2 ||ts|| 2 lw_none 0 p)~ , `S`
+	(lw_x ts 0 ||ts|| 2 lw_none 0 p)~ , `S`
+lw_fns : p i ?
+	i >= ||p|| : __
+	(lw_fst (lw_stoks p i) p)~ , (lw_fns p (lw_next p i))~
+lw_main : p i ?
+	i >= ||p|| : __
+	(lw_mst (lw_stoks p i) p)~ , (lw_main p (lw_next p i))~
+lw_prog : p ? (lw_fns p 0)~ , `G` , (lw_main p 0)~ , `D`

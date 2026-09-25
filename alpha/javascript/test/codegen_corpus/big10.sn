@@ -1,0 +1,40 @@
+f0 : a b ?
+	a < 1 : b
+	a + (f0 (a - 1) b)
+f1 : a b ?
+	a > b : (f0 (a - b) b) + 1
+	a = b : f0 a b
+	f1 (a + 1) b
+f2 : a b ?
+	a > b : (f1 (a - b) b) + 2
+	a = b : f1 a b
+	f2 (a + 2) b
+f3 : a b ?
+	a > b : (f2 (a - b) b) + 3
+	a = b : f2 a b
+	f3 (a + 3) b
+f4 : a b ?
+	a > b : (f3 (a - b) b) + 4
+	a = b : f3 a b
+	f4 (a + 4) b
+f5 : a b ?
+	a > b : (f4 (a - b) b) + 5
+	a = b : f4 a b
+	f5 (a + 5) b
+f6 : a b ?
+	a > b : (f5 (a - b) b) + 6
+	a = b : f5 a b
+	f6 (a + 6) b
+f7 : a b ?
+	a > b : (f6 (a - b) b) + 7
+	a = b : f6 a b
+	f7 (a + 7) b
+f8 : a b ?
+	a > b : (f7 (a - b) b) + 8
+	a = b : f7 a b
+	f8 (a + 8) b
+f9 : a b ?
+	a > b : (f8 (a - b) b) + 9
+	a = b : f8 a b
+	f9 (a + 9) b
+f9 100 3
