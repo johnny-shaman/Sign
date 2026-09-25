@@ -1,0 +1,39 @@
+`lexer.snt — lexer.sn の契約`
+`条文は 名前 : 実際 == 期待（真なら左辺、偽なら __）。__ を期待するなら 名前 : !(実際)`
+`ここに書いた呼び出しが lexer.sn の関数の使われ方になり、型はそこから決まる`
+
+`lexer.sn`@~
+
+`--- 空白 ---`
+space_is_space : (is_space space) == space
+tab_is_space : (is_space tab) == tab
+cr_is_space : (is_space cr) == cr
+letter_is_not_space : !(is_space \a)
+
+`--- 括り。字下げの印（STX / ETX）も括りである ---`
+paren_opens : (open_br \() == \(
+block_opens : (open_br blk_open) == blk_open
+letter_does_not_open : !(open_br \a)
+bracket_closes : (close_br \]) == \]
+block_closes : (close_br blk_close) == blk_close
+
+`--- 文字列の保護。閉じるバッククォートまで取る／捨てる ---`
+quote_taken : (take_quote (`ab` quote `cd`)) == (`ab` quote)
+quote_dropped : (drop_quote (`ab` quote `cd`)) == `cd`
+
+`--- 語の切り出し。深さ 0 の空白だけが語を切る ---`
+word_to_space : (take_word 0 `ab cd`) == `ab`
+word_keeps_group : (take_word 0 `(a b) c`) == `(a b)`
+word_keeps_string : (take_word 0 (quote `a b` quote ` x`)) == (quote `a b` quote)
+word_keeps_escape : (take_word 0 (escape space `a b`)) == (escape space `a`)
+rest_after_word : (drop_word 0 `ab cd`) == ` cd`
+space_dropped : (drop_space `  ab`) == `ab`
+
+`--- 字句解析本体。括りは中へ降りずに丸ごと1語 ---`
+four_words : (tokens `foo 123 + bar42`) == [`foo` , `123` , `+` , `bar42`]
+group_is_one_word : (tokens `f (a b) c`) == [`f` , `(a b)` , `c`]
+string_is_one_word : (tokens (quote `a b` quote ` x`)) == [(quote `a b` quote) , `x`]
+block_is_one_word : (tokens (`f ` blk_open `x + 1` blk_close)) == [`f` , (blk_open `x + 1` blk_close)]
+word_count : ||tokens `a b c`|| == 3
+empty_is_unit : !(tokens ``)
+only_spaces_is_unit : !(tokens `   `)
