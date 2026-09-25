@@ -1206,14 +1206,37 @@ function arithOnValues(name, l, r, resultType) {
   // **どちらが文字でも同じ道である。** `Char` は `Int` と同じ値なので、順序で答えが
   // 変わる理由が無い。以前は左辺しか見ておらず、`\a + 1` は "b" なのに `1 + \a`
   // が `__` になっていた——右辺の文字が「算術に混ざった非数値」として弾かれていた。
-  if (lc !== null || (rc !== null && typeof l === "number")) {
+  //
+  // **相手が 2^53 を超えても同じ道である。** 文字の道は相手を Number としか見ておらず、BigInt が
+  // 来ると「算術に混ざった非数値」で `__` に落ちていた。数どうしの道が持つ「倍精度の外へ出たら
+  // BigInt で取り直す」もここには無く、`9007199254740991 + (\7 - \0)` 級は丸まった値が出る：
+  //
+  //     9007199254740993 + (0u0035 - 0u0030)     解釈 __ ／機械 9007199254740998
+  //
+  // 字面を数に読む関数（`digit_num`）がちょうど「前の桁 × 10 ＋ 文字の差」なので、16 桁を
+  // 越える即値を Sign で読むとここを踏む。
+  const bigSide = typeof l === "bigint" || typeof r === "bigint";
+  if (lc !== null || (rc !== null && (typeof l === "number" || typeof l === "bigint"))) {
     if (isUnit(r)) return l; // 右辺Unit = 単位元（素通し）
     const lv = lc ?? l;
-    const rv = rc ?? (typeof r === "number" ? r : null);
+    const rv = rc ?? (typeof r === "number" || typeof r === "bigint" ? r : null);
     if (rv === null) return UNIT;
-    const fn = ARITH_OPS[name];
-    if (!fn) return UNIT;
-    const out = fn(lv, rv);
+    let out;
+    if (bigSide) {
+      const fb = BIG_ARITH[name];
+      if (!fb) return UNIT;
+      const ob = fb(toBig(lv), toBig(rv));
+      if (ob === null) return UNIT;
+      out = fromBig(ob);
+    } else {
+      const fn = ARITH_OPS[name];
+      if (!fn) return UNIT;
+      out = fn(lv, rv);
+      if (Number.isInteger(out) && !Number.isSafeInteger(out) && BIG_ARITH[name]) {
+        const exact = BIG_ARITH[name](BigInt(lv), BigInt(rv));
+        if (exact !== null) out = fromBig(exact);
+      }
+    }
     // **左辺が結果の姿を決める。** `Char` と `Int` に強弱は無いので、格子ではなく
     // 左辺優先の規則が働く——`\`a\` + 1` は文字、`1 + \`a\`` は数である。
     if (lc === null) return out;
