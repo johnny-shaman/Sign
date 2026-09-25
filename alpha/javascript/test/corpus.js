@@ -113,7 +113,7 @@ export const CORPUS = [
 	// 分ける小さな走査が乗る。**表だけの枚（`operator_table.sn`）と歩く枚（`preprocess.sn`）の
 	// 中間**で、その両方の代金がこの1枚に立っている——`.rodata` に行く表と、`s ' i` で歩く
 	// match_case の鎖である。`target_info_sn.test.js` が JS 側と答えを突き合わせる。
-	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1303, plain: 2063 }, digest: { full: "35e939071f071c38", plain: "873aaf3a3e0ec287" } },
+	{ rel: "alpha/sign/target_info.sn", front: 0, asm: [], insn: { full: 1299, plain: 2059 }, digest: { full: "84509028dcf43542", plain: "797b248cccc5006b" } },
 	// 値の置き方と渡し方。型の名前と数だけで答えられる問い（渡し方の表・構造体の詰め方・番地の域）を
 	// `layout.js` から移した枚で、`target_info.sn` を取り込んで幅を引く。表を引く枝と、直和の綴りを
 	// 1文字ずつ歩く枝と、平行2本の数の列を歩く枝が同居する。`layout_sn.test.js` が JS 側と答えを突き合わせる。
@@ -121,7 +121,8 @@ export const CORPUS = [
 	// 末尾の `b` が2つ、`bl`＋出口の着地に変わった（4347 → 4334）。追記で呼ばれると出口を飛ばした
 	// 器が宛先に無かった形で、ここでは直に呼ばれていたので値は元から合っていた（layout_sn は同じ答え）。
 	// 同日：比較の右辺が `__` になり得るとき吸収する2命令が入った（4334 → 4369。parser・emit・target_info も同じ理由）。
-	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4369, plain: 6920 }, digest: { full: "f815faf27fd275a7", plain: "c7194628b394cac9" } },
+	// 2026-09-26：文字が左辺の比較から 0/1 の規則（3命令）を外した（4369 → 4361、target_info も 1303 → 1299）。
+	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4361, plain: 6912 }, digest: { full: "0d24a8f3d5d83e5d", plain: "e3c93ab9c4572b28" } },
 	{
 		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
 		front: 0,

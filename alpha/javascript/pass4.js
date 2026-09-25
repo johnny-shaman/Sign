@@ -1995,7 +1995,17 @@ function genExpr(node, env, em, scope, tail = false) {
 		//
 		// 実プログラムで比較の 72 箇所中このぶんが 3 命令ずつ減る。
 		const eqOnly = n.name === "assign_equal";
-		if (!eqOnly) {
+		// **0/1 の規則は左辺が数のときだけ**（comparison.md §2.1、解釈器の isArithmeticUnitElement）。
+		// 文字の 0 と 1 は算術の単位元ではない。型を見ずに掛けていたので、数字の文字を引き算で作った
+		// 値（`(s ' i) - zero_ch`）が左辺に来ると、真のとき右辺が返っていた：
+		//
+		//     0 + ((0u0031 - 0u0030) < 0u0035)     解釈 1 ／機械 53
+		//
+		// 条件の位置なら真偽は変わらないので見えず、値として使ったときだけ割れる。型が付いていない
+		// ときは今まで通り掛ける（解釈器も型の無い経路では値で見る）。
+		const leftT = n.left && n.left.atomType;
+		const unitRule = !eqOnly && (!leftT || leftT === "Int" || leftT === "Address");
+		if (unitRule) {
 			// 左辺が 0 か 1 か（算術単位元、comparison.md §2.1）。
 			em.emit(`cmp ${SCRATCH[0]}, #0`, "左辺は加法単位元か");
 			em.emit(`ccmp ${SCRATCH[0]}, #1, #4, ne`, "違えば乗算単位元か");
@@ -2007,7 +2017,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
 		em.emit(`cmp ${SCRATCH[0]}, ${SCRATCH[1]}`, `${n.op}`);
 		const cond = emitAddressIntCondition(n, em) || asmOf(n.name).gpr[unsignedCompare(n, em.conf, env) ? "unsigned" : "signed"];
-		em.emit(`csel ${SCRATCH[0]}, ${eqOnly ? SCRATCH[0] : "x11"}, x12, ${cond}`, "真なら値、偽なら __");
+		em.emit(`csel ${SCRATCH[0]}, ${unitRule ? "x11" : SCRATCH[0]}, x12, ${cond}`, "真なら値、偽なら __");
 		// **右辺の `__` も吸収する**（比較族は両辺とも吸収元、operator_table.md の Unit 欄）。
 		//
 		// 左辺の `__` は上の並びで勝手に niche へ落ちる（候補が左辺そのものか niche しか無い）。
@@ -6487,6 +6497,19 @@ function genIndex(node, env, em, scope) {
 		}
 	}
 
+	// **文字の添字は位置ではない。** 解釈器は1文字を鍵と読み（`s ' k` の鍵の位置）、名前付きの欄が
+	// 無い器では `__` を返す。機械は符号位置をそのまま位置として読んでいた——診断ゼロで割れる：
+	//
+	//     f : [~s] a b ? s ' (a - b)
+	//     f `abc` 0u0062 0u0061       解釈 __ ／機械 98（'b'）
+	//
+	// 鍵で引く道はまだ無いので、黙った値を出すより名指しで断る。
+	{
+		const ixNode = unwrap(isSlice ? idx.left : idx);
+		if (!bounded && ixNode && ixNode.atomType === "Char") {
+			return em.fail(node, "文字の添字はまだ出せません（位置の添字は Int——文字は鍵の位置と読まれ、名前付きの欄が無い器では __ になる）");
+		}
+	}
 	// 添字そのもの（スライスなら起点）を積む。終端の有る形は起点がリテラルなので直に置く
 	// ——`(i ~+ 1)` をそのまま出すと規則（2本）になってしまう。
 	let iw;
@@ -6576,6 +6599,15 @@ function genIndex(node, env, em, scope) {
 		// `{ptr + i×幅, len - i}`。**同じ領域を指したまま頭と長さをずらす**——コピー無し。
 		em.load(SCRATCH[0], co, "ptr");
 		em.load(SCRATCH[1], io, "起点");
+		// **均しても負のままの起点は先頭から**（器の `' -9~` と同じ、解釈器もそう読む）。要素を読む
+		// 枝は符号なし比較が `__` にしてくれるが、切り出しには比較が無い——起点が器の手前を指し、
+		// 長さは `len − 起点` で増える。器の外を読んだ値がもっともらしく返っていた：
+		//
+		//     ||`abc` ' (0 - 9)~~||      解釈 3 ／機械 9（ptr は器の 6 バイト手前）
+		if (!knownNonNegative) {
+			em.emit(`cmp ${SCRATCH[1]}, #0`, "均しても負か");
+			em.emit(`csel ${SCRATCH[1]}, ${SCRATCH[1]}, xzr, ge`, "なら先頭から");
+		}
 		em.emit(`add ${SCRATCH[0]}, ${SCRATCH[0]}, ${SCRATCH[1]}${w === 1 ? "" : `, lsl #${Math.log2(w)}`}`, `${w} byte × 起点`);
 		em.store(SCRATCH[0], co, "残りの ptr");
 		em.load(SCRATCH[0], co + 8);
