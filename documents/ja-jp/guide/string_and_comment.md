@@ -198,7 +198,7 @@ text  : `Line 1` \
 hello : `Hello`
 
 ` 個別コードポイントとしてアクセス
-h : `hello` ' 0   ` → \h（0u48）
+h : `hello` ' 0   ` → \h（0u0068）
 ```
 
 ---

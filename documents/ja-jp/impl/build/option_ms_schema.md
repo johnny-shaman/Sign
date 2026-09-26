@@ -128,7 +128,7 @@ link     : dynamic
 > | `42`, `-1`（整数） | `Int` | 0以上 |
 > | `0x00`, `0xFF`（アドレス） | `Address` | 0以上 |
 > | `0r00`（bit列） | raw binary | 0以上 |
-> | `0u0000`（Unicode） | Unicode | 0以上 |
+> | `0u0000`（Unicode） | `Char` | 0以上 |
 > | `` `text` ``（文字列） | `String`（= `List(0u)`） | 0以上 |
 > | `3.14`, `1.0`（小数点あり） | `Float` | **2以上** |
 > | `[1.0 2.0 ...]`（SIMD指定） | `Vector` | **3以上** |
