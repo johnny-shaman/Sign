@@ -37,6 +37,7 @@
  */
 
 import { inferLambdaParamTypes, pointfreeSignature, IDENTITY } from "./pass3.js";
+import { paramTypeOf } from "./pass1.js";
 // ノードの形を見るだけの述語と、名前の綴りを剥ぐ規則は layout.js が唯一の置き場である
 // （理由はそこの `isDefineNode` のコメント）。`bareName` は `<name>` → `name`——識別子
 // トークンは常に山括弧で囲まれている（pass1 の判定基準と同じ）。ここで渡す名前は
@@ -115,8 +116,23 @@ function collectFieldRequirements(bodyNode, paramNames) {
 
 // 仮引数1つ分の型表記を作る。フィールド要求が集まっていればそれを優先する
 // （`{x, y}` は「少なくとも x, y を持つ構造体」という構造的な要求）。
-function paramTypeText(entry, usageTypes, fieldReqs) {
+/**
+ * **pass4 が渡し方を決める型を、そのまま書く。** 出どころは `paramTypeOf`（呼び出し側の型 → 無ければ
+ * 束縛）で、pass4 の `paramRegWidths` と同じ関数である。型は使われ方（テスト・呼び出し側）が決める
+ * （利用者 2026-09-26）ので、使われ方で決まった型は多相の下限（`Atom`）や形（`[s~]`）より多くを
+ * 言っている。以前は使い方だけから推していて、`[~s]` が String であることも要素の型も書かず、
+ * pass4 が知っている型との食い違いは全部「`.ist` の方が知らない」向きだった。
+ * `Container` は「器である」としか言わないので、形より弱い——書かない（null）。
+ */
+function knownTypeText(pt) {
+  if (!pt || !pt.atomType || pt.atomType === "Container") return null;
+  if (pt.atomType === "List" && pt.elementType && pt.elementType !== "Atom") return `List(${pt.elementType})`;
+  return pt.atomType;
+}
+
+function paramTypeText(entry, usageTypes, fieldReqs, known = null) {
   if (entry.pattern) {
+    if (known) return known;
     // ブラケット分割代入パターン。実引数は1個で、その中身が分解される。器の型は rest
     // ——`[h ~t]` の `t` が残りの集合そのものだからである（pass3 の inferLambdaParamTypes）。
     // 型が分かればそれを書き、分からないときだけ形を書く。
@@ -132,6 +148,7 @@ function paramTypeText(entry, usageTypes, fieldReqs) {
   }
   const fields = fieldReqs.get(entry.name);
   if (fields && fields.size > 0) return `{${[...fields].sort().join(", ")}}`;
+  if (known && !entry.rest) return known;
   const inferred = usageTypes.get(entry.name);
   if (inferred) return entry.rest ? `${inferred}~` : inferred;
   // 裸の仮引数（rest でもブラケット分割代入でもない）は**1個の値**を受ける。集合を受け取る
@@ -367,7 +384,7 @@ function lambdaSignature(rhs) {
   // 分かればそれが**スロットの型**である。分からないときだけ形を書く——形は「まだ型が
   // 分かっていない」ときの記述であって、裸の仮引数における `Atom` と同じ位置にある。
   const restEntry = wholeBracket ? entries.find((e) => e.rest && e.name) : null;
-  let containerType = restEntry ? usageTypes.get(restEntry.name) : null;
+  let containerType = (restEntry && knownTypeText(paramTypeOf(rhs, 0, restEntry.name))) || (restEntry ? usageTypes.get(restEntry.name) : null);
   // **`Container` は形より弱い。** 「器である」としか言っていないのに対し、形は「器で
   // あり、こう分解する」まで言う。多くを言っている方を書く。
   if (containerType === "Container") containerType = null;
@@ -380,7 +397,7 @@ function lambdaSignature(rhs) {
   }
   const params = wholeBracket
     ? [containerType || `[${entries.map((e) => bareName(e.name) + (e.rest ? "~" : "")).join(" ")}]`]
-    : entries.map((e) => paramTypeText(e, usageTypes, fieldReqs));
+    : entries.map((e, i) => paramTypeText(e, usageTypes, fieldReqs, knownTypeText(paramTypeOf(rhs, i, e.pattern ? (e.pattern.find((p) => p.rest && p.name) || {}).name : e.name))));
   // 返値型は本体ノードの Layer 2 型そのもの。Lambda 自身は Layer 1 のカテゴリであり
   // Layer 2 型を持たないが（§2）、本体は値を作るので型を持つ。
   // **ここに値は載せない。** 載せるのはデータ（束縛とスロット）であって、シグネチャの

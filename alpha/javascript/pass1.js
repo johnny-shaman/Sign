@@ -329,6 +329,27 @@ function envLookupScope(env, id) {
   return null;
 }
 
+/**
+ * **仮引数の型は、呼び出し側で決まった型が先、無ければ束縛の型。**
+ *
+ * 型は使われ方が決める（利用者 2026-09-26：テストは契約の条文で、書かれた意図が型を決める）。
+ * 呼び出し側の型は pass3 が `callsiteParamTypes` に集め、分割代入した名前や `[~x]` の器の型は
+ * ラムダのスコープの束縛にしか無い。pass4 の渡し方（`paramRegWidths`）と `.st`／`.ist` の署名
+ * （st.js）が**同じ所から引く**ための1つの関数——別々に引いていたので、`.ist` は pass4 が知って
+ * いる型（`[~s]` が String であること、要素の型）を書いていなかった。
+ *
+ * @returns {{ atomType, elementType, repr }} 決まらない欄は null。
+ */
+function paramTypeOf(lambdaNode, idx, name) {
+  const fromCall = lambdaNode && lambdaNode.callsiteParamTypes ? lambdaNode.callsiteParamTypes[idx] : undefined;
+  const b = name && lambdaNode && lambdaNode.scope ? envLookup(lambdaNode.scope, name) : null;
+  return {
+    atomType: fromCall ?? (b ? b.atomType : null) ?? null,
+    elementType: (b && b.elementType) || null,
+    repr: (b && b.repr) || null,
+  };
+}
+
 // 後方互換: 従来の buildEnv(lines) はトップレベルの env（parent:null）を返す
 function buildEnv(lines) {
   return childEnv(lines, null);
@@ -344,4 +365,4 @@ function bindEnv(names, parent) {
   return { bindings, parent: parent || null };
 }
 
-export { buildEnv, buildEnvScope, childEnv, envLookup, envLookupScope, bindEnv, literalAtomType, isFlatLine, EXPORT_MARKERS };
+export { buildEnv, buildEnvScope, childEnv, envLookup, envLookupScope, paramTypeOf, bindEnv, literalAtomType, isFlatLine, EXPORT_MARKERS };

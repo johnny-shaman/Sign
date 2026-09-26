@@ -36,7 +36,7 @@
  */
 
 import { reduceToMachineType, widthsOf, UNIT_NICHE_ASM, charSizeOf, charLimitOf, DEFAULT_CHARSET, SIGNEDNESS, literalDigits, literalParts } from "./target_info.js";
-import { envLookup } from "./pass1.js";
+import { envLookup, paramTypeOf } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
 import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, productSlotNodes, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName, addressWithoutArrow } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
@@ -10274,8 +10274,8 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 	});
 	// 型は2つの経路から来る。裸の仮引数は呼び出しサイトからの逆算（`callsiteParamTypes`）、
 	// 分割代入された名前はラムダのスコープに直接ある——`[h ~t]` の `h` と `t` は仮引数の
-	// 位置に名前が無いので、束縛の側にしか書いていない。
-	const allTypes = lambdaNode.callsiteParamTypes || [];
+	// 位置に名前が無いので、束縛の側にしか書いていない。仮引数そのものの型は `paramTypeOf`
+	// （pass1.js）が両方を順に引く——`.st`／`.ist` の署名も同じ関数を通る。
 	// **束縛は直接の Map ではなく `envLookup` で引く。** `[c ~rest]` の `c` はラムダの
 	// スコープの Map に直接は載らない（載るのは器を受ける `rest` だけ）が、束縛としては
 	// 解決されている。Map を覗くと「型が無い」に見えて、要素の幅が決まらなくなる。
@@ -10309,14 +10309,14 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 				// 型が**決まっているとき**だけ型に従う。`slotsOf` は未注釈を 1 とみなすので、
 				// そのまま渡すと器が1本になってしまう——宣言が「器である」と言っている
 				// 以上、決まらないなら要素の並び（2本）として扱う方が宣言に忠実である。
-				const t = allTypes[idx] ?? typeOf(sh.name);
+				const t = paramTypeOf(lambdaNode, idx, sh.name).atomType;
 				return { shape: sh, regs: t ? slotsOf(t, em.conf) ?? 2 : 2, cell: cellOf(sh.name, t) };
 			}
 			// **束縛が実体の種類を知っている場合がある。** 規則を受ける仮引数（`f : c ? c ' 3`
 			// を `f [0 ~+ 1]` と呼ぶ形）は、型が `Iterator` でも運ぶのは `{start, step}` の
 			// 2本であって参照ではない。型だけを見ると渡し方が決まらない。
-			const b = lambdaNode.scope ? envLookup(lambdaNode.scope, sh.name) : null;
-			const view = { atomType: allTypes[idx] ?? (b && b.atomType), repr: b && b.repr, elementType: b && b.elementType };
+			// 型の出どころは .st／.ist の署名と同じ関数（呼び出し側の型 → 無ければ束縛）。
+			const view = paramTypeOf(lambdaNode, idx, sh.name);
 			const w = slotsOfNode(view, em.conf, lambdaNode.scope);
 			if (w === null) return { shape: sh, error: `仮引数 ${bareName(sh.name)} の渡し方が決まりません（直和か族）` };
 			// **規則かどうかは入口の判定を変える。** 尽きているかを `len` で見るか

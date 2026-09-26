@@ -239,7 +239,7 @@ check("ブラケットにも付けない", entries("f : [a ~b] ? a"), ["f : [a b
 check("デフォルトが整数なら Int", entries("f :\n\tx\n\ty : 1\n? y"), ["f : Atom Int -> Int"]);
 check("デフォルトが実数なら Float", entries("f :\n\tx\n\ty : 1.0\n? y"), ["f : Atom Float -> Float"]);
 check("デフォルトが1文字なら Char", entries("f :\n\tx\n\ty : \\s\n? y"), ["f : Atom Char -> Char"]);
-check("デフォルトがリストなら List", entries("f :\n\tx\n\ty : [1 2 3]\n? y"), ["f : Atom List -> List"]);
+check("デフォルトがリストなら List", entries("f :\n\tx\n\ty : [1 2 3]\n? y"), ["f : Atom List(Int) -> List"]);
 check("デフォルトは使用箇所より優先する（値は Int、式が Float へ昇格）", entries("f :\n\ty : 1\n? y + 0.0"), [
 	"f : Int -> Float",
 ]);
@@ -510,7 +510,7 @@ check("撒く形でも器だと分かる", entries("f : st d ? d st~"), ["f : Co
 // 落ちていた実害は器を返す再帰（写像）に出ていた。「並べるものの幅」が決まらないので
 // sret の計画が立たず、`List` を返す写像だけが出せなかった——`String` は型名に要素が
 // 入っている（`≅ List(Char)`）ので偶然通っていた。
-check("器の実引数で要素型まで狭まる", entries("f : st ? st ' 0\nf [1 2 3]"), ["f : List -> Int"]);
+check("器の実引数で要素型まで狭まる", entries("f : st ? st ' 0\nf [1 2 3]"), ["f : List(Int) -> Int"]);
 // **丸ごと受ける形（`[~st]`）にも呼び出しサイトの型が届く。**
 //
 // `[c ~rest]` の分解は実引数1個を割るので位置と名前が1対1にならないが、`[~st]` は
@@ -518,9 +518,10 @@ check("器の実引数で要素型まで狭まる", entries("f : st ? st ' 0\nf 
 // 「分解だから位置が対応しない」と読んでいたため、`push : [~st] d ?` の `st` に型が
 // 届かず、渡し方が「器か分からないので1本」になっていた——呼ぶ側は器（2本）で渡すので
 // 幅が食い違う。**宣言を正しく書いた方が弱くなる**という逆転である。
-// `.st` は仮引数を**書かれた形**で書き写すので、表示は `[st~]` のままである（何を受ける
-// かは書き手が宣言している）。届いているかは返値と、Pass 4 が渡し方を決められるかで見る。
-check("丸ごと受ける形も書かれた形で写す", entries("f : [~st] d ? d st~\nf [1 2] 9"), ["f : [st~] Int -> List(Int)"]);
+// 以前は `.st` が仮引数を**書かれた形**で写していた（`[st~]`）。型は使われ方が決める
+// （利用者 2026-09-26）ので、使われ方で型が決まったなら型で書く——pass4 が渡し方を決める型と
+// 同じ関数（`paramTypeOf`）から引く。形へ落ちるのは決まらなかったときだけ。
+check("丸ごと受ける形も、型が決まれば型で書く", entries("f : [~st] d ? d st~\nf [1 2] 9"), ["f : List(Int) Int -> List(Int)"]);
 check("文字列の実引数で狭まる", entries("f : s ? s ' 0\nf `abc`"), ["f : String -> Char"]);
 // **スカラーだけで呼ばれるなら、本当に長さ1である**（`[5] ≅ 5`）。使い方が同じでも器だと
 // 決めてはいけない——`f : n ? n ' 0` を `f 5` と呼ぶ形と構文が同じであり、違うのは表現
@@ -537,9 +538,11 @@ check("スカラーだけなら持ち上げない", entries("f : st ? st ' 0\nf 
 // おらず、`[~ts]` 1つだけの形は別の経路が通るので偶然動いていた。結果、宣言した方が
 // 裸で書くより弱いという逆転が起きていた——`f : a [~ts] ?` の `ts` は要素型を持ちながら
 // 器の型が `null` だった。
-check("[~ts] 単独", entries("f : [~ts] ? ts ' 0\nf [1 2 3]"), ["f : [ts~] -> Int"]);
-check("[~ts] が他の仮引数と並ぶ", entries("f : a [~ts] ? ts ' a\nf 0 [1 2 3]"), ["f : Int [ts~] -> Int"]);
-check("[~ts] が文字列を受ける", entries("f : a [~ts] ? ts ' a\nf 0 `abc`"), ["f : Int [ts~] -> Char"]);
+// 本文の言うとおり、書けば要素の型まで決まる——以前の golden は形（`[ts~]`）のままで、本文と
+// 食い違っていた（`.ist` が pass4 の知っている型を書いていなかった穴）。
+check("[~ts] 単独", entries("f : [~ts] ? ts ' 0\nf [1 2 3]"), ["f : List(Int) -> Int"]);
+check("[~ts] が他の仮引数と並ぶ", entries("f : a [~ts] ? ts ' a\nf 0 [1 2 3]"), ["f : Int List(Int) -> Int"]);
+check("[~ts] が文字列を受ける", entries("f : a [~ts] ? ts ' a\nf 0 `abc`"), ["f : Int String -> Char"]);
 
 // ---- 構造体は名前で分ける（`[key1 key2 ~it]`）----
 //
@@ -724,7 +727,7 @@ check("上がらなかった種は Unit と言わない", entries("f : [x ~xs] ?
 // **要素型もそこまで届く。** `xs` は `f` の中では何の器か分からない——中身を決めているのは
 // 実引数である。仮引数をそのまま返す位置を覚えておけば、呼ぶ側で実引数の要素型が読める。
 // これが無いと、器を受け取ってそのまま返す関数の結果に添字が付けられなかった。
-check("呼び出し側から決まる", entries("f : [x ~xs] ? xs\ng : f [1 2 3]"), ["f : [x xs~] -> List", "g : List(Int)"]);
+check("呼び出し側から決まる", entries("f : [x ~xs] ? xs\ng : f [1 2 3]"), ["f : List(Int) -> List", "g : List(Int)"]);
 // 本当に `__` を返すものは `Unit` のままである（種と区別が付いている）。
 check("本当に __ を返すなら Unit", entries("f : x ? __"), ["f : Atom -> Unit"]);
 // 再帰は種を必要とする。底から始めて基底ケースが型を決め、次の周回で再帰の枝へ伝わる。
@@ -743,7 +746,7 @@ check("順序を入れ替えても同じ", entries("f : a b ?\n\ta + 1 : __\n\ta
 // 成員ではない（§4 の記法定義）。スカラーが1要素リストと同型なので、数を「盤」の
 // スロットへ渡すことはできる。両方とも真だが、その仮引数自身の型は数である。
 check("族の外から来た型では上書きしない", entries("g : x y ? y\nf : a b ?\n\ta > b : __\n\tg [1 2] a"), [
-	"g : List Atom -> Atom",
+	"g : List(Int) Atom -> Atom",
 	"f : Scalar Scalar -> Atom",
 ]);
 
@@ -875,7 +878,7 @@ check("器の要素型が分解した先へ届く", entries("f : [h ~t] ? h + 0\
 // サイトごとにスコープを持ち回らないと連鎖が切れる。
 check("何段渡り歩いても要素型が届く", entries("f : [h ~t] ? h + 0\ng : [~xs] ? f xs\nh : g [1 2 3]"), [
 	"f : List(Int) -> Int",
-	"g : List -> Int",
+	"g : List(Int) -> Int",
 	"h : Int",
 ]);
 check("中身が見えていればスロットの型が出る", entries("t : 1 , 2.5\na : t ' 0\nb : t ' 1"), [
@@ -919,7 +922,10 @@ check("適用の結果も要素型を運ぶ", entries("mk : n ? [1 ~ n]\ng : mk 
 //
 // 型が決まっていれば `List(Char)` のように書かれる（形へ落ちるのは決まらなかったとき
 // だけ）ので、括りの形をしていること自体が「決まらなかった」の印である。
-check("形しか書けなければ未解決", holes("f : [~s] ?\n	s ' 0\nf `abc`"), 1);
+// 呼び出しが無ければ形しか書けない。呼び出しがあれば型が決まる（`String`）ので未解決でない
+// ——型は使われ方が決める（2026-09-26）。以前はここに呼び出しのある入力を置いて 1 を期待していた。
+check("形しか書けなければ未解決", holes("f : [~s] ? ||s||"), 1);
+check("呼び出しで型が決まれば未解決でない", holes("f : [~s] ?\n	s ' 0\nf `abc`"), 0);
 check("型が決まれば未解決でない", holes("f : n ? n + 1\nf 1"), 0);
 
 // **仮引数の型を決めるのは呼ぶ側である**（type_system.md §5——呼び出しサイトで実引数の
@@ -935,9 +941,9 @@ check(
 	"器の仮引数は呼ぶ側から決まる",
 	entries("go : [~acc] [~ts] i ?\n	i > 2 : acc\n	go (acc~ , (ts ' i)) ts (i + 1)\ngo [`z` , `w`] [`a`] 0").filter((l) => l.startsWith("go :")),
 	// 返値が `Container`（器としか分からない）から `List` へ上がったのがその証拠である。
-	// **`.st` の表示側にはまだ穴がある**——仮引数は本体の使われ方しか見ないので、束縛に
-	// 載った具体型（`List` / 要素 `Char`）が出ずに形のままになる。そこは別件。
-	["go : [acc~] [ts~] Int -> List"]
+	// 以前は **`.st` の表示側に穴があった**——仮引数は本体の使われ方しか見ず、束縛に載った具体型が
+	// 出ずに形のままだった。pass4 と同じ関数（`paramTypeOf`）から引くようにして塞いだ（2026-09-26）。
+	["go : List(String) String Int -> List"]
 );
 check("文字の端点なら String", entries("upto : c ? [\\a ~ c]"), ["upto : Char -> String"]);
 console.log(`\n${passed}/${total} passed`);
