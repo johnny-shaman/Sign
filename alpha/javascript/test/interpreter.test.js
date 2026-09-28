@@ -331,6 +331,27 @@ check("5.0 / 2 → 2.5（Floatへ昇格するので丸めない）", run("5.0 / 
 check("5 / 2.0 → 2.5（右辺Floatでも昇格）", run("5 / 2.0"), 2.5);
 check("a : 5 / a / 2 → 2（識別子経由のAddress）", run("a : 5\na / 2"), 2);
 check("a : 5.0 / a / 2 → 2.5（識別子経由のFloat）", run("a : 5.0\na / 2"), 2.5);
+// **生の値どうしは2つの数である**（`Int` の法則、利用者の裁定 2026-09-28）。解釈器は機器を読めないので、番地の字面を
+// `@` で読んだ値（番地の数そのもの、layer 0 の生の値の姿）で見る。以前は型が `Raw` のまま残り、倍精度のまま割って
+// 3.5、0 で割って JS の Infinity、溢れても回らなかった——機械は `sdiv` と 64 ビットの `add` である。
+// 値は綴りで比べる（回らなかった値は BigInt で、`check` の表示が JSON にできない）。
+const rawText = (src) => {
+	const v = run(src);
+	return isUnit(v) ? "UNIT" : String(v);
+};
+check("@p / @q → 割り目の丈（7 / 2 は 3）", rawText("x : @0x7\ny : @0x2\nx / y"), "3");
+check("@p / @q の除法の等式（(7/2)*2 + 7%2 は 7）", rawText("x : @0x7\ny : @0x2\n((x / y) * y) + (x % y)"), "7");
+check("@p / @q を 0 で割ると商は 0", rawText("x : @0x7\ny : @0x0\nx / y"), "0");
+check("@p % @q を 0 で割ると剰余は被除数", rawText("x : @0x7\ny : @0x0\nx % y"), "7");
+check("@p + @q は 64 ビットで回る", rawText("x : @0x7FFFFFFFFFFFFFFF\ny : @0x2\nx + y"), "-9223372036854775807");
+check("@p + @q が INT64_MIN へ回ると niche（__）", rawText("x : @0x7FFFFFFFFFFFFFFF\ny : @0x1\nx + y"), "UNIT");
+// 冪も同じ `Int` の法則で 64 ビットに回る（(2^63 - 1)^2 は 2^64 を法として 1）。`Raw` のままだと回らず 2^126 級の BigInt。
+check("@p ^ @q も 64 ビットで回る", rawText("x : @0x7FFFFFFFFFFFFFFF\ny : @0x2\nx ^ y"), "1");
+// **`__` は生の値にも単位元である**（爆発律、裁定 2026-09-28）。値は生の値そのもので、型も `Raw` のまま——以前は `Unit`
+// と型付けされ、次の割り算が数の法則で読まれず倍精度のまま 3.5 だった。
+check("__ + @p は生の値そのもの", rawText("x : @0x7\n__ + x"), "7");
+check("(__ + @p) / @q は割り目の丈", rawText("x : @0x7\ny : @0x2\n(__ + x) / y"), "3");
+check("(@p - __) / @q も割り目の丈", rawText("x : @0x7\ny : @0x2\n(x - __) / y"), "3");
 
 // comparison.md §2.1: 算術単位元(0/1)の判定は数値ドメイン全体が対象。
 // Float も ℝ の体としての単位元を持つため対象に含む（2026-08-09にFloat除外を撤回）。

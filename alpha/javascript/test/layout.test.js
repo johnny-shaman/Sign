@@ -395,8 +395,19 @@ check("Unit は何も渡らない", passVia("u : __"), "register/0");
 		["add", "Raw", "Int", "Int"],
 		["add", "Int", "Raw", "Int"],
 		["div", "Raw", "Char", "Int"],
-		["add", "Raw", "Raw", "Raw"],
-		["add", "Unit", "Raw", "Unit"],
+		// 生の値どうしは2つの数（`Int` の法則、裁定 2026-09-28）。以前は `Raw` のままで、解釈器は倍精度で割っていた
+		["add", "Raw", "Raw", "Int"],
+		["div", "Raw", "Raw", "Int"],
+		["mul", "Raw", "Raw", "Int"],
+		["sub", "Raw", "Raw", "Int"],
+		["mod", "Raw", "Raw", "Int"],
+		["pow", "Raw", "Raw", "Int"],
+		// `__` は生の値にも単位元で、生の値がそのまま残る（爆発律、裁定 2026-09-28）。以前は `Unit`（下の行の期待も `Unit`）
+		["add", "Unit", "Raw", "Raw"],
+		["add", "Raw", "Unit", "Raw"],
+		["mul", "Unit", "Raw", "Raw"],
+		["div", "Raw", "Unit", "Raw"],
+		["pow", "Unit", "Raw", "Raw"],
 		// 文字列の域の射は `*`（連結の n 乗）だけ。数の域に文字列の相手は居ない
 		["mul", "String", "Int", "String"],
 		["mul", "String", "Char", "Unit"],

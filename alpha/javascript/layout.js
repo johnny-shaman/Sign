@@ -1187,7 +1187,7 @@ const ARITH_TYPES = new Set([...NUMERIC_TYPES, "Char", "String", "Unit", "Raw", 
 function arithDomain(name, leftType, rightType) {
   if (!ARITH_TYPES.has(leftType) || !ARITH_TYPES.has(rightType)) return null;
   const t = arithRow(name, leftType, rightType, arithDomain);
-  // 行の無い組（`1 + [2]`・`__ + __`・生の値どうし）は、左辺が規則を選ぶ（§3.2）。
+  // 行の無い組（`1 + [2]`・`__ + __`）は、左辺が規則を選ぶ（§3.2）。生の値どうしは行がある（2つの数、`Int`）。
   return t === undefined ? leftType : t;
 }
 
@@ -1248,8 +1248,12 @@ function arithRow(name, leftType, rightType, reread) {
   //
   // 相手が算術の対象でないとき（String は上で落ちる、List や Implicit は下の規則）は
   // 通り抜けない。代数の中に居ないものは、底から持ち上がる先が無い。
-  if (leftType === "Unit" && (NUMERIC_TYPES.has(rightType) || rightType === "Char")) return rightType;
-  if (rightType === "Unit" && (NUMERIC_TYPES.has(leftType) || leftType === "Char")) return leftType;
+  //
+  // **生の値も通り抜ける**（利用者の裁定 2026-09-28）。生の値は数として読む値なので算術の代数に居て、`__` を足せば
+  // 生の値そのものが残る——型も `Raw` のまま（`__ + @p` も `@p + __` も `Raw`）。以前は下の生の値の行が相手の `Unit`
+  // を取って `Unit` と答え、次の演算が数の法則で読まれなかった（`(__ + @p) / @q` を解釈器が倍精度のまま割った）。
+  if (leftType === "Unit" && (NUMERIC_TYPES.has(rightType) || rightType === "Char" || rightType === "Raw")) return rightType;
+  if (rightType === "Unit" && (NUMERIC_TYPES.has(leftType) || leftType === "Char" || leftType === "Raw")) return leftType;
   if (leftType === "List" || leftType === "Struct") return LIST_ARITHMETIC_OPS.has(name) ? leftType : "Unit";
   // 場所（`Implicit`）とストリーム（`Iterator`）は Scalar ではないので算術の対象にならない
   // （§4: `(L(Scalar) -> R(Scalar)) -> L`）。射が無い＝零射なので `__` へ収束する。
@@ -1292,6 +1296,11 @@ function arithRow(name, leftType, rightType, reread) {
   // 相手の型がまだ分からなければ、取る型も無い（読み直さない）。
   if (leftType === "Raw" && rightType && rightType !== "Raw") return reread(name, rightType === "Char" ? "Int" : rightType, rightType);
   if (rightType === "Raw" && leftType !== "Raw") return leftType;
+  // **生の値どうしは数である**（利用者の裁定 2026-09-28）。生の値は数として読む——読み直す相手の型が両辺とも無いので、
+  // 2つの数として `Int` の法則で読む（機械の `add` のまま回り、割り算は割り目の丈、0 で割れば商 0・剰余は被除数）。
+  // 以前は `Raw` のまま返していたので、解釈器は倍精度の値をそのまま運んでいた——`@p / @q` が 3.5、溢れても回らず、
+  // 0 で割ると JS の Infinity を漏らしていた。
+  if (leftType === "Raw" && rightType === "Raw") return "Int";
   // **強弱があるものだけ格子で決まる。無いものは左辺が決める。**
   //
   // `Vector` と `Float` は精度で本当に上なので、どちら側に来ても昇格する（降格しない）。

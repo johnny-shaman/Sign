@@ -178,6 +178,13 @@ check("@p / \\a → Int", lastType("x : @0x40000000\nx / 0u0061"), "Int");
 check("@p % \\a → Int", lastType("x : @0x40000000\nx % 0u0061"), "Int");
 check("@p ^ \\b → Int", lastType("x : @0x40000000\nx ^ 0u0002"), "Int");
 check("@p + \\a → Int（和と同じ読み）", lastType("x : @0x40000000\nx + 0u0061"), "Int");
+// **生の値どうしは2つの数**（`Int` の法則、裁定 2026-09-28）。以前は `Raw` のまま残り、機械は符号なしで割っていた。
+check("@p / @q → Int", lastType("x : @0x40000000\ny : @0x40000008\nx / y"), "Int");
+check("@p + @q → Int", lastType("x : @0x40000000\ny : @0x40000008\nx + y"), "Int");
+// `__` は生の値にも単位元（爆発律）——生の値が残り、型も `Raw`（以前は `Unit`）。
+check("__ + @p → Raw", lastType("x : @0x40000000\n__ + x"), "Raw");
+check("@p - __ → Raw", lastType("x : @0x40000000\nx - __"), "Raw");
+check("(__ + @p) / @q → Int（生の値どうし）", lastType("x : @0x40000000\ny : @0x40000008\n(__ + x) / y"), "Int");
 checkReasons("\\z - \\a → 診断なし（隔たり）", "0u007A - 0u0061", []);
 // **文字どうしの和は information**（数字の足し算のつもりなら、もっともらしい別の字になる）。
 checkReasons("c + d → 文字どうしの和", "0u0020 + 0u0021", ["char-plus-char"]);

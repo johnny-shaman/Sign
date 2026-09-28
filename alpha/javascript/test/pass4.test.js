@@ -1360,6 +1360,30 @@ f 1`, "f") || [];
 	checkTrue("Int / Int は sdiv 1命令で、0 で割っても命令を足さない", divII.includes("sdiv x9, x9, x10") && !divII.some((l) => /^(csel|cneg|ccmp) /.test(l)), divII.join(" / "));
 	const divPk = body("f : p ? p / 4\nf 0x1000", "f") || [];
 	checkTrue("Address / 非負のリテラル は udiv 1命令", divPk.includes("udiv x9, x9, x10") && !divPk.some((l) => /^(cneg|ccmp|csel) /.test(l)), divPk.join(" / "));
+	// **生の値どうしは2つの数**（`Int` の法則、利用者の裁定 2026-09-28）なので符号付きで割る。以前は型が `Raw` のまま
+	// 残り、符号なしの `udiv` だった（機器が -7 を返すと 9223372036854775804）。
+	const divRR = body("f : p q ? @p / @q\nf 0x40800000 0x40800008", "f") || [];
+	checkTrue("@p / @q は sdiv（生の値どうしは Int）", divRR.some((l) => l.startsWith("sdiv ")) && !divRR.some((l) => l.startsWith("udiv ")), divRR.join(" / "));
+	// **`__` は生の値にも単位元**（爆発律、裁定 2026-09-28）。型は `Raw` のままで、片方が `__` なら相手の値を選ぶ `csel` を
+	// 出す。以前は型が `Unit` で「GPR 幅の整数演算だけを出せます（Unit）」と断っていた。
+	const addUR = body("f : p ? __ + @p\nf 0x40800000", "f") || [];
+	checkTrue("__ + @p は add と爆発律の csel（断らない）", addUR.some((l) => l.startsWith("add ")) && addUR.some((l) => /^csel x\d+, x\d+, x\d+, eq$/.test(l)), addUR.join(" / "));
+	check("__ + @p は診断なし", asm("f : p ? __ + @p\nf 0x40800000").diagnostics.length, 0);
+	const divUR = body("f : p q ? (__ + @p) / @q\nf 0x40800000 0x40800008", "f") || [];
+	checkTrue("(__ + @p) / @q は sdiv（`__` を足しても生の値、生の値どうしは Int）", divUR.some((l) => l.startsWith("sdiv ")) && !divUR.some((l) => l.startsWith("udiv ")), divUR.join(" / "));
+	// **layer 0 で番地に（生の値 ⊕ 生の値）を足す形は、式の途中の値を置く場所が要るので名指しで断る**（生の値どうしが
+	// `Int` になった帰結）。番地 + `Int` の溢れの検査は符号で伸ばす形で、番地 + `Raw`（`adds`・`csel hs`）よりレジスタを
+	// 1本多く使う。以前は出せていたが、黙って別の値を出してはいない——名前に束ねれば出せる（値は qemu.test.js の行が見る）。
+	const stopsAt0 = (src) => {
+		const { nodes, env } = compile(src, { charset: "ascii" });
+		return generateAsm(nodes, env, { target: "aarch64_qemu", charset: "ascii", layer: 0 }).diagnostics.map((d) => d.message);
+	};
+	for (const src of ["0x1000 + ((@0x10) + (@0x18))", "0x1000 + ((@0x10) - (@0x20))", "0x40800000 # 5\n0x40800008 # 7\n0x1000 + ((@0x40800000) - (@0x40800008))"]) {
+		checkTrue(`layer 0: ${JSON.stringify(src)} は _.main のフレームとして名指しで断る`, stopsAt0(src).some((m) => /layer: 0 では _\.main がフレームを要求します/.test(m)), JSON.stringify(stopsAt0(src)));
+	}
+	for (const src of ["x : (@0x10) + (@0x18)\n0x1000 + x", "x : (@0x10) - (@0x20)\n0x1000 + x"]) {
+		checkTrue(`layer 0: ${JSON.stringify(src)}（名前に束ねる）は出せる`, stopsAt0(src).length === 0, JSON.stringify(stopsAt0(src)));
+	}
 
 	// 2^64 を超える番地の字面は存在しない番地なので、niche を置く（下の 64 ビットを置かない）
 	const bigLit = body("0x10000000000000010", "_.main") || [];
