@@ -496,9 +496,18 @@ function identifierBinding(node, env) {
 // §5.4の検査専用。isRealListValueを使い、`(col + 1)`のような単なるグルーピングの括弧を
 // Listと誤判定しない（下のAtom-Atom分岐のpush/concat判定は従来通りisListLikeを直接使う
 // ——あちらは「並置された両辺の構造をどう結合するか」の判断で、意味が異なる）。
+// **文字列も List である**（`String ≅ List(Char)`、coproduct_resolver.md §5.4、利用者の裁定 2026-09-28）。ストリーム形へ
+// `~` 無しで文字列を渡すと、解釈器は文字列を丸ごと `x` に束縛して `xs` を空にし（§5.4 が List で禁じた静かな挙動
+// そのもの）、機械は割って頭を取っていた——`f : x ~xs ? x` / `` f `abc` `` が解釈 "abc" ／機械 'a' で割れていた。
+// 見るのは List と同じく字面（括りで包んだものも）だけである。
+function isTextLiteral(node) {
+  const x = unwrapSoloBlock(node);
+  return !!(x && x.type === "atom" && x.kind === "string");
+}
+
 function listShape(node) {
-  if (isRealListValue(node)) return { isList: true, tilde: false };
-  if (hasPostfixTilde(node) && isRealListValue(node.operand)) return { isList: true, tilde: true };
+  if (isRealListValue(node) || isTextLiteral(node)) return { isList: true, tilde: false };
+  if (hasPostfixTilde(node) && (isRealListValue(node.operand) || isTextLiteral(node.operand))) return { isList: true, tilde: true };
   return { isList: false, tilde: false };
 }
 
@@ -657,7 +666,7 @@ function coproductReduce(a, b, env) {
       const shape = listShape(b);
       if (shape.isList && !shape.tilde) {
         throw new TypeError(
-          `coproduct_resolver.md §5.4違反: 裸のrestパラメータ ('${a.value} ~xs' 形式) を持つ関数に、List を後置 ~ なしで渡すことはできません（意図: 各要素を位置引数に分配するなら 後置~ を付けてください）`
+          `coproduct_resolver.md §5.4違反: 裸のrestパラメータ ('${a.value} ~xs' 形式) を持つ関数に、List や文字列を後置 ~ なしで渡すことはできません（意図: 各要素を位置引数に分配するなら 後置~ を付けてください。文字列は String ≅ List(Char)）`
         );
       }
     }

@@ -41,6 +41,33 @@ const cases = [
 		expectThrow: false,
 		note: "ブラケット形式 ([x ~xs], Eager) は ~ なしの List 渡しが正しい呼び方 → 対象外",
 	},
+	// **文字列も List である**（String ≅ List(Char)、利用者の裁定 2026-09-28）。`~` 無しで渡すと、解釈器は丸ごと x に
+	// 束縛し（xs は空）、機械は割って頭を取る——両エンジンで割れていた。
+	{
+		source: "f : x ~xs ? x\nf `abc`",
+		expectThrow: true,
+		note: "裸のrestパラメータ (x ~xs) に ~ なしで文字列を渡す → TypeError",
+	},
+	{
+		source: "f : x ~xs ? x\nf (`abc`)",
+		expectThrow: true,
+		note: "括りで包んだ文字列も同じ → TypeError",
+	},
+	{
+		source: "f : x ~xs ? x\nf `abc`~",
+		expectThrow: false,
+		note: "文字列に後置~ を付ければ正しく解決される",
+	},
+	{
+		source: "get_age : [x ~xs] ? x\nget_age `abc`",
+		expectThrow: false,
+		note: "ブラケット形式へ ~ なしの文字列 → 対象外",
+	},
+	{
+		source: "f : x ~xs ? x\nf 0u0061",
+		expectThrow: false,
+		note: "文字（1つの値）は位置引数そのもの → 対象外",
+	},
 ];
 
 let passed = 0;
