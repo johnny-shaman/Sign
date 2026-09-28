@@ -64,6 +64,13 @@ check("Float ⊕ Float → Float", lastType("1.5 + 2.5"), "Float");
 // 識別子を経由しても昇格が効くこと（pass1a が読んだ atomType が伝播する）
 check("識別子経由でも昇格する（a:5 / b:1.5 / a + b → Float）", lastType("a : 5\nb : 1.5\na + b"), "Float");
 
+// **`\_` は文字の字面**（`\a` と同じ、裁定 2026-09-28）。前置の `\` に穴を渡した部分適用（型なし）ではない。
+check("\\_ → Char（文字の字面、穴ではない）", lastType("\\_"), "Char");
+check("\\_ に束縛した名前も Char", lastType("x : \\_\nx"), "Char");
+// `$` の実体化も `\_` を1つの実引数として読む（前置の印は pass2 と同じ述語）。
+check("$ で渡した関数に渡した \\_ も Char", lastType("id : c ? c\nap : g x ? @g x\nap $id \\_"), "Char");
+check("$ で渡した関数の \\_ の辺は文字の域（射なしでも Char）", lastType("dv : c ? c / 2\nap : g x ? @g x\n(ap $dv \\_) + 1"), "Char");
+
 // ---- 算術族の型不一致（§3.2、両方向とも __） ----
 check("Int ⊕ String → Unit", lastType("1 + `abc`"), "Unit");
 check("String ⊕ Int → Unit", lastType("`abc` + 1"), "Unit");

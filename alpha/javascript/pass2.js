@@ -43,7 +43,11 @@ const OPERATOR_SYMBOL_RE = /^[!"#$%&'\-=^~|@;+:*,<>/?]+$/;
 
 function isMarkedPrefix(x) {
   // 例: "@_", "!!_"  (末尾が "_"、かつ本体が単なる "_"/"__"ではない)
-  return typeof x === "string" && x !== "_" && x !== "__" && x.endsWith("_") && !x.startsWith("_");
+  //
+  // **`\` で始まる語は文字の字面である**（文法の `charactor = "\\" [^\r]`）。前置の印は文法の `prefix` が付けるもので、
+  // `\` はそこに居ない。`\_` は文字 `_`（U+005F、利用者の裁定 2026-09-28）——ここで「末尾が `_`」だけを見ていたので、
+  // `\_` を前置の `\` に穴を渡した部分適用（関数）と読んでいた（`x : \_` の `x` が関数、機械は「まだ出せない式（escape）」）。
+  return typeof x === "string" && x !== "_" && x !== "__" && x.endsWith("_") && !x.startsWith("_") && !x.startsWith("\\");
 }
 function isMarkedPostfix(x) {
   // 例: "_@", "_~"
@@ -2024,4 +2028,6 @@ function desugarKey(r) {
   return r;
 }
 
-export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections };
+// `isMarkedPrefix` は compile.js の字句の読み手（`$` の実体化・器の貼り付け）も引く——前置の印の見分け方は1か所で
+// 決める。写しを置くと、ここを直した日に向こうだけが古い読みで字句を切る（`\_` で起きた形）。
+export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections, isMarkedPrefix };

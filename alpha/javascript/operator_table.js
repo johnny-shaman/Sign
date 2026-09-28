@@ -340,6 +340,9 @@ export const OPERATOR_BY_PRECEDENCE = [
     '\t': { position: 'prefix', name: 'indent' },
   },
   { // 28（旧26から繰り下げ）
+    // **演算としては現れない。** 文法の `charactor` が `\` と直後の1文字を1つの字面として取るので、`\_` も文字 `_`
+    // （U+005F）である（利用者の裁定 2026-09-28）。行は字句の印として残す（`NOT_AN_INSTRUCTION` の `escape`）。
+    // かつて pass2 が `\_` を前置の印と読み違えて、ここを部分適用の演算として引いていた。
     '\\': { position: 'prefix', name: 'escape' },
   }
 ];

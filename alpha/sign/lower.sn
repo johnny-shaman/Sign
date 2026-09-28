@@ -250,16 +250,16 @@ lw_cj : tc n f ?
 	`C ` (dec n) ` ` f
 
 `--- 葉 ---`
-`バックスラッシュと下線の2字は、pegjs が「バックスラッシュに穴を渡した部分適用」と読む（pass4 も断る）。`
-`ここの字句は文字と読むので、読みが割れる綴りとして名指しで断る。空白を挟んだノルムも parser.sn の`
-`語の規則では1語にならない（pegjs は読む）ので断る`
+`バックスラッシュと下線の2字は文字の下線（U+005F、95）である——バックスラッシュと a の2字が a であるのと同じ`
+`（裁定 2026-09-28）。JS の前段（pass2）がそれを「バックスラッシュに穴を渡した部分適用」と読んでいた間は、`
+`読みが割れる綴りとして名指しで断っていた。空白を挟んだノルムは parser.sn の語の規則では1語にならない`
+`（pegjs は読む）ので断る`
 lw_leaf : w [~ps] tc p ?
 	w == `__` : lw_t `Unit` `U`
 	lw_post w : lw_no (`postfix ` w)
 	(w ' 0) = \( : lw_e (tokens (w ' (1 ~ (||w|| - 2)))) ps tc p
 	(w ' 0) = blk_open : lw_blk (w ' (1 ~ (||w|| - 2))) ps tc p
 	(w ' 0) = quote : lw_str w
-	w == `\_` : lw_no `char-hole`
 	(w ' 0) = escape : lw_t `Char` (`N ` (dec (0 + (w ' 1))))
 	lw_isnorm w : lw_norm (lw_e (tokens (w ' (2 ~ (||w|| - 3)))) ps 0 p)
 	((w ' 0) = \|) & ((w ' 1) = \|) : lw_no `norm-split`

@@ -10,6 +10,9 @@
       "include": "#strings"
     },
     {
+      "include": "#characters"
+    },
+    {
       "include": "#constants"
     },
     {
@@ -38,6 +41,15 @@
               "match": "\\\\."
             }
           ]
+        }
+      ]
+    },
+    "characters": {
+      "comment": "文字の字面は `\\` と直後の1文字（sign.pegjs の charactor）。`\\_` も文字 `_`（U+005F）であって穴ではない（裁定 2026-09-28）——下の穴の規則（\\b_\\b）より先に取らないと、`\\_` の `_` が穴の色になる。tools/emacs/lisp/sign-mode.el の「エスケープ文字リテラル」と同じ規則",
+      "patterns": [
+        {
+          "name": "constant.character.sign",
+          "match": "\\\\."
         }
       ]
     },

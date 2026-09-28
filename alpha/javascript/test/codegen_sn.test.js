@@ -90,8 +90,9 @@ const EXPECT = {
 	"chr_cmpcmp.sn": "same",
 	// 小文字の 16 進（0u000a・0u006a）。chr_lit は大文字しか持っていなかった。
 	"chr_hex.sn": "same",
-	// `\_` は pegjs が「\ に穴を渡した部分適用」と読む（pass4 も断る）。段1の字句は文字と読むので名指しで断る。
-	"chr_hole.sn": "! char-hole",
+	// `\_` は文字 `_`（U+005F、裁定 2026-09-28）。pass2 が「\ に穴を渡した部分適用」と読んでいた間は pass4 も断り、
+	// 段1は読みが割れる綴りとして名指しで断っていた（! char-hole）。`f \_` を比べて等しいので、値の門は 95 を両側で見る。
+	"chr_hole.sn": "same",
 	"chr_lit.sn": "same",
 	// 数と文字の比較は同種どうしでない（comparison.md §4）。pass4 は出すが、符号の欄の規則を写さずに断る。
 	"chr_mix.sn": "! mixed-compare",

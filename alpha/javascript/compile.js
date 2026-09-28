@@ -25,7 +25,7 @@
 import { preprocess } from "./lexer.js";
 import { parse } from "./parser.js";
 import { buildEnv, buildEnvScope, bindEnv, envLookupScope, EXPORT_MARKERS } from "./pass1.js";
-import { reduceAll, desugarIndexRest, getCategory, desugarSections } from "./pass2.js";
+import { reduceAll, desugarIndexRest, getCategory, desugarSections, isMarkedPrefix } from "./pass2.js";
 import { OperationError } from "./errors.js";
 import { OPERATOR_DICT } from "./operator_table.js";
 import { specializeGenericParams } from "./pass1b.js";
@@ -523,7 +523,12 @@ const OPERATOR_HEADS = new Set([..."?:#;|&=<>!+*/%^~@$,", "-"]);
 const isId = (x) => typeof x === "string" && x.startsWith("<") && x.endsWith(">");
 const isOp = (t) => typeof t === "string" && !isId(t) && OPERATOR_HEADS.has(t[0]) && !/^-?[0-9`]/.test(t);
 const isPostfixMark = (t) => typeof t === "string" && /^_[^\w<`"]+$/.test(t);
-const isPrefixMark = (t) => typeof t === "string" && /^[^\w<`"]+_$/.test(t);
+// **前置の印は pass2 の `isMarkedPrefix` そのもの**（別名で受ける）。ここで字句を切る所と pass2 が縮約する所が同じ
+// 印を見ていなければ、`$` の実体化が実引数を1つずれて読む。以前はここと `tryCall` に正規表現の写しが2つあり、
+// どちらも「末尾が `_`」だけを見ていたので、文字の字面 `\_`（U+005F、裁定 2026-09-28）を前置の印と読んでいた
+// ——pass2 だけを直すと、`ap \_ $h $k` の `\_` と `$h` を1つの実引数にまとめて解釈器が `$k` を当て（`\a` なら
+// `$h`）、`(ap $dv \_) + 1` は実体化されずに型が付かず、死んだ文字が数の法則で 1 に生き返った。
+const isPrefixMark = isMarkedPrefix;
 // 中置 `'`（get）と同じか強い段の中置演算子か。段は表が言う——手で並べると表とずれる。
 const infixEntryOf = (t) => (typeof t === "string" && OPERATOR_DICT[t] ? OPERATOR_DICT[t].find((d) => d.position === "infix") || null : null);
 const bindsAtLeastGet = (t) => {
@@ -827,7 +832,8 @@ function specializeRefCalls(lines, nodes, env, options) {
   // 1つの呼び出しを読む。書き換えるなら、置き換える頭と、残す実引数と、読み終えた位置を返す。
   const tryCall = (arr, s, fn, idx, binders) => {
     const F = arr[s];
-    const isPrefixMark = (t) => typeof t === "string" && (t === "$_" || /^[^\w<`"$]+_$/.test(t));
+    // 前置の印（`$_` も含む）は上の `isPrefixMark`（pass2 の `isMarkedPrefix`）で読む——ここに写しを置くと、
+    // 片方だけ直した日に実引数の切り方がずれる。
     // 実引数を仮引数の数ぶん読む。単純な形（識別子・字面・括り・`$_ <X>`・前置の印の連なりと
     // その対象）だけ。**区切りは pass2 と同じ所で切る**——ずれると別の `$` を実体化し、黙って
     // 違う答えを返す（`h ~@p $dbl $inc` で `~` と `@p` を別の実引数に読んでいた）。

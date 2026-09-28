@@ -302,6 +302,15 @@ checkTrue(
 // したがって**1文字の文字列は符号位置そのもの**であり、レジスタに乗る。
 // `is_digit : c ? \0 <= c <= \9` が `cmp` で書けるのはこれが理由である。
 checkTrue("文字リテラルは符号位置", (body("f : x ? x\nf \\a", "f") || []) && asm("c : \\a\nf : x ? x\nf c").diagnostics.length === 0);
+// **`\_` も文字（U+005F）である**（`\a` と同じ、裁定 2026-09-28）。pass2 が前置の `\` に穴を渡した部分適用と読んで
+// いた間は「まだ出せない式です（escape）」で断っていた。
+check("\\_ は文字 U+005F（mov #95）", body("x : \\_\nx", "_.main"), ["mov x9, #95", "mov x0, x9", "ret"]);
+check("\\_ は診断なし", asm("x : \\_\nx").diagnostics.length, 0);
+// `$` の実体化も `\_` を1つの実引数として読む（compile.js の前置の印は pass2 の述語そのもの）。`\a` と同じく
+// `h \_` へ η 簡約される——読みがずれていた間は「具体化できる呼び出しサイトが無い」で断っていた。
+const etaChar = body("h : c ? c + 1\nap : c g ? @g c\nap \\_ $h", "_.main") || [];
+checkTrue("$ の実体化も \\_ を1つの実引数で読む（h へ η 簡約）", etaChar.includes("bl h") && etaChar.some((l) => l.endsWith(", #95")), etaChar.join(" / "));
+check("$ の実体化の \\_ は診断なし", asm("h : c ? c + 1\nap : c g ? @g c\nap \\_ $h").diagnostics.length, 0);
 check("文字の比較は診断なし", asm("f : c ? c = \\0\nf \\5").diagnostics.length, 0);
 // **比較は同種同士でしか成立しない**ので、片側が1文字ならもう片側も文字である
 // ——レンジの端点が「両端とも点」であるのと同じ形の推論。仮引数のように中身が
