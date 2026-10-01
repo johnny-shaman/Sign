@@ -13,6 +13,7 @@ import { evaluate, newRuntimeEnv, observe } from "../interpreter.js";
 import { OPERATOR_BY_PRECEDENCE } from "../operator_table.js";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 let passed = 0, total = 0;
 const check = (note, got, want) => {
@@ -22,7 +23,7 @@ const check = (note, got, want) => {
 };
 
 // md が「中置※」＝右結合と言っている演算子を、md そのものから読む。
-const MD = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, "")), "../../../documents/ja-jp/impl/syntax/operator_table.md");
+const MD = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../documents/ja-jp/impl/syntax/operator_table.md");
 const md = fs.readFileSync(MD, "utf8");
 const rightInMd = new Set();
 for (const line of md.split(/\r?\n/)) {
