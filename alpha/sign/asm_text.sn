@@ -53,8 +53,8 @@ at_idx : b i s ? `[` b `, ` i `, lsl #` (dec s) `]`
 `--- 幅から命令の綴りを引く。表は operator_table.sn が持っている ---`
 `鍵を綴りで組んで引く道（' (`gpr_w` (dec w))~）は取らない——幅は4通りしかなく、`
 `場合分けの方が表の欄の名前をそのまま書けるので、表が変わったとき門が名指しで落ちる`
-st_row : asm_infix_width ' `#`~
-ld_row : asm_prefix_width ' `@`~
+st_row : asm_infix_width ' `#`
+ld_row : asm_prefix_width ' `@`
 st_mn : w ?
 	w = 1 : st_row ' gpr_w1
 	w = 2 : st_row ' gpr_w2
