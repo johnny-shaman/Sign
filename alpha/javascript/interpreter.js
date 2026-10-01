@@ -315,6 +315,25 @@ function bindBracketParams(entries, value, env) {
   // 文字列を返すのと揃える——同じ「残り」を取る操作が、書き方で違う型になってはいけない。
   // 符号位置単位で切る（サロゲートペアを2文字に割らない）。
   const fromString = typeof value === "string";
+  // **末尾側の名前が無ければ、割らずに済む。** 頭の字だけを符号位置で読み、残りは元の文字列の
+  // 続きをそのまま渡す——割ってから繋ぎ直すのと同じ値で、写しが要らない。`[~s]` は頭が0個
+  // なので文字列そのものである。割っていたので、字面を `[~s]` で受けて添字で歩く関数が
+  // 呼ぶたびに長さぶん写し、再帰が長さの2乗になっていた（layout_sn が 205 秒から20分超）。
+  const restAt = entries.findIndex((e) => e.rest);
+  if (fromString && restAt === entries.length - 1) {
+    let off = 0;
+    for (const entry of entries.slice(0, restAt)) {
+      let v = UNIT;
+      if (off < value.length) {
+        v = String.fromCodePoint(value.codePointAt(off));
+        off += v.length;
+      }
+      if (isUnit(v) && entry.default) v = evaluate(entry.default, env);
+      envDefine(env, entry.name, v);
+    }
+    envDefine(env, entries[restAt].name, value.slice(off));
+    return env;
+  }
   if (fromString) value = [...value];
   const restValue = (v) => (fromString ? v.join("") : v);
   if (Array.isArray(value)) {
