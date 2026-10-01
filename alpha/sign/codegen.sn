@@ -113,24 +113,24 @@ g_imm : r v ?
 	g_mv `movz` r v 48
 
 `--- 語の中身 ---`
-g_n : s ? digit_num s 2 0
-g_name : s ? s ' (((digit_run s 2) + 1) ~ (||s|| - 1))
-g_opk : s ? s ' 2~
+g_n : [~s] ? digit_num s 2 0
+g_name : [~s] ? s ' (((digit_run s 2) + 1) ~ (||s|| - 1))
+g_opk : [~s] ? s ' 2~
 `2つ目の数（P 位置 幅 の幅）`
-g_w2 : s ? digit_num s ((digit_run s 2) + 1) 0
+g_w2 : [~s] ? digit_num s ((digit_run s 2) + 1) 0
 `d が付いた I / H は均しを出す（ラベルを1つ使う）`
-g_dyn : s ?
+g_dyn : [~s] ?
 	||s|| > 1 : 1
 	0
 `F の幅の並び：j 番目の仮引数の幅、仮引数の数、スロットの合計`
-g_fw : s j ? (0 + (s ' (2 + j))) - 48
-g_fk : s ? (digit_run s 2) - 2
-g_fK : s j ?
+g_fw : [~s] j ? (0 + (s ' (2 + j))) - 48
+g_fk : [~s] ? (digit_run s 2) - 2
+g_fK : [~s] j ?
 	j >= (g_fk s) : 0
 	(g_fw s j) + (g_fK s (j + 1))
 
 `--- 高さの効果（段2の本体とフレームの先読みが同じ表を見る） ---`
-g_eff : c s ?
+g_eff : c [~s] ?
 	c = k_N : 1
 	c = k_U : 1
 	c = k_V : 1
@@ -206,7 +206,7 @@ g_op : op d lf rf ch ? (g_ld 9 d) (g_ld 10 (d + 1)) (g_body_op op d lf rf ch) (g
 
 `--- 器：字面・仮引数・ノルム・要素・切り出し ---`
 `文字列の番号は、中身が語の列に初めて出た順（pass4 の intern と同じ。出す順も同じなので列を読み直せば足りる）`
-g_isb : w ? ((w ' 0) = k_B) & (||w|| > 2)
+g_isb : [~w] ? ((w ' 0) = k_B) & (||w|| > 2)
 g_first : [~ts] j w ?
 	j >= ||ts|| : j
 	(ts ' j) == w : j
@@ -219,7 +219,7 @@ g_nth2 : [~ts] j f n ?
 	(g_first ts 0 (ts ' j)) = j : g_nth ts (j + 1) f (n + 1)
 	g_nth ts (j + 1) f n
 g_lbl : [~ts] w ? g_nth ts 0 (g_first ts 0 w) 0
-g_b : [~ts] s h ?
+g_b : [~ts] [~s] h ?
 	||s|| < 3 : (g_ln `mov x9, #0`) (g_st 9 h) (g_st 9 (h + 1))
 	(g_ln (`adrp x9, .Lstr` (dec (g_lbl ts s)))) (g_ln (`add x9, x9, :lo12:.Lstr` (dec (g_lbl ts s)))) (g_st 9 h) (g_imm 10 (||s|| - 2)) (g_st 10 (h + 1))
 g_pfl : fl w ?
@@ -229,48 +229,48 @@ g_pld : o h w ?
 	w = 2 : (g_ld 9 o) (g_st 9 h) (g_ld 9 (o + 1)) (g_st 9 (h + 1))
 	(g_ld 9 o) (g_st 9 h)
 `負の添字は長さを足して均す（器は [c]=ptr・[c+1]=len、添字は [i]）`
-g_nn : s c i lab ?
+g_nn : [~s] c i lab ?
 	||s|| < 2 : __
 	(g_ld 9 i) (g_ln `cmp x9, #0`) (g_ln (`b.ge .Lnonneg` (dec lab))) (g_ld 10 (c + 1)) (g_ln `add x9, x9, x10`) (g_st 9 i) (g_lab (`.Lnonneg` (dec lab)))
 `範囲の外は符号なし比較で __ の置き場（.Lanon0）を読ませてから niche を選ぶ`
 g_ixb : c i ? (g_ld 10 i) (g_ld 9 (c + 1)) (g_ln `cmp x10, x9`) (g_ld 9 c) (g_ln `add x9, x9, x10`) (g_ln `adrp x13, .Lanon0`) (g_ln `add x13, x13, :lo12:.Lanon0`) (g_ln `csel x9, x9, x13, lo`) (g_ln (load_at 14 `x9` g_cw)) (g_niche 12) (g_ln `csel x9, x14, x12, lo`) (g_st 9 c)
 `切り出しは頭と長さをずらすだけ（コピー無し）。均しても負の起点は先頭から`
-g_slg : s ?
+g_slg : [~s] ?
 	||s|| < 2 : __
 	(g_ln `cmp x10, #0`) (g_ln `csel x10, x10, xzr, ge`)
-g_slb : s c i ? (g_ld 9 c) (g_ld 10 i) (g_slg s) (g_ln `add x9, x9, x10`) (g_st 9 c) (g_ld 9 (c + 1)) (g_ln `subs x9, x9, x10`) (g_ln `csel x9, x9, xzr, pl`) (g_st 9 (c + 1))
+g_slb : [~s] c i ? (g_ld 9 c) (g_ld 10 i) (g_slg s) (g_ln `add x9, x9, x10`) (g_st 9 c) (g_ld 9 (c + 1)) (g_ln `subs x9, x9, x10`) (g_ln `csel x9, x9, xzr, pl`) (g_st 9 (c + 1))
 
 `--- 呼び出し ---`
 g_args : d j n ?
 	j >= n : __
 	(g_ld j (d + j)) (g_args d (j + 1) n)
-g_call : s d ? (g_args d 0 (g_n s)) (g_ln (`bl ` (g_name s))) (g_st 0 d)
-g_jump : s d self fr lp ?
+g_call : [~s] d ? (g_args d 0 (g_n s)) (g_ln (`bl ` (g_name s))) (g_st 0 d)
+g_jump : [~s] d self fr lp ?
 	(g_name s) == self : (g_args d 0 (g_n s)) (g_ln (`b .Lloop` (dec lp)))
 	(g_args d 0 (g_n s)) (g_ln (`ldp x29, x30, [sp], #` (dec fr))) (g_ln (`b ` (g_name s)))
 
 `--- 分岐 ---`
-g_eb : [~ts] i ls ?
+g_eb : [~ts] i [~ls] ?
 	((ts ' (i - 1)) ' 0) = k_J : __
 	g_ln (`b .Lend` (dec (ls ' 1)))
 g_ez : [~ts] i h ?
 	((ts ' (i + 1)) ' 0) = k_Z : (g_niche 12) (g_st 12 (h - 1))
 	__
-g_e : [~ts] i h ls ? (g_eb ts i ls) (g_lab (`.Larm` (dec (ls ' 0)))) (g_ez ts i h)
-g_t : h ls ? (g_ld 9 (h - 1)) (g_niche 12) (g_ln `cmp x9, x12`) (g_ln (`b.eq .Larm` (dec (ls ' 0))))
+g_e : [~ts] i h [~ls] ? (g_eb ts i ls) (g_lab (`.Larm` (dec (ls ' 0)))) (g_ez ts i h)
+g_t : h [~ls] ? (g_ld 9 (h - 1)) (g_niche 12) (g_ln `cmp x9, x12`) (g_ln (`b.eq .Larm` (dec (ls ' 0))))
 
 `--- 関数の入口と出口 ---`
 g_strs : j k ?
 	j >= k : __
 	(g_st j j) (g_strs (j + 1) k)
 `入口の門は仮引数ごと：1本は niche と、器は長さ 0 と比べる（String の __ は len 0、ptr は見ない）`
-g_chks : s j o u ?
+g_chks : [~s] j o u ?
 	j >= (g_fk s) : __
 	(g_fw s j) = 2 : (g_ld 9 (o + 1)) (g_ln `cmp x9, #0`) (g_ln (`b.eq .Lunit` (dec u))) (g_chks s (j + 1) (o + 2) u)
 	(g_ld 9 o) (g_niche 12) (g_ln `cmp x9, x12`) (g_ln (`b.eq .Lunit` (dec u))) (g_chks s (j + 1) (o + 1) u)
 g_pro : name fr ? (g_lab name) (g_ln (`stp x29, x30, [sp, #-` (dec fr) `]!`)) (g_ln `mov x29, sp`)
 g_epi : fr ? (g_ln (`ldp x29, x30, [sp], #` (dec fr))) (g_ln `ret`)
-g_fn : s kk fr lab ? (g_pro (g_name s) fr) (g_lab (`.Lloop` (dec lab))) (g_strs 0 kk) (g_chks s 0 0 (lab + 1))
+g_fn : [~s] kk fr lab ? (g_pro (g_name s) fr) (g_lab (`.Lloop` (dec lab))) (g_strs 0 kk) (g_chks s 0 0 (lab + 1))
 g_ret : k lp lab fr ? (g_ld 0 k) (g_ln (`b .Ldone` (dec lab))) (g_lab (`.Lunit` (dec (lp + 1)))) (g_niche 0) (g_lab (`.Ldone` (dec lab))) (g_epi fr)
 g_retj : lp fr ? (g_lab (`.Lunit` (dec (lp + 1)))) (g_niche 0) (g_epi fr)
 g_fr_of : k pk ? g_frame (g_max k pk)
@@ -294,7 +294,7 @@ g_keep : [~ts] i h ?
 	0
 
 `--- .rodata：文字列を初めて出た順に、要素を読んだなら __ の置き場を1つ ---`
-g_plain : c i ?
+g_plain : [~c] i ?
 	i >= ||c|| : 1
 	(c ' i) < g_sp : __
 	(c ' i) > \~ : __
@@ -302,10 +302,10 @@ g_plain : c i ?
 	(c ' i) = g_bs : __
 	g_plain c (i + 1)
 g_bx : ch ? `0x` (g_hx (0 + ch))
-g_bytes : c i acc ?
+g_bytes : [~c] i acc ?
 	i >= ||c|| : acc
 	g_bytes c (i + 1) (acc `, ` (g_bx (c ' i)))
-g_data : c ?
+g_data : [~c] ?
 	g_plain c 0 : `.ascii "` c `"`
 	`.byte ` (g_bytes c 1 (g_bx (c ' 0)))
 g_hasb : [~ts] j ?
@@ -332,11 +332,11 @@ g_ro : [~ts] ?
 	__
 
 `--- 本体：末尾再帰の畳み込み ---`
-g2 : [~ts] i h fl lab ls k self fr lp acc ?
+g2 : [~ts] i h fl lab [~ls] k self fr lp acc ?
 	i >= ||ts|| : acc
 	g2c ts i h fl lab ls k self fr lp acc ((ts ' i) ' 0) (ts ' i)
 
-g2c : [~ts] i h fl lab ls k self fr lp acc c s ?
+g2c : [~ts] i h fl lab [~ls] k self fr lp acc c [~s] ?
 	c = k_N : g2 ts (i + 1) (h + (g_eff c s)) ((fl * 2) + 1) lab ls k self fr lp (acc (g_imm 9 (digit_num s 2 0)) (g_st 9 h))
 	c = k_U : g2 ts (i + 1) (h + (g_eff c s)) (fl * 2) lab ls k self fr lp (acc (g_niche 9) (g_st 9 h))
 	c = k_V : g2 ts (i + 1) (h + (g_eff c s)) (fl * 2) lab ls k self fr lp (acc (g_niche 12) (g_st 12 h))
@@ -365,7 +365,7 @@ g2c : [~ts] i h fl lab ls k self fr lp acc c s ?
 	acc (g_ln (`.err ` s))
 
 `F：高さも仮引数のスロットの合計（kk）から始まる。フレームは本体のピークと kk の大きい方`
-g2f : [~ts] i lab ls acc s kk ? g2g ts i lab ls acc s kk (g_peak ts (i + 1) kk kk)
-g2g : [~ts] i lab ls acc s kk pk ? g2 ts (i + 1) kk ((g_pow kk) - 1) (lab + 2) ls kk (g_name s) (g_fr_of kk pk) lab (acc (g_deep pk) (g_fn s kk (g_fr_of kk pk) lab))
+g2f : [~ts] i lab [~ls] acc [~s] kk ? g2g ts i lab ls acc s kk (g_peak ts (i + 1) kk kk)
+g2g : [~ts] i lab [~ls] acc [~s] kk pk ? g2 ts (i + 1) kk ((g_pow kk) - 1) (lab + 2) ls kk (g_name s) (g_fr_of kk pk) lab (acc (g_deep pk) (g_fn s kk (g_fr_of kk pk) lab))
 
 g_run : [~ts] ? g2 ts 0 0 0 0 (0 - 1 , 0 - 1) 0 `_` 0 0 (g_ln `.text`)

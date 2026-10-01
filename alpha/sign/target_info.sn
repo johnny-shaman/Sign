@@ -113,7 +113,7 @@ charset_of : cs ? charsets ' cs~
 is_supported : tg ?
 	(widths_of tg) : tg
 
-width_by_class : w cls ? w ' cls~
+width_by_class : [~w] cls ? w ' cls~
 
 `--- 幅 ---`
 
@@ -163,7 +163,7 @@ is_digit : c ?
 
 `数字の続く長さ。器を縮めず添字で歩く`
 
-digit_run : s i ?
+digit_run : [~s] i ?
 	i >= ||s|| : i
 	is_digit (s ' i) : digit_run s (i + 1)
 	i
@@ -171,7 +171,7 @@ digit_run : s i ?
 `十進の値。桁の値は零からの隔たりそのものなので、10 枝の表は要らない`
 `——実測で表が 220 命令、引き算が 136 命令。0 は真なので、終わりは「数字でない」で見る`
 
-digit_num : s i acc ?
+digit_num : [~s] i acc ?
 	i >= ||s|| : acc
 	!(is_digit (s ' i)) : acc
 	digit_num s (i + 1) ((acc * 10) + ((s ' i) - zero_ch))
@@ -194,19 +194,19 @@ fam_ok : c ?
 `落ちて、その中の s ' i が「まだ出せない式です（get_prop）」になる（実測。Int の引数なら`
 `伝わる）。式を2回書く方が安いという §1.5 の但し書きが、ここでは唯一の書き方である`
 
-lit_family : s ?
+lit_family : [~s] ?
 	(digit_run s 0) = 0 : __
 	fam_ok (s ' (digit_run s 0))
 
 `数字の部分。開いた切り出しなので写しは起きない（add と subs だけ）`
 
-lit_digits : s ?
+lit_digits : [~s] ?
 	!(lit_family s) : __
 	s ' ((digit_run s 0) + 1)~~
 
 `b（2進）だけが 16 でない。族が無ければそもそも答えが無い`
 
-lit_radix : s ?
+lit_radix : [~s] ?
 	!(lit_family s) : __
 	(lit_family s) = b_ch : 2
 	16
@@ -238,14 +238,14 @@ bytes_of : fam n ?
 	fam = u_ch : bits_to_bytes n
 	n
 
-lit_width : s ?
+lit_width : [~s] ?
 	!(lit_family s) : __
 	(digit_num s 0 0) = 0 : __
 	(is_access (bytes_of (lit_family s) (digit_num s 0 0))) | no_width
 
 `数字が欲しい側はこれを使う。プリフィックスが無ければ __ である`
 
-literal_digits : s ? lit_digits s
+literal_digits : [~s] ? lit_digits s
 
 `--- 駆動 ---`
 `呼ばれない関数は出せない（仮引数 X の渡し方が決まりません）ので、この枚は自分を使い切る`

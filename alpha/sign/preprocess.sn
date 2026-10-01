@@ -121,7 +121,7 @@ continues :
 
 `括弧の中の行の前の区切り。続きの行なら空白でつなぎ、そうでなければ改行する`
 
-bracket_gap : b ?
+bracket_gap : [~b] ?
 	continues b : space
 	cr
 
@@ -215,7 +215,7 @@ unwind : ks s k d ?
 `この行の直前に置く区切り。深くなれば INDENT を並べて前の行に直結し、浅くなれば DEDENT を並べてから改行する`
 `この行を読んだ後の深さの位置は、この行そのものである`
 
-gap : ks s k d ?
+gap : [~ks] [~s] k d ?
 	d > k : beyond s k indent
 	(beyond ks d dedent) cr
 
@@ -274,7 +274,7 @@ skip_lf : [c ~rest] ?
 `行頭は直前が CR か入力の先頭。括弧の外で、行頭のバッククォートの閉じの直後が後置演算子か空白でなければ`
 `コメントなので行末まで読み捨てる。括弧の中とタブの後はコメントにならない（string_and_comment.md 3節）`
 
-at_line : s bd ?
+at_line : [~s] bd ?
 	bd > 0 : body_cls s bd
 	((s ' 0) = quote) & !(quote_expr (s ' 1~)) : drop_line s bd
 	body_cls s bd
@@ -341,7 +341,7 @@ dstr_cls : [c ~rest] bd ?
 `改行の役割を先に分け、インデントを確定させてから、演算子の空白を入れる`
 `深さは 0 から始める——TAB の無い位置なら何でもよいので、区切りの CR を置く`
 
-preprocess : s ? sep (strip_head (walk (at_line s 0) cr 0))
+preprocess : [~s] ? sep (strip_head (walk (at_line s 0) cr 0))
 
 `実行例`
 

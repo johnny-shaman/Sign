@@ -19,7 +19,7 @@ put_char : c ?
 
 `--- 綴り。添字で歩く（器を縮めると完全性公理で止まらない） ---`
 
-put_str : s i ?
+put_str : [~s] i ?
 	i >= ||s|| : i
 	out # (s ' i) : put_str s (i + 1)
 
@@ -54,7 +54,7 @@ mnemonic : k ?
 
 `--- 一行ずつ ---`
 
-put_alu : op d n m ?
+put_alu : [~op] d n m ?
 	seq8 (put_str op 0) (put_char 32) (put_reg d) (put_str `, ` 0) (put_reg n) (put_str `, ` 0) (put_reg m) (put_char 10)
 
 put_movz : d n ?

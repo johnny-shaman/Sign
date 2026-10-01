@@ -63,7 +63,7 @@ rule_slots_of : ty ? (rule_slots_tbl ' ty~) | default_rule_slots
 bar_ch : \|
 space_ch : \ 
 
-find_bar : s i ?
+find_bar : [~s] i ?
 	i >= ||s|| : __
 	(s ' i) = bar_ch : i
 	find_bar s (i + 1)
@@ -73,12 +73,12 @@ alt_head : [~s] ?
 	(s ' 0) = space_ch : ``
 	(s ' 0) (alt_head (s ' 1~))
 
-bar_pos : s i ?
+bar_pos : [~s] i ?
 	i >= ||s|| : i
 	(s ' i) = bar_ch : i
 	bar_pos s (i + 1)
 
-alt_rest : s ? s ' ((bar_pos s 0) + 2)~~
+alt_rest : [~s] ? s ' ((bar_pos s 0) + 2)~~
 
 `--- §4.6 の問い：枝1つ ---`
 `綴りに縦棒の無い型名だけを答える。直和の枝はここだけを引く——直和へ戻る道が無いので輪ができない`
@@ -110,14 +110,14 @@ atom_size : ty tg ?
 `広い方は本数の多い枝で、並びが同じなら先の枝——layout.js の reduce と同じ。揃えた先が3本`
 `（規則）なら揃えられない`
 
-widest_alt : s tg ?
+widest_alt : [~s] tg ?
 	!(find_bar s 0) : s
 	!(atom_slots (alt_head s) tg) : __
 	!(widest_alt (alt_rest s) tg) : __
 	(atom_slots (alt_head s) tg) >= (atom_slots (widest_alt (alt_rest s) tg) tg) : alt_head s
 	widest_alt (alt_rest s) tg
 
-sum_ok : s tg ?
+sum_ok : [~s] tg ?
 	!(widest_alt s tg) : __
 	(atom_slots (widest_alt s tg) tg) <= 2 : widest_alt s tg
 	__
@@ -125,15 +125,15 @@ sum_ok : s tg ?
 `--- §4.6 の問い ---`
 `渡し方（register / reference）・本数・バイト数。境界（align）は訊かない——pass4 が読まない`
 
-passing_mode : ty tg ?
+passing_mode : [~ty] tg ?
 	(find_bar ty 0) : atom_mode (sum_ok ty tg) tg
 	atom_mode ty tg
 
-passing_slots : ty tg ?
+passing_slots : [~ty] tg ?
 	(find_bar ty 0) : atom_slots (sum_ok ty tg) tg
 	atom_slots ty tg
 
-passing_size : ty tg ?
+passing_size : [~ty] tg ?
 	(find_bar ty 0) : atom_size (sum_ok ty tg) tg
 	atom_size ty tg
 
@@ -169,7 +169,7 @@ meas_align : ty cs tg ?
 `先に訊くのは「どう運ぶか」である。参照で運ぶ型は、中身が読めるかどうかに関わらず運ぶ姿の`
 `幅を置く——境界は番地を運ぶ GPR 幅`
 
-cell_size : ty cs tg ?
+cell_size : [~ty] cs tg ?
 	!(widths_of tg) : __
 	ty_is_unit ty : 0
 	(ref_slots_of ty) : (passing_size ty tg)
@@ -198,21 +198,21 @@ pack_end : off mx ? align_up off mx
 
 `列で訊く形。大きさの列 sz と境界の列 al を平行に渡す——型の名前の列は値として作れない`
 
-max_align : al i m ?
+max_align : [~al] i m ?
 	i >= ||al|| : m
 	(al ' i) > m : max_align al (i + 1) (al ' i)
 	max_align al (i + 1) m
 
-end_off : sz al i off ?
+end_off : [~sz] [~al] i off ?
 	i >= ||sz|| : off
 	end_off sz al (i + 1) ((align_up off (al ' i)) + (sz ' i))
 
-nth_off : sz al k i off ?
+nth_off : [~sz] [~al] k i off ?
 	i >= k : align_up off (al ' i)
 	nth_off sz al k (i + 1) ((align_up off (al ' i)) + (sz ' i))
 
-pack_size : sz al ? align_up (end_off sz al 0 0) (max_align al 0 1)
-pack_align : sz al ? max_align al 0 1
+pack_size : [~sz] [~al] ? align_up (end_off sz al 0 0) (max_align al 0 1)
+pack_align : sz [~al] ? max_align al 0 1
 
 `--- §7.1 並び順の比較子 ---`
 `名前のある欄は名前の順に並べる。並べ替えそのものは列を並べ直すので置けず、比較子だけを置く`
@@ -223,17 +223,17 @@ lt_ch : \<
 gt_ch : \>
 bq_ch : \`
 
-is_wrapped : s ?
+is_wrapped : [~s] ?
 	||s|| < 2 : __
 	((s ' 0) = lt_ch) & ((s ' (||s|| - 1)) = gt_ch) : s
 	((s ' 0) = bq_ch) & ((s ' (||s|| - 1)) = bq_ch) : s
 	__
 
-bare_len : s ?
+bare_len : [~s] ?
 	is_wrapped s : ||s|| - 2
 	||s||
 
-bare_at : s i ?
+bare_at : [~s] i ?
 	is_wrapped s : s ' (i + 1)
 	s ' i
 
@@ -241,7 +241,7 @@ one : p ?
 	p : 1
 	__
 
-name_lt : a b i ?
+name_lt : [~a] [~b] i ?
 	i >= ||a|| : one (||a|| < ||b||)
 	i >= ||b|| : __
 	(a ' i) < (b ' i) : 1

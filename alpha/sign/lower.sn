@@ -34,18 +34,18 @@ lw_none : `%` , __
 `--- 型つきの断片 ---`
 lw_t : t w ? t , w
 lw_no : r ? `?` , (`! ` r)
-lw_ty : r ? r ' 0
-lw_ws : r ? r ' 1~
+lw_ty : [~r] ? r ' 0
+lw_ws : [~r] ? r ' 1~
 lw_w : t ?
 	t == `String` : 2
 	1
 
 `--- 文と行の切れ目：深さ 0 の CR ---`
-lw_qend : p i ?
+lw_qend : [~p] i ?
 	i >= ||p|| : i
 	(p ' i) = quote : i + 1
 	lw_qend p (i + 1)
-lw_send : p i d ?
+lw_send : [~p] i d ?
 	i >= ||p|| : i
 	(d = 0) & ((p ' i) = cr) : i
 `文字の字面（バックスラッシュと次の1字）は飛ばす。飛ばさないと角括弧の字で深さが上がり、バッククォートの字で文字列が始まったことになる`
@@ -54,8 +54,8 @@ lw_send : p i d ?
 	open_br (p ' i) : lw_send p (i + 1) (d + 1)
 	close_br (p ' i) : lw_send p (i + 1) (d - 1)
 	lw_send p (i + 1) d
-lw_stoks : p i ? tokens (p ' (i ~ ((lw_send p i 0) - 1)))
-lw_next : p i ? (lw_send p i 0) + 1
+lw_stoks : [~p] i ? tokens (p ' (i ~ ((lw_send p i 0) - 1)))
+lw_next : [~p] i ? (lw_send p i 0) + 1
 
 `--- 語を探す ---`
 lw_find : [~ts] i w ?
@@ -64,23 +64,23 @@ lw_find : [~ts] i w ?
 	lw_find ts (i + 1) w
 
 `--- .ist と option.ms：LF で割った行を、頭の2語（名前と :）で引く。頭の綴りで先にふるう ---`
-lw_lfend : s i ?
+lw_lfend : [~s] i ?
 	i >= ||s|| : i
 	(s ' i) = newline : i
 	lw_lfend s (i + 1)
-lw_row : s i k ?
+lw_row : [~s] i [~k] ?
 	i >= ||s|| : __
 	lw_rowe s i (lw_lfend s i) k
-lw_rowe : s i e k ?
+lw_rowe : [~s] i e [~k] ?
 	((e - i) > ||k||) & ((s ' (i ~ ((i + ||k||) - 1))) == k) : lw_rowt (tokens (s ' (i ~ (e - 1)))) s e k
 	lw_row s (e + 1) k
-lw_rowt : [~ts] s e k ?
+lw_rowt : [~ts] [~s] e [~k] ?
 	((ts ' 0) == k) & ((ts ' 1) == `:`) : ts
 	lw_row s (e + 1) k
 
 `option.ms：コンパイルする側の身元。幅の根拠なので、書いていないものは既定で埋めずに断る`
-lw_optv : o k ? (lw_row o 0 k) ' 2
-lw_optck : o ?
+lw_optv : [~o] [~k] ? (lw_row o 0 k) ' 2
+lw_optck : [~o] ?
 	!((lw_optv o `target`) == `aarch64_qemu`) : `! option target`
 	!((lw_optv o `layer`) == `1`) : `! option layer`
 	!((lw_optv o `charset`) == `ascii`) : `! option charset`
@@ -94,7 +94,7 @@ lw_allok : [~ts] i ?
 	i >= ||ts|| : 1
 	lw_okt (ts ' i) : lw_allok ts (i + 1)
 	__
-lw_sig : ist f ?
+lw_sig : [~ist] [~f] ?
 	lw_row ist 0 f : lw_sig2 (lw_row ist 0 f) f
 	lw_no (`type ` f)
 lw_sig2 : [~r] f ?
@@ -109,23 +109,23 @@ lw_slots : [~sg] i ?
 lw_ret : [~sg] ? sg ' (||sg|| - 1)
 
 `--- 範囲を歩く（parser.sn の out と同じ形） ---`
-lw_x : [~ts] i j t [~ps] tc p ?
+lw_x : [~ts] i j t [~ps] tc [~p] ?
 	t > top_tier : lw_leaf (ts ' i) ps tc p
 	t = juxt_tier : lw_j ts i j ps tc p
 	lw_at ts i j t (end_of ts i (t + 1)) ps tc p
 
-lw_at : [~ts] i j t k [~ps] tc p ?
+lw_at : [~ts] i j t k [~ps] tc [~p] ?
 	k = j : lw_x ts i j (t + 1) ps tc p
 	lw_as ts i j t k (assoc_at ts k) ps p
 
-lw_as : [~ts] i j t k a [~ps] p ?
+lw_as : [~ts] i j t k a [~ps] [~p] ?
 	a = -1 : lw_one ts i j k (t + 1) t ps p
 	lw_one ts i j ((last_of ts i j t) - 1) t (t + 1) ps p
 
 lw_iscond : op ? ((asm_infix_signed ' op~) ' form) == `cond`
 lw_isalu : op ? ((asm_infix_signed ' op~) ' form) == `alu`
 `表に無い綴り（%・ビット演算など）は段2へ渡さずここで名指しする`
-lw_one : [~ts] i j o tl tr [~ps] p ?
+lw_one : [~ts] i j o tl tr [~ps] [~p] ?
 	(ts ' o) == `==` : lw_no (`op ` (ts ' o))
 	(ts ' o) == `!==` : lw_no (`op ` (ts ' o))
 	(ts ' o) == `'` : lw_get (lw_x ts i o tl ps 0 p) ts (o + 1) j tr ps p
@@ -136,7 +136,7 @@ lw_one : [~ts] i j o tl tr [~ps] p ?
 `文字の域の算術は域の検査を伴うので部分集合の外。器（2本）は中置の辺に来ない。`
 `__ との比較は pass4 も断る。見るのは綴りではなく型——0u00・(__)・__ を返す呼び出しも同じ __ で、`
 `綴りの __ と 0u0000 だけを見ていた間はそれらを黙って通していた ---`
-lw_bin : op l r ?
+lw_bin : op [~l] [~r] ?
 	(lw_ty l) == `?` : l
 	(lw_ty r) == `?` : r
 	((lw_ty l) == `String`) | ((lw_ty r) == `String`) : lw_no (`container-op ` op)
@@ -147,85 +147,85 @@ lw_dom : a b ?
 	a == `Unit` : b
 	a
 `文字どうしの比較は K（符号なしの欄、0/1 の規則なし）。左辺が数の比較は今までどおり O`
-lw_cmp : op l r ?
+lw_cmp : op [~l] [~r] ?
 	((lw_ty l) == `Char`) & ((lw_ty r) == `Char`) : `Char` , (lw_ws l)~ , (lw_ws r)~ , (`K ` op)
 	((lw_ty l) == `Char`) | ((lw_ty r) == `Char`) : lw_no `mixed-compare`
 	(lw_ty l) , (lw_ws l)~ , (lw_ws r)~ , (`O ` op)
 `両辺が __ の算術（域が Unit）は pass4 も断る（GPR 幅の整数演算だけを出せます）。見るのは型なので、0u0000・(__)・`
 `__ を返す呼び出しも同じ。片側だけの __ は相手の域で出す（pass4 も出す）。ここが無かった間は、pass4 が断る`
 `__ + __ に __ を吸収する命令列を黙って出していた`
-lw_alu : op d l r ?
+lw_alu : op d [~l] [~r] ?
 	d == `Char` : lw_no (`char-alu ` op)
 	d == `Unit` : lw_no (`unit-alu ` op)
 	d , (lw_ws l)~ , (lw_ws r)~ , (`O ` op)
 
 `--- ' ：左辺は String。右辺の綴りで読みが決まる（K~ と e~~ は切り出し、それ以外の ~ は鍵の位置、`
 `残りは要素）。添字が字面の数か、字面の数に束縛した定数なら均しは要らない（I / H）、ほかは I d / H d ---`
-lw_get : l [~ts] i j tr [~ps] p ?
+lw_get : [~l] [~ts] i j tr [~ps] [~p] ?
 	(lw_ty l) == `?` : l
 	!((lw_ty l) == `String`) : lw_no `index-scalar`
 	(j - i) = 1 : lw_get1 l (ts ' i) ts i j tr ps p
 	lw_ix l (lw_x ts i j tr ps 0 p)
-lw_get1 : l w [~ts] i j tr [~ps] p ?
+lw_get1 : [~l] [~w] [~ts] i j tr [~ps] [~p] ?
 	(w ' 0) = escape : lw_ix l (lw_x ts i j tr ps 0 p)
 	lw_tl w 2 : lw_sl l (lw_leaf (w ' (0 ~ (||w|| - 3))) ps 0 p)
 	lw_tl w 1 : lw_ksl l (w ' (0 ~ (||w|| - 2))) ps p
 	lw_ix l (lw_x ts i j tr ps 0 p)
-lw_tl : w n ?
+lw_tl : [~w] n ?
 	n = 2 : (||w|| > 2) & ((w ' (||w|| - 1)) = \~) & ((w ' (||w|| - 2)) = \~)
 	(||w|| > 1) & ((w ' (||w|| - 1)) = \~)
 `固定値だけが切り出し。名前に ~ を付けた形は鍵の位置（中身を取る）なので、ここでは読まない`
-lw_ksl : l x [~ps] p ?
+lw_ksl : [~l] [~x] [~ps] [~p] ?
 	(digit_run x 0) = ||x|| : lw_sl l (lw_leaf x ps 0 p)
 	lw_no `key`
-lw_static : r ?
+lw_static : [~r] ?
 	(||r|| = 2) & (((r ' 1) ' 0) = \N) : 1
 	(||r|| = 3) & (((r ' 1) ' 0) = \N) & ((r ' 2) == `X`) : 1
 	__
 `起点が 0 かは綴りでなく値で見る（pass4 は Number(綴り) === 0 を見るので、00~ も命令なしの恒等）`
-lw_zero : r ? (||r|| = 2) & (((r ' 1) ' 0) = \N) & ((digit_num (r ' 1) 2 0) = 0)
-lw_sl : l r ?
+lw_zero : [~r] ? (||r|| = 2) & (((r ' 1) ' 0) = \N) & ((digit_num (r ' 1) 2 0) = 0)
+lw_sl : [~l] [~r] ?
 	(lw_ty r) == `?` : r
 	!((lw_ty r) == `Int`) : lw_no `index-type`
 `0 番目から末尾までは丸ごと（命令なし）`
 	lw_zero r : l
 	lw_static r : `String` , (lw_ws l)~ , (lw_ws r)~ , `H`
 	`String` , (lw_ws l)~ , (lw_ws r)~ , `H d`
-lw_ix : l r ?
+lw_ix : [~l] [~r] ?
 	(lw_ty r) == `?` : r
 	!((lw_ty r) == `Int`) : lw_no `index-type`
 	lw_static r : `Char` , (lw_ws l)~ , (lw_ws r)~ , `I`
 	`Char` , (lw_ws l)~ , (lw_ws r)~ , `I d`
 
 `--- 並置：部分集合では飽和した呼び出しだけ。頭の名前を最後に置く ---`
-lw_j : [~ts] i j [~ps] tc p ? lw_jk ts i j (end_of ts i (juxt_tier + 1)) ps tc p
+lw_j : [~ts] i j [~ps] tc [~p] ? lw_jk ts i j (end_of ts i (juxt_tier + 1)) ps tc p
 `頭は1語の既知の関数で、引数の数が仮引数の数と合うときだけ呼び出しにする。`
 `頭が塊（n * fact (n - 1) の n * fact）なら、最初の1語だけ拾うと * fact が黙って消える`
-lw_jk : [~ts] i j k [~ps] tc p ?
+lw_jk : [~ts] i j k [~ps] tc [~p] ?
 	k = j : lw_x ts i j (juxt_tier + 1) ps tc p
 	k != (i + 1) : lw_no (`head ` (ts ' i))
 	lw_pf ps 0 (ts ' i) : lw_no (`head ` (ts ' i))
 	(lw_arity (p ' 0) 0 (ts ' i)) < 0 : lw_no (`head ` (ts ' i))
 	(lw_arity (p ' 0) 0 (ts ' i)) != (lw_nargs ts k j 0) : lw_no (`arity ` (ts ' i))
 	lw_jc (ts ' i) (lw_sig (p ' 1) (ts ' i)) ts k j ps tc p
-lw_jc : f [~sg] [~ts] k j [~ps] tc p ?
+lw_jc : f [~sg] [~ts] k j [~ps] tc [~p] ?
 	(sg ' 0) == `?` : sg
 	lw_call f sg (lw_args ts k j ps p sg 0 f) tc
 
 `仮引数の数。定義の文が無ければ -1（__ を返すと次の呼び出しが完全性公理で消える）`
-lw_arity : p i w ?
+lw_arity : [~p] i w ?
 	i >= ||p|| : 0 - 1
 	lw_arity_st (lw_stoks p i) p i w
 `見るのは最初の定義だけ（先勝ち）。最初の定義が定数なら、後に同じ名前の関数があっても呼べない`
-lw_arity_st : [~ts] p i w ?
+lw_arity_st : [~ts] [~p] i w ?
 	((lw_nm (ts ' 0)) == w) & ((ts ' 1) == `:`) & (lw_find ts 2 `?`) : (lw_find ts 2 `?`) - 2
 	((lw_nm (ts ' 0)) == w) & ((ts ' 1) == `:`) : 0 - 1
 	lw_arity p (lw_next p i) w
 `実引数は呼び先の仮引数の型と同じ型で渡す。1本を2本へ持ち上げるのは確保なので断る`
-lw_args : [~ts] k j [~ps] p [~sg] n f ?
+lw_args : [~ts] k j [~ps] [~p] [~sg] n f ?
 	k >= j : __
 	(lw_arg (lw_x ts k (end_of ts k (juxt_tier + 1)) (juxt_tier + 1) ps 0 p) (sg ' n) f)~ , (lw_args ts (end_of ts k (juxt_tier + 1)) j ps p sg (n + 1) f)~
-lw_arg : r t f ?
+lw_arg : [~r] t f ?
 	(lw_ty r) == `?` : lw_ws r
 	(lw_ty r) == t : lw_ws r
 	((lw_ty r) == `Unit`) & ((lw_w t) = 1) : lw_ws r
@@ -239,7 +239,7 @@ lw_bad : [~ws] i ?
 	((ws ' i) ' 0) = \! : i
 	lw_bad ws (i + 1)
 `呼び出しの語の数は実引数のスロットの合計。返値は1本だけ（2本の返値は部分集合の外）`
-lw_call : f [~sg] ws tc ?
+lw_call : f [~sg] [~ws] tc ?
 	lw_bad ws 0 : `?` , (ws ' (lw_bad ws 0))
 	(lw_slots sg 0) > 8 : lw_no `args`
 	!(lw_okr (lw_ret sg)) : lw_no (`type ` f)
@@ -254,7 +254,7 @@ lw_cj : tc n f ?
 `（裁定 2026-09-28）。JS の前段（pass2）がそれを「バックスラッシュに穴を渡した部分適用」と読んでいた間は、`
 `読みが割れる綴りとして名指しで断っていた。空白を挟んだノルムは parser.sn の語の規則では1語にならない`
 `（pegjs は読む）ので断る`
-lw_leaf : w [~ps] tc p ?
+lw_leaf : [~w] [~ps] tc [~p] ?
 	w == `__` : lw_t `Unit` `U`
 	lw_post w : lw_no (`postfix ` w)
 	(w ' 0) = \( : lw_e (tokens (w ' (1 ~ (||w|| - 2)))) ps tc p
@@ -268,7 +268,7 @@ lw_leaf : w [~ps] tc p ?
 	(digit_run w 0) = ||w|| : lw_t `Int` (`N ` w)
 	lw_pf ps 0 w : lw_p ps (lw_pf ps 0 w)
 	lw_cst p (p ' 0) 0 w
-lw_e : [~ts] [~ps] tc p ? lw_x ts 0 ||ts|| 2 ps tc p
+lw_e : [~ts] [~ps] tc [~p] ? lw_x ts 0 ||ts|| 2 ps tc p
 
 `字面と括りは語の全体で読む。頭の1字だけを見ていたので、後置の付いた字面（\a!、0u0041~、(\a)!、文字列の字面に ~）を`
 `別の値として黙って読んでいた（0u0041~ は 1079、文字列の字面に ~ を付けると閉じの引用符まで中身に入る、`
@@ -276,7 +276,7 @@ lw_e : [~ts] [~ps] tc p ? lw_x ts 0 ||ts|| 2 ps tc p
 `pegjs は字面と括りの後に空白・行末・後置（! @ ~）しか置かせないので、余りがあればそれは後置である。`
 `pass4 は ! を断り、~ と @ は出す——けれど器に付いた ~ は読みが割れている（実引数へ撒くのか、μ で器へ`
 `戻るのか）ので、どちらも写さずに名指しで断る`
-lw_post : w ?
+lw_post : [~w] ?
 	(w ' 0) = \( : !((w ' (||w|| - 1)) = \))
 	(w ' 0) = quote : !(lw_isstr w)
 	(w ' 0) = escape : ||w|| != 2
@@ -286,33 +286,33 @@ lw_post : w ?
 `最後の字だけを見ていた間は、バッククォートの文字の字面（2字）だけの文を裸のテキストとして読み捨て（pass4 は`
 `96 を返すのに前の文の値）、それに @~ を付けた語を取り込みと読んでいた——lw_post の中では呼ぶ側が最初の字を`
 `見ていたので気づかなかった`
-lw_isstr : w ? (||w|| > 1) & ((w ' 0) = quote) & ((w ' (||w|| - 1)) = quote)
+lw_isstr : [~w] ? (||w|| > 1) & ((w ' 0) = quote) & ((w ' (||w|| - 1)) = quote)
 `16 進の桁が続く所まで（digit_run と同じ形）`
-lw_hexrun : w i ?
+lw_hexrun : [~w] i ?
 	i >= ||w|| : i
 	lw_ishex (w ' i) : lw_hexrun w (i + 1)
 	i
 lw_ishex : c ? ((c >= \0) & (c <= \9)) | ((c >= \A) & (c <= \F)) | ((c >= \a) & (c <= \f))
 
 `文字列の字面は語 B に中身を生のまま載せる（空は B だけ）。.rodata の番号は段2が振る`
-lw_str : w ?
+lw_str : [~w] ?
 	||w|| = 2 : lw_t `String` `B`
 	lw_t `String` (`B ` (w ' (1 ~ (||w|| - 2))))
 
 `ノルムは器の長さ。1本の値のノルムは別の命令列なので部分集合の外`
-lw_isnorm : w ? (||w|| > 4) & ((w ' 0) = \|) & ((w ' 1) = \|) & ((w ' (||w|| - 1)) = \|) & ((w ' (||w|| - 2)) = \|)
-lw_norm : r ?
+lw_isnorm : [~w] ? (||w|| > 4) & ((w ' 0) = \|) & ((w ' 1) = \|) & ((w ' (||w|| - 1)) = \|) & ((w ' (||w|| - 2)) = \|)
+lw_norm : [~r] ?
 	(lw_ty r) == `?` : r
 	(lw_ty r) == `String` : `Int` , (lw_ws r)~ , `L`
 	lw_no `norm-scalar`
 
 `0uXXXX（16進）。0u0000 は __ である`
-lw_isu : w ? (||w|| > 2) & ((w ' 0) = \0) & ((w ' 1) = \u)
+lw_isu : [~w] ? (||w|| > 2) & ((w ' 0) = \0) & ((w ' 1) = \u)
 lw_hv : c ?
 	c <= \9 : (0 + c) - 48
 	c <= \F : (0 + c) - 55
 	(0 + c) - 87
-lw_hex : w i a ?
+lw_hex : [~w] i a ?
 	i >= ||w|| : a
 	lw_hex w (i + 1) ((a * 16) + (lw_hv (w ' i)))
 lw_chr : v ?
@@ -331,7 +331,7 @@ lw_p : [~ps] i ? (ps ' (i + 1)) , (`P ` (dec (lw_off ps 0 i)) ` ` (dec (lw_w (ps
 
 `Int の上限（2^63 - 1）を越える字面。19 桁なら頭の 18 桁で比べる（18 桁は必ず収まる）`
 `——digit_num は回るので、越えた値を読んでから比べることはできない`
-lw_big : w ?
+lw_big : [~w] ?
 	||w|| > 19 : w
 	||w|| < 19 : __
 	(digit_num (w ' (0 ~ 17)) 0 0) > 922337203685477580 : w
@@ -339,49 +339,49 @@ lw_big : w ?
 	__
 
 `--- 定数：字面から k : 値 の文を探して中身を撒く ---`
-lw_cst : p s i w ?
+lw_cst : [~p] [~s] i w ?
 	i >= ||s|| : lw_no w
 	lw_cst_st (lw_stoks s i) p s i w
 `__ に束縛した名前は pass4 が断る（まだ出せない識別子）。撒くと断りが黙った値に化けるので、ここで名指しする。`
 `見るのは綴りではなく型——z : 0u00・z : (__)・z : __ + __ も __ に束縛している`
-lw_cst_st : [~ts] p s i w ?
+lw_cst_st : [~ts] [~p] [~s] i w ?
 	((lw_nm (ts ' 0)) == w) & ((ts ' 1) == `:`) : lw_ucst (lw_pure (lw_x ts 2 ||ts|| 2 lw_none 0 p) 1) w
 	lw_cst p s (lw_next s i) w
-lw_ucst : r w ?
+lw_ucst : [~r] w ?
 	(lw_ty r) == `Unit` : lw_no (`unit-const ` w)
 	r
 
 `呼び出しを含む定数は .data に一度だけ置く形（部分集合の外）。撒くと呼ぶ回数が変わる`
-lw_pure : r i ?
+lw_pure : [~r] i ?
 	(lw_ty r) == `?` : r
 	i >= ||r|| : (lw_ty r) , (lw_ws r)~ , `X`
 	((r ' i) ' 0) = \C : lw_no `call-in-const`
 	lw_pure r (i + 1)
 
 `--- 字下げのブロック：行ごとに。枝の型を合わせ、枝と条件は1本に限る ---`
-lw_blk : b [~ps] tc p ?
+lw_blk : [~b] [~ps] tc [~p] ?
 	lw_find (lw_stoks b 0) 0 `:` : lw_mt (lw_lines b 0 ps tc p)
 	lw_e (tokens b) ps tc p
-lw_mt : r ?
+lw_mt : [~r] ?
 	(lw_ty r) == `?` : r
 	(lw_ty r) == `String` : lw_no `width arm`
 	(lw_ty r) , `M` , (lw_ws r)~ , `Z`
-lw_lines : b i [~ps] tc p ?
+lw_lines : [~b] i [~ps] tc [~p] ?
 	(lw_next b i) >= ||b|| : lw_line (lw_stoks b i) ps tc p
 	lw_lj (lw_line (lw_stoks b i) ps tc p) (lw_lines b (lw_next b i) ps tc p)
-lw_lj : a r ?
+lw_lj : [~a] [~r] ?
 	(lw_ty a) == `?` : a
 	(lw_ty r) == `?` : r
 	(lw_ty a) == `Unit` : (lw_ty r) , (lw_ws a)~ , (lw_ws r)~
 	((lw_ty r) == `Unit`) | ((lw_ty a) == (lw_ty r)) : (lw_ty a) , (lw_ws a)~ , (lw_ws r)~
 	lw_no `arm-type`
-lw_line : [~ts] [~ps] tc p ?
+lw_line : [~ts] [~ps] tc [~p] ?
 	lw_find ts 0 `:` : lw_arm (lw_x ts 0 (lw_find ts 0 `:`) 2 ps 0 p) (lw_val ts ((lw_find ts 0 `:`) + 1) ||ts|| ps tc p)
 	lw_wv (lw_val ts 0 ||ts|| ps tc p)
-lw_wv : v ?
+lw_wv : [~v] ?
 	(lw_ty v) == `?` : v
 	(lw_ty v) , `W` , (lw_ws v)~
-lw_arm : cd v ?
+lw_arm : [~cd] [~v] ?
 	(lw_ty cd) == `?` : cd
 	(lw_ty v) == `?` : v
 	(lw_ty cd) == `String` : lw_no `width cond`
@@ -389,10 +389,10 @@ lw_arm : cd v ?
 `枝の値が __ そのもの（括っても同じ）なら V（置き場に幅ぶんの __）。pass4 の isUnitNode は括りを剥いで見る`
 `——綴りの __ だけを見ていた間は、(__) の枝が U（値の __ を積む）になって命令がずれていた。0u0000 は`
 `pass4 でも値の __（U）である`
-lw_val : [~ts] i j [~ps] tc p ?
+lw_val : [~ts] i j [~ps] tc [~p] ?
 	((j - i) = 1) & (lw_bare (ts ' i)) : lw_t `Unit` `V`
 	lw_x ts i j 2 ps tc p
-lw_bare : w ?
+lw_bare : [~w] ?
 	w == `__` : 1
 	((w ' 0) = \() & ((w ' (||w|| - 1)) = \)) : lw_bare1 (tokens (w ' (1 ~ (||w|| - 2))))
 	__
@@ -400,31 +400,31 @@ lw_bare1 : [~ts] ? (||ts|| = 1) & (lw_bare (ts ' 0))
 
 `--- 文：関数・定数・式 ---`
 `F の語は仮引数ごとの幅の並び（例 F 21 f）。仮引数は裸の名前か [~名前]（分解は部分集合の外）`
-lw_fn : [~ts] q p ? lw_fn1 (ts ' 0) (ts ' (2 ~ (q - 1))) (lw_sig (p ' 1) (ts ' 0)) ts q p
-lw_fn1 : name [~pn] [~sg] [~ts] q p ?
+lw_fn : [~ts] q [~p] ? lw_fn1 (ts ' 0) (ts ' (2 ~ (q - 1))) (lw_sig (p ' 1) (ts ' 0)) ts q p
+lw_fn1 : name [~pn] [~sg] [~ts] q [~p] ?
 	(sg ' 0) == `?` : lw_ws sg
 	||pn|| != (||sg|| - 1) : lw_1 (`! type ` name)
 	lw_pbad pn 0 : lw_1 (`! pattern ` name)
 	lw_fn2 name (lw_wd sg 0) (lw_x ts (q + 1) ||ts|| 2 (lw_zip pn sg 0) 1 p) (lw_ret sg)
-lw_fn2 : name ws b rt ?
+lw_fn2 : name ws [~b] rt ?
 	(lw_ty b) == `?` : (`F ` ws ` ` name) , (lw_ws b)~ , `R`
 	!(lw_okr rt) : lw_1 (`! type ` name)
 	((lw_ty b) == `String`) | (rt == `String`) : lw_1 (`! width-ret ` name)
 	(`F ` ws ` ` name) , (lw_ws b)~ , (lw_rq (b ' (||b|| - 1)))
-lw_rq : t ?
+lw_rq : [~t] ?
 	(t ' 0) = \J : `Q`
 	`R`
 lw_wd : [~sg] i ?
 	i >= (||sg|| - 2) : dec (lw_w (sg ' i))
 	(dec (lw_w (sg ' i))) (lw_wd sg (i + 1))
-lw_pname : w ?
+lw_pname : [~w] ?
 	(w ' 0) = \[ : w ' (2 ~ (||w|| - 2))
 	w
-lw_pok : w ?
+lw_pok : [~w] ?
 	!((w ' 0) = \[) : 1
 	(||w|| > 3) & ((w ' 1) = \~) & !(lw_hassp w 0) : 1
 	__
-lw_hassp : w i ?
+lw_hassp : [~w] i ?
 	i >= ||w|| : __
 	(w ' i) = space : 1
 	lw_hassp w (i + 1)
@@ -437,7 +437,7 @@ lw_zip : [~pn] [~sg] i ?
 	(lw_pname (pn ' i)) , (sg ' i) , (lw_zip pn sg (i + 1))~
 `印（#）の付いた関数は、pass4 が .global と .hidden を出す（段2に語が無い）ので名指しで断る。後に書いた`
 `同じ名前の定義なら、上の先勝ちで出さない（compile が落とすので pass4 も出さない）`
-lw_fst : [~ts] p s i ?
+lw_fst : [~ts] [~p] [~s] i ?
 	lw_dup ts s i : __
 	(((ts ' 0) ' 0) = \#) & ((ts ' 1) == `:`) & (lw_find ts 2 `?`) : lw_1 (`! export ` (ts ' 0))
 	((ts ' 1) == `:`) & (lw_find ts 2 `?`) : lw_fn ts (lw_find ts 2 `?`) p
@@ -447,35 +447,35 @@ lw_fst : [~ts] p s i ?
 `字面そのもの（閉じの後に空白を置いた裸のテキスト。pass4 も文として出さない）と、字面に @~ を付けた取り込み`
 `（compile が定義へ撒く）。後置の付いた字面（~ ! @）は値である——引用符で始まる1語を全部捨てていた間は、`
 `pass4 が断る ! に命令を出し、pass4 が文字列を返す ~ の文で前の文の値を返していた`
-lw_mst : [~ts] p s i ?
+lw_mst : [~ts] [~p] [~s] i ?
 	lw_dup ts s i : __
 	(||ts|| = 1) & (lw_isstr (ts ' 0)) : __
 	(||ts|| = 1) & (lw_isimp (ts ' 0)) : __
 	((ts ' 1) == `:`) & (lw_find ts 2 `?`) : __
 	(ts ' 1) == `:` : (lw_ws (lw_x ts 2 ||ts|| 2 lw_none 0 p))~ , `S`
 	(lw_ws (lw_x ts 0 ||ts|| 2 lw_none 0 p))~ , `S`
-lw_isimp : w ? (||w|| > 3) & ((w ' (||w|| - 1)) = \~) & ((w ' (||w|| - 2)) = \@) & (lw_isstr (w ' (0 ~ (||w|| - 3))))
+lw_isimp : [~w] ? (||w|| > 3) & ((w ' (||w|| - 1)) = \~) & ((w ' (||w|| - 2)) = \@) & (lw_isstr (w ' (0 ~ (||w|| - 3))))
 `同じ名前の定義は先に書いた方が勝つ（compile の refuseRedefinitions が後の行を落とす。定義の順序は先勝ち）。`
 `後の定義の文は関数でも定数でも出さない——両方出すと、関数はラベルが2つになってアセンブラが落とし、`
 `定数は文が1つ増えて .Lstr の番号までずれていた`
 `名前は export の印（# ## ###）を剥いで比べる（compile の definedNameOf と同じ）。綴りで比べていた間は、`
 `#k : 1 の後の k : 2 を別の名前と読んで文を1つ多く出し、k を 2 と読んでいた（pass4 は先勝ちで 1）`
-lw_nm : w ?
+lw_nm : [~w] ?
 	(||w|| > 1) & ((w ' 0) = \#) : lw_nm (w ' (1 ~ (||w|| - 1)))
 	w
-lw_dup : [~ts] s i ? ((ts ' 1) == `:`) & (lw_dup1 s 0 i (lw_nm (ts ' 0)))
-lw_dup1 : s j i w ?
+lw_dup : [~ts] [~s] i ? ((ts ' 1) == `:`) & (lw_dup1 s 0 i (lw_nm (ts ' 0)))
+lw_dup1 : [~s] j i w ?
 	j >= i : __
 	lw_dup2 (lw_stoks s j) s j i w
-lw_dup2 : [~ts] s j i w ?
+lw_dup2 : [~ts] [~s] j i w ?
 	((lw_nm (ts ' 0)) == w) & ((ts ' 1) == `:`) : 1
 	lw_dup1 s (lw_next s j) i w
-lw_fns : s i p ?
+lw_fns : [~s] i [~p] ?
 	i >= ||s|| : __
 	(lw_fst (lw_stoks s i) p s i)~ , (lw_fns s (lw_next s i) p)~
-lw_main : s i p ?
+lw_main : [~s] i [~p] ?
 	i >= ||s|| : __
 	(lw_mst (lw_stoks s i) p s i)~ , (lw_main s (lw_next s i) p)~
-lw_prog : p ist opt ?
+lw_prog : [~p] [~ist] [~opt] ?
 	lw_optck opt : lw_1 (lw_optck opt)
 	(lw_fns p 0 (p , ist))~ , `G` , (lw_main p 0 (p , ist))~ , `D`
