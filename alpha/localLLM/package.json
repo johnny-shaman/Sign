@@ -1,0 +1,6 @@
+{
+  "name": "sign-local-llm",
+  "private": true,
+  "type": "module",
+  "description": "Sign ネイティブな LLM の練習場（課題の切り出しと採点）"
+}
