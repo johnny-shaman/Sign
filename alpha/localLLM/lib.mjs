@@ -21,10 +21,11 @@ export function git(args, opts = {}) {
 /** 隠しテストに回すもの。コーパスや golden もテストの側である（答えを見せないため）。 */
 export const isTestPath = (p) => p.startsWith("alpha/javascript/test/");
 
-/** 課題の答えになりうる「処理系の中身」。文書だけの変更は採点できないので課題にしない。 */
-export const isSourcePath = (p) =>
-	!isTestPath(p) &&
-	(/^alpha\/javascript\/[^/]+\.(js|mjs|pegjs)$/.test(p) || /^alpha\/sign\/[^/]+\.sn$/.test(p));
+/** Sign で書いたもの。課題の答えはこれだけにする（モデルに覚えさせるのは Sign であって JS ではない）。 */
+export const isSignPath = (p) => /^alpha\/sign\/[^/]+\.sn$/.test(p);
+
+/** JS の処理系そのもの。ここに手が入ったコミットは課題にしない（JS は採点役で、教材ではない）。 */
+export const isJsSourcePath = (p) => !isTestPath(p) && /^alpha\/javascript\/[^/]+\.(js|mjs|pegjs)$/.test(p);
 
 export function readTask(id) {
 	return JSON.parse(fs.readFileSync(path.join(TASKS, `${id}.json`), "utf8"));

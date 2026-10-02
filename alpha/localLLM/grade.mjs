@@ -34,6 +34,12 @@ function applyCandidate(wt, cand) {
 		for (const e of cand.edits) {
 			if (isTestPath(e.file)) return "候補がテストを書き換えています";
 			const p = path.join(wt, e.file);
+			// SEARCH が空なら新しいファイルを作る（Sign の枚を新しく足すコミットもある）
+			if (!fs.existsSync(p) && e.search.trim() === "") {
+				fs.mkdirSync(path.dirname(p), { recursive: true });
+				fs.writeFileSync(p, e.replace.endsWith("\n") ? e.replace : e.replace + "\n");
+				continue;
+			}
 			if (!fs.existsSync(p)) return `ファイルがありません: ${e.file}`;
 			const src = fs.readFileSync(p, "utf8");
 			const at = src.indexOf(e.search);
@@ -67,7 +73,8 @@ export function grade(task, cand, opts = {}) {
 	try {
 		const why = applyCandidate(wt, cand);
 		if (why) return { id: task.id, applied: false, reason: why, ok: false, ms: Date.now() - started };
-		try { git(["apply", "--whitespace=nowarn", "-"], { cwd: wt, input: task.test_patch }); }
+		// セルフホストの穴の課題は HEAD の門で採点するので、隠しテストを持たない
+		if (task.test_patch) try { git(["apply", "--whitespace=nowarn", "-"], { cwd: wt, input: task.test_patch }); }
 		catch (e) { return { id: task.id, applied: false, reason: "隠しテストを当てられません: " + String(e.stderr || e.message).slice(0, 300), ok: false, ms: Date.now() - started }; }
 		if (!opts.qemu) disableMachine(wt);
 		const js = path.join(wt, "alpha", "javascript");

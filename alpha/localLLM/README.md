@@ -1,37 +1,52 @@
 # alpha/localLLM — Sign ネイティブな LLM の練習場
 
-Sign の保守（セルフホスト・書き直し・処理系の直し）を提案し実行できる小さなローカル LLM を育てる。
+Sign を書き、Sign で書いた処理系（セルフホスト）を保守できる小さなローカル LLM を育てる。
 ここはその**段階1：練習場**である。モデルはまだ無い。あるのは「課題」と「採点」で、どのモデルを
 載せても同じ物差しで測れる。
 
 ## 考え方
 
-- **正しさは門が受け持つ。** Sign には仕様が小さく、解釈器と実機が値を突き合わせる門がある。
-  候補の直しが正しいかは人の目ではなく門が決めるので、モデルは小さくてよい。
-- **課題は過去のコミットから作る。** コミット c を「親 c^ の状態」と「症状（件名）」に戻し、c が
-  足したテストを**採点のときにだけ**入れる（隠しテスト）。答えはテスト以外の差分である
-  （SWE-bench と同じ形）。コミットの本文は「なぜ」の説明なので、問いには見せず学習の側に回す。
-- **良い課題だけを使う。** 何も直さなければ落ち、正解を当てれば通る課題だけが採点に使える
-  （validate.mjs が確かめて課題に書き戻す）。
-- **速い門で回す。** 採点では機械の側（clang・qemu）を飛ばし（`SIGN_NO_QEMU=1`）、解釈器と命令の
-  比較だけで見る。qemu は最後の確認に回す（`grade.mjs --qemu`）。
-- **仕様の裁定は人が決める。** モデルは選択肢と根拠を出すところまで。仕様とテストを同じ手が
-  書き換えると、気づかないまま仕様がずれる。解釈器と実機という独立した2つの実装が錨である。
+- **覚えさせるのは Sign だけ。** 仕様は小さい——演算子の表、`__`（零対象：対象として見れば値、
+  射として見れば関数）、仮引数の形、match_case と論理演算、再帰と写像・畳み込み。あとはその
+  組み合わせである。他の言語の常識を持ち込む余地が無いので、仕様から外れる理由が無い。
+- **JS の処理系は採点役であって教材ではない。** 解釈器と、セルフホストを JS と突き合わせる門が
+  正しさを決める。JS のコードは問いに見せない。JS の直しも課題にしない——解かせると、モデルが
+  覚えるのは Sign ではなく JS になる。
+- **問いに付けるのは仕様の核だけ。** `core.md`（数 KB）。`--spec full` で演算子の表を足す。表は
+  問うたびに仕様書（`documents/ja-jp/guide/operator_table.md`）から切り出す——仕様は裁定で動くので、
+  写しを置くと古くなる。
+- **良い課題だけを使う。** 中身を消せば落ち、正解なら通る課題だけが、書いたものを見ている。
+- **仕様の裁定は人が決める。** モデルは選択肢と根拠を出すところまで。
+
+## 課題は4種類（易しい順）
+
+| 課題 | 問い | 答え | 採点 | 数 |
+|---|---|---|---|---|
+| 値（`values.mjs`） | 短い完結したプログラム | 最後の式の値を1行 | 解釈器の値と一致 | 145 |
+| 書く・コーパス（`write.mjs`） | プログラムから定義を1つ抜き、見出しと全体の値を見せる | その定義 | 戻して走らせた値が元と一致 | 使える穴 117 |
+| 書く・セルフホスト（`write.mjs`） | `alpha/sign/*.sn` から定義を1つ抜き、周りと直前の注を見せる | その定義 | 戻した HEAD の写しで、その枚の門が全部通る | 393（要 validate） |
+| 直す（`ask.mjs`） | Sign だけを直した過去のコミットの症状と、直す場所の周り | SEARCH/REPLACE の塊 | そのコミットが足したテスト（隠しテスト）が通る | 判別できる 18（20 件中） |
+
+セルフホストの枚と門：`lower.sn`・`codegen.sn` → codegen_sn、`asm_text.sn`・`emit.sn`・
+`operator_table.sn` → emit_sn、`preprocess.sn`・`lexer.sn`・`parser.sn` → preprocess_sn、
+`target_info.sn` → target_info_sn、`layout.sn` → layout_sn。1件の採点は数秒（preprocess）〜
+数分（layout）。
 
 ## 使い方
 
-Node だけで動く（追加のパッケージは要らない。`alpha/javascript` で `npm ci` 済みであること）。
-課題は全履歴から作るので、浅いクローンなら先に `git fetch --unshallow` する。
+Node だけで動く（`alpha/javascript` で `npm ci` 済みであること）。直す課題は履歴から作るので、
+浅いクローンなら先に `git fetch --unshallow` する。
 
 ```sh
 cd alpha/localLLM
-node harvest.mjs --since 2026-07-29     # 課題を tasks/ に切り出す
-node validate.mjs --limit 20            # 良い課題かを確かめる（1件は数秒〜2分）
-node values.mjs harvest                 # 値を当てる課題を values.jsonl に作る
+node values.mjs harvest                       # 値の課題
+node write.mjs harvest                        # 書く課題（コーパス・セルフホスト）
+node write.mjs validate --kind corpus         # 使える穴を確かめる（数秒）
+node write.mjs validate --kind self --file preprocess.sn
+node harvest.mjs && node validate.mjs         # 直す課題
 
-node ask.mjs <課題id> --dry             # 問いを見る（モデル不要）
-node ask.mjs --oracle --limit 3         # 正解を流して道具一式を確かめる
-node grade.mjs <課題id> --answer        # 1件を正解で採点する
+node write.mjs ask <穴id> --dry               # 問いを見る（モデル不要）
+node write.mjs ask --oracle --limit 5         # 正解を流して道具一式を確かめる
 ```
 
 モデルを載せたら、OpenAI 互換の口（llama.cpp の `llama-server` など）へ向ける：
@@ -39,44 +54,39 @@ node grade.mjs <課題id> --answer        # 1件を正解で採点する
 ```sh
 llama-server -m モデル.gguf --port 8080 -c 8192      # 別の端末で
 node values.mjs ask --url http://127.0.0.1:8080 --label qwen1.5b
+node write.mjs ask --url http://127.0.0.1:8080 --kind corpus --label qwen1.5b
+node write.mjs ask --url http://127.0.0.1:8080 --kind self --label qwen1.5b
 node ask.mjs --url http://127.0.0.1:8080 --label qwen1.5b
 ```
 
-結果は `runs/<記録名>.jsonl` に1課題1行で残る（答えの全文・どの門が何件落ちたか）。
-
-## 2種類の課題
-
-| 課題 | 問い | 答えの形 | 採点 |
-|---|---|---|---|
-| 直す（ask.mjs） | 症状と、直す場所の周りの行（変更前） | `FILE:` と `SEARCH`/`REPLACE` の塊 | 隠しテストの門が全部通るか |
-| 値（values.mjs） | 短い完結したプログラム | 最後の式の値を1行（`__`・`[a b c]`・数・文字列） | 解釈器の値と一致するか |
-
-直す課題では場所を教えている——「どこを」ではなく「どう直すか」を見る設定である。場所を探す力は
-次の段で別に測る。
+結果は `runs/<記録名>.jsonl` に1課題1行で残る。採点では機械の側（clang・qemu）を飛ばす
+（`SIGN_NO_QEMU=1`）。qemu は最後の確認に回す（`grade.mjs --qemu`）。
 
 ## この機械で（Ryzen 7 5700U・16GB）
 
 - 練習場・採点：CPU で十分。
-- 推論：llama.cpp（CPU 版と Vulkan 版の速い方）で 1.5B〜3B の4ビット量子化が目安。7B も載るが、
-  門を回しながらだとメモリが窮屈。
+- 推論：llama.cpp（CPU 版と Vulkan 版の速い方）で 1.5B〜3B の4ビット量子化が目安。
 - 学習：手元では現実的でない。学習のときだけ GPU を数時間借り、でき上がったモデルを量子化して
   手元へ戻す。
 
 ## この先
 
 1. 既存の小さなモデルで基準を測る（どの課題・どの意味で外すか）。
-2. 外す形を狙って、解釈器で合成データを作る（値の課題は無限に作れる）。
-3. コミットの「症状 → なぜ → 直し」を教材にして LoRA で追加学習し、同じ物差しで測り直す。
+2. 外す形を狙って、解釈器で合成データを作る（値の課題と書く課題は無限に作れる）。
+3. 追加学習し、同じ物差しで測り直す。セルフホストの穴が埋められるようになったら、
+   セルフホストの続き（まだ JS にしか無い段）を書かせる。
 
 ## ファイル
 
 | ファイル | 役割 |
 |---|---|
-| `lib.mjs` | git・課題の読み書き・パスの分け方 |
-| `harvest.mjs` | コミットから課題を切り出す |
+| `core.md` | 問いに付ける仕様の核 |
+| `spec.mjs` | 問いの前置きを組む（核＋仕様書から切り出す演算子の表） |
+| `values.mjs` | 値を当てる課題 |
+| `write.mjs` | 定義を抜いて書かせる課題（コーパス・セルフホスト） |
+| `harvest.mjs` / `validate.mjs` / `ask.mjs` | Sign だけを直した過去のコミットを直す課題 |
 | `grade.mjs` | 候補を一時的な作業木（git worktree）に当てて門で採点する |
-| `validate.mjs` | 課題が判別できるかを確かめる |
-| `ask.mjs` | モデルに直す課題を解かせて採点する |
-| `values.mjs` | 値を当てる課題を作り、モデルに解かせる |
+| `interp.mjs` / `show.mjs` | 解釈器を別プロセスで走らせ、値を1つの形で見せる |
+| `lib.mjs` | git・課題の読み書き・パスの分け方 |
 
-`tasks/`・`runs/`・`values.jsonl` は生成物なので git に入れない（いつでも作り直せる）。
+`tasks/`・`holes/`・`runs/`・`values.jsonl` は生成物なので git に入れない（いつでも作り直せる）。

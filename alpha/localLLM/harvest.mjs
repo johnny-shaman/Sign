@@ -3,21 +3,22 @@
  *
  *   node harvest.mjs [--since 2026-07-29] [--max 500]
  *
- * 対象は「処理系の中身（alpha/javascript/*.js・alpha/sign/*.sn・sign.pegjs）」と「テスト」の
- * 両方に手が入ったコミットだけである。テストの差分が隠しテストになり、それ以外の差分が答えになる。
+ * 対象は「Sign で書いたもの（alpha/sign/*.sn）」と「テスト」の両方に手が入り、JS の処理系
+ * （alpha/javascript/*.js・sign.pegjs）には手が入っていないコミットだけである。JS は採点役であって
+ * 教材ではない——JS の直しを解かせると、モデルが覚えるのは Sign ではなく JS になる。テストの差分が隠しテストになり、それ以外の差分が答えになる。
  * 門（gate）は、そのコミットが触った *.test.js である。コーパスだけを触ったなら、コーパスを
  * 読む門を足す。
  *
  * 切り出しただけでは「良い課題」かどうか分からない——直さなくても通る課題や、答えでも
  * 落ちる課題がある。それを分けるのは validate.mjs である。
  */
-import { git, isTestPath, isSourcePath, writeTask, parseArgs } from "./lib.mjs";
+import { git, isTestPath, isSignPath, isJsSourcePath, writeTask, parseArgs } from "./lib.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const revArgs = ["rev-list", "--no-merges", "HEAD"];
 if (args.since) revArgs.push(`--since=${args.since}`);
 if (args.max) revArgs.push(`--max-count=${args.max}`);
-revArgs.push("--", "alpha/javascript/test");
+revArgs.push("--", "alpha/sign");
 
 // コーパスを読む門。コーパスだけが変わったコミットでも門が空にならないように。
 const CORPUS_GATES = [
@@ -32,7 +33,8 @@ for (const commit of git(revArgs).trim().split("\n").filter(Boolean)) {
 	const files = git(["diff-tree", "--no-commit-id", "--name-only", "-r", commit]).trim().split("\n").filter(Boolean);
 	const tests = files.filter(isTestPath);
 	const answers = files.filter((f) => !isTestPath(f));
-	if (!tests.length || !answers.some(isSourcePath)) { skipped++; continue; }
+	// Sign を直したコミットだけ。JS の処理系にも手が入っていれば外す（答えに JS が混ざる）
+	if (!tests.length || !answers.some(isSignPath) || answers.some(isJsSourcePath)) { skipped++; continue; }
 
 	const gate = new Set(tests.filter((f) => /\.test\.js$/.test(f)).map((f) => f.split("/").pop()));
 	for (const [re, g] of CORPUS_GATES) if (tests.some((f) => re.test(f))) gate.add(g);

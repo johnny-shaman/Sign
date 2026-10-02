@@ -25,25 +25,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { grade } from "./grade.mjs";
-import { git, readTask, listTasks, parseArgs, hunkRanges, isSourcePath, RUNS } from "./lib.mjs";
+import { git, readTask, listTasks, parseArgs, hunkRanges, isSignPath, RUNS } from "./lib.mjs";
+import { systemPrompt } from "./spec.mjs";
 
-const SYSTEM = `あなたは Sign 言語の処理系の保守を手伝う。Sign の常識は他の言語と違う。推論の土台は仕様だけにすること。
-- null / false / if は無い。定義されていない識別子と偽はすべて __（Unit）で、__ は関数適用の吸収元である。
-- & と | は短絡評価で、条件分岐は match_case（? のブロック）か論理演算で書く。
-- 器（List・String・Struct）を受ける仮引数は [~x]・[x ~xs]・[foo ~this] と書く。裸の x ~xs はストリーム。
-- 鍵の ~：s ' 1~ は切り出し、s ' i~ は i の中身で1つ引く、s ' i~~ は i の位置から後ろ。
-処理系は JavaScript（alpha/javascript）と Sign 自身（alpha/sign）で書かれている。
+const TASK = `Sign で書いた処理系（alpha/sign/*.sn）の不具合を直す。
 答えは次の形の塊だけを、必要な数だけ並べること（説明は書かない）：
 FILE: パス
 <<<<<<< SEARCH
 変更前の行（見せた行からそのまま写す。ファイルの中でちょうど1か所に当たる長さにする）
 =======
 変更後の行
->>>>>>> REPLACE`;
+>>>>>>> REPLACE
+新しいファイルを作るときは SEARCH を空にし、REPLACE にファイル全体を書く。`;
 
 /** 直す場所の周りの行を、変更前のファイルから切り出す。重なる窓はまとめる。 */
 export function contextOf(task, ctx = 30, maxChars = 8000) {
-	const ranges = hunkRanges(task.answer_patch).filter((r) => isSourcePath(r.file));
+	const ranges = hunkRanges(task.answer_patch).filter((r) => isSignPath(r.file));
 	const byFile = new Map();
 	for (const r of ranges) {
 		const w = [Math.max(1, r.start - ctx), r.start + Math.max(r.count, 1) + ctx];
@@ -67,7 +64,7 @@ export function contextOf(task, ctx = 30, maxChars = 8000) {
 
 export function promptOf(task, opts = {}) {
 	return [
-		{ role: "system", content: SYSTEM },
+		{ role: "system", content: systemPrompt(opts.spec || "core", TASK) },
 		{ role: "user", content: `症状：${task.subject}\n\n直す場所の周り（変更前）：\n\n${contextOf(task, opts.ctx, opts.maxChars)}\nこの症状を直す変更を、SEARCH/REPLACE の塊で答えよ。` },
 	];
 }
@@ -87,7 +84,7 @@ export function oracleText(task) {
 	for (let i = 0; i < lines.length; i++) {
 		const f = lines[i].match(/^\+\+\+ b\/(.+)$/);
 		if (f) { file = f[1]; continue; }
-		if (!lines[i].startsWith("@@") || !file || !isSourcePath(file)) continue;
+		if (!lines[i].startsWith("@@") || !file || !isSignPath(file)) continue;
 		const before = [], after = [];
 		for (i++; i < lines.length && !lines[i].startsWith("@@") && !lines[i].startsWith("diff --git"); i++) {
 			const l = lines[i];
@@ -118,7 +115,7 @@ async function callModel(messages, args) {
 const args = parseArgs(process.argv.slice(2));
 let ids = args._.length ? args._ : listTasks().filter((id) => args.all || readTask(id).validation?.discriminative);
 if (args.limit) ids = ids.slice(0, Number(args.limit));
-const opts = { ctx: Number(args.ctx || 30), maxChars: Number(args.maxChars || 8000) };
+const opts = { ctx: Number(args.ctx || 30), maxChars: Number(args.maxChars || 8000), spec: args.spec || "core" };
 
 if (args.dry) {
 	for (const m of promptOf(readTask(ids[0]), opts)) console.log(`==== ${m.role}\n${m.content}\n`);
