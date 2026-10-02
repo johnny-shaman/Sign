@@ -42,6 +42,12 @@ function which(kind) {
 let cached = null;
 function tools() {
 	if (cached === null) {
+		// `SIGN_NO_QEMU=1` は道具が揃っていても機械の側を飛ばす。練習場（alpha/localLLM）の採点は
+		// 1課題を数十秒で回したいので、値の門は解釈器だけで見て、qemu は最後の確認に回す。
+		if (process.env.SIGN_NO_QEMU === "1") {
+			cached = { clang: null, lld: null, qemu: null, ok: false };
+			return cached;
+		}
 		cached = { clang: which("clang"), lld: which("lld"), qemu: which("qemu") };
 		cached.ok = !!(cached.clang && cached.lld && cached.qemu);
 	}
