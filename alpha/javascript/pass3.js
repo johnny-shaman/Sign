@@ -441,7 +441,10 @@ function elementTypeOfNode(node, env) {
   // 載っている（`callee.returnsElementType`）ので、括りを剥がさないと届かない。
   // 型を運ぶのに要素型を落とすと、Pass 4 が `base + i × sizeof(T)` を出せない。
   if (node.type === "block" && Array.isArray(node.lines) && node.lines.length === 1 && node.kind !== "abs" && node.kind !== "norm") {
-    return elementTypeOfNode(node.lines[0], env);
+    // 中が名前なら束縛まで辿る（`containerElementType`）。名前のノードは要素型を持ち歩かない
+    // ので、剥がしただけでは `(x) ' 0` の要素型が null のまま——`x ' 0` は Int なのに、括った
+    // だけで型を失っていた（値は同じ 1、機械は「まだ出せない式です（get_prop）」で断っていた）。
+    return containerElementType(node.lines[0], env);
   }
   return null;
 }

@@ -488,5 +488,11 @@ checkSameType("$__ + 3 は __ + 3 と同じ型", "$__ + 3", "__ + 3");
 checkSameType("括っても同じ（$(__)）", "$(__) + 3", "__ + 3");
 checkSameType("名前の番地は番地のまま（対照）", "x : 1\n$x", "0x10");
 
+// **括っても名前は名前である。** `(x) ' 0` の要素型を、括りを剥がしただけで名前の束縛まで辿らずに null に
+// していた（`x ' 0` は Int）。値は同じなので黙ってはいなかったが（機械は get_prop を断る）、型を失っていた。
+checkSameType("(x) ' 0 は x ' 0 と同じ型", "x : [1 2 3]\n(x) ' 0", "x : [1 2 3]\nx ' 0");
+checkSameType("((x)) ' 0 も同じ型", "x : [1 2 3]\n((x)) ' 0", "x : [1 2 3]\nx ' 0");
+checkSameType("括った仮引数も同じ型", "f : [~l] ? (l) ' 1\nf [5 6 7]", "f : [~l] ? l ' 1\nf [5 6 7]");
+
 console.log(`\n${passed + extraPassed}/${cases.length + extra} passed`);
 process.exit(passed === cases.length && extraPassed === extra ? 0 : 1);
