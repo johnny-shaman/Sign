@@ -1805,7 +1805,16 @@ function structuralEqual(l, r) {
   if (isUnit(l) && isUnit(r)) return true;
   if (isUnit(l) || isUnit(r)) return false;
   if (Array.isArray(l) && Array.isArray(r)) {
-    return l.length === r.length && l.every((v, i) => structuralEqual(v, r[i]));
+    if (l.length === r.length) return l.every((v, i) => structuralEqual(v, r[i]));
+    // **相手も器でも、1要素の器はその要素と等しい**（裁定B「1要素の器とその要素は `==` で等しい」）。
+    // 下の2行は相手が器でないときしか届かず、`x : [1 2] , __` の `x == [1 2]` が `__` だった
+    // ——器を要素に持つ1要素の器（`[[1 2]]`）とその要素（`[1 2]`）が、長さの比較で先に落ちていた。
+    // 比べ直すのは1要素の側の要素が器のときだけ。スカラー（文字）なら長さが違うので偽で済む——
+    // 要素で比べ直すと、下の `String ≅ List(Char)` の読み替えが `"a"` を `["a"]` へ戻して、
+    // ここへ帰ってくる（`\a == (\b , \c)` が止まらなかった）。
+    if (l.length === 1 && Array.isArray(l[0])) return structuralEqual(l[0], r);
+    if (r.length === 1 && Array.isArray(r[0])) return structuralEqual(l, r[0]);
+    return false;
   }
   // **1要素の器とその要素は構造として等しい**（`[x] ≅ x`、原理8）。機械も狭い側を1要素へ広げて比べる。
   if (Array.isArray(l) && l.length === 1) return structuralEqual(l[0], r);
