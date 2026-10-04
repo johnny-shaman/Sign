@@ -254,7 +254,12 @@ function isDestructurable(v) {
   // `String ≅ List(0u)`（type_system.md §2）なので、文字列も分割代入できる。添字（`s ' 0`）と
   // 要素数（`|s|`）は既に文字のリストとして扱っており、ブラケットだけ単一の不透明な値として
   // 扱うと同型が片側だけ成立していることになる。
-  return Array.isArray(v) || typeof v === "string" || (v !== null && typeof v === "object" && !v.__lambda__);
+  //
+  // **番地はスカラーである**（裸で受けてよい集合、利用者 2026-10-04）。番地の参照セルも JS では物なので、
+  // 「物なら構造体」と読むと `[h ~t]` が番地を構造体として鍵 `h` で引いて `__` になっていた——スカラーなら
+  // 長さ1の器へ持ち上がる（`[x] ≅ x`、括りへのスカラーは持ち上げてよい）。分解できるのは器（List・
+  // String・名前付きスロット）と規則だけである。
+  return Array.isArray(v) || typeof v === "string" || isNamedSlots(v) || isIterator(v);
 }
 
 // ブラケット仮引数リストへ、単一のList/Struct実引数を分割代入する（8/5の設計合意）。
