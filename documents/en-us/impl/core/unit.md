@@ -40,6 +40,12 @@ append : [x ~xs] [y ~ys] ?
 Taking the two operands `a` `b` and explicitly returning `__` safely collapses the expression to `__`.
 (This used to absorb the operands with a variadic `~x`; a bare `~x` outside brackets — a bare stream parameter — was abolished on 2026-10-04.)
 
+This is scoped operator overloading, not only invalidation (user, 2026-10-05): the override applies only inside the block where it
+is written and in the limited scope that imports it; the operator table itself does not change. Returning `__` disables the
+operator there; returning another expression gives it another meaning there (inside `[+] : a b ? a * b`, `2 + 3` is 6). An override
+written in a file stays inside that file's function; only `#`-exported overrides reach importers. Scopes and imports are resolved
+at compile time, so each operator resolves statically to its definition — no runtime cost.
+
 ### 0.4 `$__` and `@__` Behavior: Unit Absorbs All Operators
 
 `$` (Address-Of) and `@` (Dereference) absorb `__`:
