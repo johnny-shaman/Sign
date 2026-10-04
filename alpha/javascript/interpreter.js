@@ -2152,10 +2152,15 @@ function getPropValue(l, rightNode, env) {
  *
  * スカラーは `[x] ≅ x` の1要素として引かれるので、切っても段0のまま——`5 ' 0~` は `5`、
  * `5 ' 1~` は空（`__`）である。潰しているのではなく、左辺の段へ戻している。
+ *
+ * **名前付きスロットは器である**（裁定B：切り出しは段を変えない）。左辺の段は1なので、1要素でも
+ * 並びのまま返す——`p ' [1 ~ 1]` は `[p ' 1]`。以前はスカラーと同じく畳んでいたので、
+ * `p ' [0 ~ 1]` は並び・`p ' [1 ~ 1]` は要素、と段が切り出しの長さで変わっていた。
  */
-function collapseSlice(arr) {
+function collapseSlice(arr, left) {
   if (!Array.isArray(arr)) return arr;
   if (arr.length === 0) return [];
+  if (isNamedSlots(left)) return arr;
   return arr.length === 1 ? arr[0] : arr;
 }
 
@@ -2201,7 +2206,7 @@ function getPropByValue(l, r) {
       return listView(items, start, items.length);
     }
     const sliced = items.slice(from);
-    return asStr ? sliced.join("") : collapseSlice(sliced);
+    return asStr ? sliced.join("") : collapseSlice(sliced, l);
   }
   // **添字としてのレンジは消費側である。** どの位置を採るかの並びが要るので、ここで走る。
   r = deIterate(r);
@@ -2247,7 +2252,7 @@ function getPropByValue(l, r) {
       const idx = resolveIndex(i);
       return idx >= 0 && idx < asIndexable.length ? asIndexable[idx] : UNIT;
     });
-    return isString ? mapped.map((v) => (isUnit(v) ? "" : v)).join("") : Array.isArray(l) ? mapped : collapseSlice(mapped);
+    return isString ? mapped.map((v) => (isUnit(v) ? "" : v)).join("") : Array.isArray(l) ? mapped : collapseSlice(mapped, l);
   }
   return UNIT;
 }
