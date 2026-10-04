@@ -2247,12 +2247,17 @@ function getPropByValue(l, r) {
   // list_cheat_sheet.md「範囲で要素取得」: `[1 2 3 4] ' [1 ~ 3]` → `[2 3 4]`。
   // rangeが実体化したインデックス列（配列）で、該当位置の値をまとめて取り出す。
   if (Array.isArray(r)) {
-    const mapped = r.map((i) => {
-      if (typeof i !== "number") return UNIT;
+    // **範囲の外の位置は席を取らない**（`__` は余積の単位元、※3）。String は空の字にして繋いでいたので
+    // 落ちていたが、List は `__` を要素として残していた——`||(\a , \b , \c) ' [1 ~ 5]||` が 5
+    // （`` `abc` ' [1 ~ 5] `` は "bc"、機械は 2）で、`String ≅ List(Char)` が切り出しで切れていた。
+    // 落とすのは範囲の外の位置だけで、引けた要素は値によらず残す。
+    const kept = [];
+    for (const i of r) {
+      if (typeof i !== "number") continue;
       const idx = resolveIndex(i);
-      return idx >= 0 && idx < asIndexable.length ? asIndexable[idx] : UNIT;
-    });
-    return isString ? mapped.map((v) => (isUnit(v) ? "" : v)).join("") : Array.isArray(l) ? mapped : collapseSlice(mapped, l);
+      if (idx >= 0 && idx < asIndexable.length) kept.push(asIndexable[idx]);
+    }
+    return isString ? kept.join("") : Array.isArray(l) ? kept : collapseSlice(kept, l);
   }
   return UNIT;
 }
