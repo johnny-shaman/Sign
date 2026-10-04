@@ -4552,6 +4552,24 @@ function genExpr(node, env, em, scope, tail = false) {
 						} else em.pop(3);
 					}
 				}
+				// **その場で組む器を、要素を `{ptr, len}` で運ぶ器の1要素として置く形は、中身の
+				// 置き場がまだ取れない。** 内側の構築も「出て行く器」なので、もらった返値スロット
+				// （外側の記述子の並びそのもの）へ中身を書き始め、記述子の個数を容量として照合して
+				// あふれ、器ごと `__` になっていた——`g : [~r] ? (`! ` r) , `?`` の `||g `x`||` が
+				// 解釈 2 ／実機 0（診断ゼロ）。lower.sn の `lw_no`（断りの断片）がこの形で、載せると
+				// 断りが黙って消える。中身の置き場（記述子の後ろ、`emitContentArena`）は計画が中身の
+				// 上界を言えるときだけ取れるが、字面の部分を含む枝ではまだ言えない（`content` は
+				// `konst === 0` に限る）。置き場が無いなら、黙って空にするより断る（原理4）。
+				// 見るのは文字列を組む形だけ（入れ子の List は下の門が別の理由で断っている）。
+				if (w === 16 && !spreadHere && arenaSlot === null) {
+					const src = stripExpand(parts[i]);
+					if (src && src.type === "operation" && COPRODUCT_BUILD_OPS.has(src.name) && src.atomType === "String")
+						return em.fail(
+							n,
+							"器の構築はまだ出せません（要素を `{ptr, len}` で運ぶ器に、その場で組んだ String を" +
+								"1要素として置く形——中身の置き場（記述子の後ろ）がまだ取れません。字面の部分を含む枝は中身の上界が言えない）"
+						);
+				}
 				const cw = genExpr(stripExpand(parts[i]), env, em, scope);
 				if (arenaSlot !== null) {
 					const srcNode = stripExpand(parts[i]);
@@ -10298,6 +10316,10 @@ function emitTermMeasure(em, off, measure, dst) {
 function emitContentArena(em, dst) {
 	if (em.sretDest === null || em.sretDest === undefined) return false;
 	if (em.sretLimit === null || em.sretLimit === undefined) return false;
+	// 呼ぶ側が置き場を取ったのは、計画が中身の上界を言えたときだけである（`genFunction` の
+	// `sretHasArena`）。取っていないのに頭の2語を読むと、返値スロットの外の残骸を番地として
+	// 使って中身を書く——`g : [~r] ? (c r) , `?`` の要素 0 の中身が死んでいた（解釈 '!' ／実機 255）。
+	if (!em.sretHasArena) return false;
 	// **合計は引かない。** ループは宛先を `幅×個数` 進めるのと同時に、残りそのものを同じ
 	// 個数だけ狭めて書き戻す（`次の周の残り`）。だから和は最初から不変で、引くと二重に
 	// なる——周ごとに `16×合計` だけ手前を指し、実測では「記号の次の語だけが落ちる」形で出た。
@@ -11140,6 +11162,10 @@ function genFunction(name, lambdaNode, env, em, mono) {
 	// sret から取り残される（実際 `take_while` がそうなっていた）。
 	const sretKey = bareName(name).split("$")[0];
 	const sretEntry = em.sretPlan && (em.sretPlan.get(bareName(name)) || em.sretPlan.get(sretKey));
+	// **中身の置き場は、計画が中身の上界を言えたときだけ呼ぶ側が取る**（`sp.content`）。
+	// 言えていない関数が置き場を読むと、呼ぶ側が置いていない頭の2語（次に書く場所・終わり）
+	// ——つまり返値スロットの外の残骸——を番地として使い、そこへ中身を書く。
+	em.sretHasArena = !!(sretEntry && sretEntry.needsSlot && sretEntry.content);
 	if (sretEntry && sretEntry.needsSlot) {
 		em.push();
 		em.sretDest = (em.slot - 1) * 8;
@@ -11809,6 +11835,7 @@ function generateAsm(nodes, env, options = {}) {
 	em.sretTotal = null;
 	em.sretLimit = null;
 	em.sretLooped = false;
+	em.sretHasArena = false;
 	let last = null; // 最後に値を出した式の置き場所（`_.main` の返値になる）
 	for (const node of exprs) {
 		// **裸の文字列リテラルはコメントである**（string_and_comment.md）。Sign の
