@@ -210,7 +210,7 @@ A name that holds a value is refused by name: writing through it would read the 
 Returns the address on success, or `__` on failure.
 
 ```sign
-#stream : s ~t ?
+#stream : [s ~t] ?
 	0xFF00 # s
 	output t~
 ```
@@ -271,8 +271,7 @@ g :
 		x
 		y : x + 1
 		z : y + 1
-		~rest
-	? x y z rest~
+	? x y z
 
 ` Result: 3 4 5
 g 3
@@ -315,9 +314,9 @@ ABS -5
 ### 7. Recursion & Short-Circuit Termination
 
 ```sign
-reverse : x ~y ? (reverse y~)~ x
+reverse : [x ~y] ? (reverse y)~ x
 ` Result: 3, 2, 1
-reverse 1 2 3
+reverse [1 2 3]
 
 length : [~xs] ?
 	!xs : 0
@@ -346,9 +345,9 @@ length 1 2 3
 ` Map. Result: 2 4 6 8
 [* 2,] 1 2 3 4
 
-map : f x ~y ? (@f x) , (map f y~)
+map : f [x ~y] ? (@f x) , (map f y)
 ` Result: 3, 4, 5, 6
-map $[+ 2] 1 2 3 4
+map $[+ 2] [1 2 3 4]
 ```
 
 ## Product Operator (`,` Infix, Right-Associative)
@@ -501,9 +500,9 @@ Mapped directly to hardware register operations:
   a : 1 2 3
   f a~
   ```
-- **Prefix `~` (Rest Parameters)**: Lifts remaining argument stream into a list parameter:
+- **Prefix `~` (Rest Parameters)**: Inside a bracketed parameter list, lifts the remaining arguments into a list parameter (a bare `~y` outside the brackets was abolished on 2026-10-04):
   ```sign
-  tail : x ~y ? y
+  tail : [x ~y] ? y
   ```
 
 ### Postfix `~` in the key position

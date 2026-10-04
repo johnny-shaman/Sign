@@ -60,8 +60,7 @@ f :
 		x
 		y : x + 1
 		z : y + 1
-		~rest
-	? x y z rest~
+	? x y z
 ```
 
 > [!IMPORTANT]
@@ -99,11 +98,10 @@ f :
 		x
 		y : x + 1
 		z : y + 1
-		~rest
 	?
-		x > 3 : x - y rest~
-		y < 3 : x + y rest~
-		z rest~
+		x > 3 : x - y
+		y < 3 : x + y
+		z
 ```
 
 ## Function Application Behavior
@@ -139,14 +137,6 @@ f (3 < 2) 1
 ` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
 g 1 (3 < 2)
 ` Result: 1 2 3
-
-` Behavior when passing __ to rest parameters (~rest):
-` Rest parameters behave identically to default parameters.
-` Passing __ does not collapse the expression; it falls back to the implicit default __ (empty list),
-` allowing the function to execute normally.
-h : x ~rest ? x rest~
-` Result: 1 (__ is treated as empty list and vanishes upon rest~ expansion)
-h 1 __
 ```
 
 ## Bracketed Parameter Lists (Implicit Tilde Omission)

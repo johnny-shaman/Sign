@@ -35,9 +35,10 @@ append : [x ~xs] [y ~ys] ?
 ### 0.3 Operator Invalidation
 
 ```sign
-[+] : ~x ? __
+[+] : a b ? __
 ```
-Absorbing all operands via `~x` and explicitly returning `__` safely collapses the expression to `__`.
+Taking the two operands `a` `b` and explicitly returning `__` safely collapses the expression to `__`.
+(This used to absorb the operands with a variadic `~x`; a bare `~x` outside brackets — a bare stream parameter — was abolished on 2026-10-04.)
 
 ### 0.4 `$__` and `@__` Behavior: Unit Absorbs All Operators
 

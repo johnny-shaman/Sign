@@ -47,7 +47,6 @@ Throughout Sign's design, a recurring pattern manifests: **Safe default syntax e
 |---|---|---|
 | Code Generation | Standard Compilation | `"..."` (Direct Inline Assembly Injection) |
 | Constructor Origin Verification | Static Type Ledger | `' !__` (Explicit Origin Inspection) |
-| Rest Arguments (`list`) | Bare `~xs` (Stream, pull-based, non-concurrent access) | `[x ~xs]` (Pass-by-reference, allows concurrent multi-address access) |
 | Parameter Block IO | `@address` Default Reads (Single-shot, visible effect types) | `#` (Output/Store) inside parameter blocks is **strictly prohibited** |
 | Function Body IO | — | `@` (Input), `#` (Output), and `$` (Address-Of) allow arbitrary IO. Using explicit non-arithmetic symbols continuously alerts the author that "this code touches the physical world rather than pure calculation." |
 
@@ -66,7 +65,7 @@ While Principle 2 states "types are a ledger, safety is caller responsibility," 
 Statically Enforced Rejection Rules:
 
 1. Use of floating-point or SIMD literals in layers below required capability (statically detects unsupported hardware target features).
-2. Use of stream-type identifiers inside bracketed rest parameter blocks `[...]` (statically enforces Principle 3's stream vs pass-by-reference distinction).
+2. A `~name` outside the brackets of a parameter list (a bare stream parameter: `f : x ~xs ?`, `f : ~this ?`; abolished 2026-10-04). Containers are received only through brackets (`[~xs]`, `[x ~xs]`, `[~this]`) — this statically enforces the split between pass-by-value (bare parameters) and pass-by-reference (brackets).
 3. Use of `#` (Output/Store) inside parameter blocks (statically enforces Principle 3's store safety rule).
 
 Because Passes 1–3 resolve the type ledger statically, these rules are checked mechanically without incurring runtime execution cost.

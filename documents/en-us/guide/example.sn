@@ -104,7 +104,7 @@ evaluate = 4
 
 ` Function pointer example: `
 
-Filter : f x ~y ? @f x , Filter f y~
+Filter : f [x ~y] ? @f x , Filter f y
 Filter $[> 0] [-2 ~ 3]
 
 ` Function evaluation precedence is lower than lambda definition precedence. `
@@ -126,8 +126,8 @@ _ 1, 2, 3 == 1
 
 ` The following acts as a tail function: `
 
-[_ ~y ? y] 1 2 3 == 2 3
-[_ ~y ? y] 1, 2, 3 == 2 3
+[[_ ~y] ? y] [1 2 3] == 2 3
+[[_ ~y] ? y] [1, 2, 3] == 2 3
 
 [1 2 3] ' 1~ == 2 3
 [1, 2, 3] ' 1~ == 2 3

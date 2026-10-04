@@ -75,20 +75,20 @@ increment : n ? n + 1
 add : x y ? x + y
 
 L : x ? x
-R : _ ~x ? x
+R : [_ ~x] ? x
 
-map : f x ~y ? (@f x) , (map y~)
-map $[* 2] 1 2 3 4 5
+map : f [x ~y] ? (@f x) , (map f y)
+map $[* 2] [1 2 3 4 5]
 
 ` Desugared Output
 increment : _0 ? _0 + 1
 add : _0 _1 ? _0 + _1
 
 L : _0 ? _0
-R : _0 ~_1 ? _1
+R : [_0 ~_1] ? _1
 
-map : _0 _1 ~_2 ? (@_0 _1) , (map _2~)
-map $[* 2] 1 2 3 4 5
+map : _0 [_1 ~_2] ? (@_0 _1) , (map _0 _2)
+map $[* 2] [1 2 3 4 5]
 ```
 
 ---

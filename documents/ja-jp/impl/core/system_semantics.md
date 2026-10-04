@@ -158,13 +158,13 @@ TCO がそれをループに変える。どれか一つでも欠けると明示�
 割り込みや DMA を伴う IO で、音声バッファとフレームバッファのように**複数の場所を同時に
 生きた状態で保持する**必要がある場合、Pull 型のカーソルである `Iterator` では足りず
 `Implicit` が要る。これが `Implicit(T)` を Layer 2 の型として持つ理由であり、
-[`0_design_principles.md`](../0_design_principles.md) 原理3 が
-「裸の `~xs`（stream、pull型で同時アクセス不可能）」と
-「`[x ~xs]`（参照渡し、複数アドレスへの同時アクセスが可能）」を並べている理由でもある。
+器を受ける仮引数を括り（`[x ~xs]`、参照渡し、複数アドレスへの同時アクセスが可能）だけにした
+理由でもある（括りの外の `~xs`＝裸のストリーム仮引数は 2026-10-04 に廃止、
+[`coproduct_resolver.md`](coproduct_resolver.md) §5.4）。
 
 > [!NOTE]
 > 本節は「待機の意味論」を1箇所にまとめたものであり、新しい機能を定義していない。
 > 個々の規則は `list_model.md`（前置/後置 `~`、Pull 型イテレータ）、
 > `type_system.md`（`Iterator(T)` / `Implicit(T)`）、`tco.md`（末尾再帰のループ化）、
-> `0_design_principles.md` 原理1（`asm_volatile`）・原理3（stream と参照渡しの区別）に
+> `0_design_principles.md` 原理1（`asm_volatile`）・原理3（参照渡しは明示的な opt-in）に
 > 既に分散している。

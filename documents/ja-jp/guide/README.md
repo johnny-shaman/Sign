@@ -98,8 +98,8 @@ f : x ?
 
 ### 再帰
 ```sign
-sum : x ~xs ?
-	xs & x + sum xs | x
+sum : [x ~xs] ?
+	xs & x + (sum xs) | x
 
 ` → 15
 sum [1 2 3 4 5]

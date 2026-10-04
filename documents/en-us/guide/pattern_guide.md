@@ -116,22 +116,22 @@ G @[F 0x10000 $[+ 2]] 3
 
 ## Zipper (Comonadic Extraction & Extension)
 
-- The rest parameter operator `~` can be placed in front of parameter names (prefix `~`) to lift incoming arguments into a list ($w\ a \to w(w\ a)$ operation).
+- The rest parameter operator `~` can be placed in front of parameter names inside the brackets (`[~a]`; a bare `~a` outside brackets was abolished on 2026-10-04) to lift incoming arguments into a list ($w\ a \to w(w\ a)$ operation).
 - Values passed to rest parameters are lifted into a list, enabling indexing via `get` (`'`).
 
 ```sign
-f : ~a ? a ' 0 + a ' 2 + a ' 3
+f : [~a] ? a ' 0 + a ' 2 + a ' 3
 
 ` 1 2 3 are passed into f as a lifted list [1 2 3]
 f 1 2 3
 ```
 
-- When applying functions, combining postfix `~` with prefix `~` forms a dialgebra, facilitating higher-order list operations.
+- Splitting a list into head and rest with a bracketed prefix `~` and passing the rest on as is facilitates higher-order list operations.
 
 ```sign
-map : f x ~y ? (@f x) , (map f y~)
+map : f [x ~y] ? (@f x) , (map f y)
 
-map $[* 2] 1 2 3 4 5
+map $[* 2] [1 2 3 4 5]
 ```
 
 ---
