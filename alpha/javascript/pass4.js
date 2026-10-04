@@ -7081,7 +7081,10 @@ function genStringCompare(node, env, em, scope) {
 	em.emit(loadElem("w14", SCRATCH[1], "x13", w), `${w} byte の要素`);
 	em.load(SCRATCH[1], ro, "右辺の ptr");
 	em.emit(loadElem("w15", SCRATCH[1], "x13", w));
-	em.emit("cmp w14, w15");
+	// **比べる幅は読んだ幅である。** 8 byte の要素は `loadElem` が x で読むので、比べるのも
+	// x でなければ上半分を見ない——`[1 4294967296] == [1 0]` が「等しい」になっていた
+	// （解釈 0 ／実機 2、診断ゼロ）。
+	em.emit(memNarrow(w) ? "cmp w14, w15" : "cmp x14, x15");
 	em.emit(`b.ne ${diff}`);
 	em.emit("add x13, x13, #1");
 	em.emit(`b ${loop}`);
