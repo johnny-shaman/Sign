@@ -1083,13 +1083,21 @@ function isIdentifierToken(x) {
 function parseParamLine(tokens) {
   const colonIdx = tokens.indexOf(":");
   if (colonIdx !== -1) {
-    // **rest 形にデフォルトは書けない**（理由は `parseParamStatements` の同じ検査を参照）。
+    // **括りの rest にデフォルトは書けない**（理由は `parseParamStatements` の同じ検査を参照）。
     // 以前はここで `tokens[0]` をそのまま名前にしていたので、`~xs : 1` の名前が `~_` に
     // なって**黙って通っていた**——束縛できない名前が1つ増えるだけで、診断も出ない。
-    if (tokens[0] === "~_") {
+    //
+    // 見るのは `:` より前の全部である。頭の1語だけを見ていたので、`[x ~xs : 3]` は `x` を名前に
+    // して `~xs` を黙って捨てていた。
+    //
+    // ここへ来る `~` の行は括りの中の行だけである。裸の並びの行は、`:` より前に `~` があれば
+    // 既定値が付いていても `parseParamStatements` が `splitBareParamTokens` へ回し、門
+    // （`refuseBareStreamParams`）が断る。
+    if (tokens.slice(0, colonIdx).includes("~_")) {
       throw new SyntaxError(
-        "rest 形の仮引数にデフォルト値は書けません" +
-          "（`~xs` は stream＝規則であり、既定値として置ける実体化した列とは別物です。原理3 の表）"
+        "括りの rest（`~xs`）にデフォルト値は書けません" +
+          "（`~xs` は括りが受けた器の残りを指す名前で、指す先は呼び出し側が置いた記憶です。" +
+          "既定値を作る場所が無いためです。stack_abi.md §4.6）"
       );
     }
     // "name : defaultExpr..." という1エントリ
@@ -1148,7 +1156,11 @@ function peelParamLines(x) {
     cur = cur[0];
     peeled = true;
   }
-  if (cur.length >= 1 && cur.every((line) => isFlatTokenLine(line) || isTaggedBlock(line))) return { lines: cur, peeled };
+  // **字下げのブロック（`INDENT_`）は括りの行にならない。** 字句は括りの中では字下げを INDENT に
+  // 翻訳しない（lexer.js の `bracketDepth`）ので、剥がした先に字下げのブロックが居れば、それは括りでは
+  // なく深く字下げした仮引数のブロックである。受けていた頃は `f :`⏎`\t\tx`⏎`\t\t~xs` を括り `[x ~xs]`
+  // と読み、裸の `~xs` が門を素通りしていた（`~` が無くても `x`・`y` の2つの仮引数が括り1つになる）。
+  if (cur.length >= 1 && cur.every((line) => isFlatTokenLine(line) || (isTaggedBlock(line) && line[0] !== '"INDENT_"'))) return { lines: cur, peeled };
   return null;
 }
 
@@ -1186,8 +1198,48 @@ function isParamEntryLine(x) {
   return Array.isArray(x) && isIdentifierToken(x[0]) && x.indexOf(":") > 0;
 }
 
+// 裸の並びの1行の**宣言の部分**——ブロックの行なら `:` より前の字句（後ろは既定値の式で、そこに書いた
+// ラムダは自分の仮引数の並びを組むときに同じ門を通る）。1行の形に既定値の書き方は無く、`:` も名前として
+// 並ぶだけなので（`splitBareParamTokens`）、そちらは全部を見る（`withDefault` が偽）。字下げを深くした
+// 続きの行（行の中の `INDENT_` のブロック）は前の行の続きなので（preprocessor.md §0）、その宣言の部分も
+// 同じ行に並べる。括り・丸括弧の中には降りない——括りの中の `~xs` は場所であって、ここで拾うものではない。
+function declarationTokens(row, withDefault = true) {
+  const out = [];
+  for (const t of row) {
+    if (withDefault && t === ":") break;
+    if (isTaggedBlock(t) && t[0] === '"INDENT_"') {
+      for (const r of isFlatTokenLine(t[1]) ? [t[1]] : t[1]) out.push(...(Array.isArray(r) ? declarationTokens(r, withDefault) : [r]));
+    } else {
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+// **裸の並びの1行の宣言の部分に `~` が在れば**、その行のエントリは `splitBareParamTokens` で作る——
+// rest のエントリが出来て、`buildParameterList` の門（`refuseBareStreamParams`）が名指しで断る。
+//
+// 行の形を解く前に拾う（`parseParamStatements`）。既定値が付いていても（`~xs : 1`・`x ~xs : 3`）、括り・丸括弧が
+// 混ざっていても（`[h ~t] ~r`・`(x) ~xs`・`~[a b]`）、字下げを深くした続きの行にあっても同じである。
+// 拾わないと、`:` の枝が頭の1語だけを名前にして `~xs` を黙って捨てるか（`x ~xs : 3`）、行を文の
+// 並びと読み違えて内部エラー（`lines.flatMap is not a function`）で落ちる。既定値の禁止で先に止めても
+// いけない——断りの理由が「既定値」になって、本当の理由（形そのものが廃止された）が隠れる。
+function bareStreamRow(stmt, withDefault = true) {
+  if (!Array.isArray(stmt) || isTaggedBlock(stmt)) return null;
+  const decl = declarationTokens(stmt, withDefault);
+  return decl.includes("~_") ? splitBareParamTokens(decl) : null;
+}
+
 function parseParamStatements(lines) {
   if (isFlatTokenLine(lines) || isParamEntryLine(lines)) return parseParamLine(lines);
+  // **裸の `~` の行が1つでも在れば、どの行の形も解く前に**、全部の行を宣言の部分だけで並べて返す——
+  // rest のエントリが在るので、`buildParameterList` の門が名指しで断る（ほかの行は、断りの文面に括った
+  // 綴りを示すためだけに並べる）。`~` の行だけを順に拾うのでは足りなかった：解けない形の行（`:` の無い
+  // 続きの行 `x`⏎`\t\ty`。`~` が無くても前から内部エラーで落ちる）が `~` の行の前に在っても後ろに在っても、
+  // 先に落ちて、廃止した形を名指しできなかった。
+  if (lines.some((stmt) => bareStreamRow(stmt))) {
+    return lines.flatMap((stmt) => splitBareParamTokens(declarationTokens(stmt)));
+  }
   return lines.flatMap((stmt) => {
     if (isFlatTokenLine(stmt) || isParamEntryLine(stmt)) return parseParamLine(stmt);
     if (isTaggedBlock(stmt)) return parseParamStatements(stmt[1]);
@@ -1199,18 +1251,17 @@ function parseParamStatements(lines) {
     // 反転する——しかも作る場所は自分のフレーム（alloca）なので、返せば宙に浮く。
     // 返値の設計が sret（呼び出し側がスロットを提供する）へ向かっているのと逆である。
     //
-    // 裸の rest（`~xs`）は stream＝規則であり（原理3 の表）、既定値として置ける「規則」が
-    // 実体化した列とは別物なので、やはり書けない。
+    // 裸の `~xs` の行はここへ来ない（上で、行の形を解く前に門へ回した）。
     //
     // 以前はここが `lines.flatMap is not a function` という内部エラーで落ちており、
     // 理由を名指しできていなかった。
     if (Array.isArray(stmt)) {
       const ci = stmt.indexOf(":");
-      if (ci > 0 && (Array.isArray(stmt[0]) || stmt[0] === "~_")) {
+      if (ci > 0 && Array.isArray(stmt[0])) {
         throw new SyntaxError(
-          "分解の形・rest 形の仮引数にデフォルト値は書けません" +
+          "分解の形の仮引数にデフォルト値は書けません" +
             "（参照が指すのは呼び出し側が置いた記憶であり、既定値を作る場所が無いためです。" +
-            "stack_abi.md §4.6）。器を既定で持たせたいなら、値を受ける裸の仮引数にしてください"
+            "stack_abi.md §4.6）"
         );
       }
     }
@@ -1305,6 +1356,60 @@ function checkNoOutputInDefault(node, paramName) {
   }
 }
 
+// ---- 裸のストリーム仮引数は書けない（利用者の裁定 2026-10-04） ----
+//
+// 括りの外の `~名前`——`f : x ~xs ?`・`f : ~this ?`・仮引数のブロックの `~xs` の行——は廃止した。
+// 器を受けるのは括りだけである：丸ごと受けるなら `[~xs]`、頭と残りに割るなら `[x ~xs]`
+// （並べた実引数も括り1つの器になる——`f 1 2 3` は `f (1 2 3)`）。C も値渡しと参照渡しだけで
+// 足りている。裸の `~xs` は値でも場所でもない第3の受け方で、`~` の無い器を渡したときの門
+// （coproduct_resolver.md §5.4）と、解釈器・Pass 3・Pass 4 それぞれのストリーム形の道を要していた。
+//
+// **門はここ1か所である。** 仮引数の並びは1行の形もブロックの形も（既定値が付いていても、
+// 括りが混ざっていても、字下げを深くした続きの行でも——`bareStreamRow`）、ラムダの中・枝の中・
+// `$` で物にした形・export した定義も、全部ここを通る。括りの中の `~xs`（`[x ~xs]`・混在形の
+// `a [h ~t]`・ブロックの `[~this]` の行）は `pattern` か `bracket` の側に居るので当たらない。
+// 穴・区間・点なしが合成する仮引数はここを通らないが、rest を持たない。
+function refuseBareStreamParams(entries) {
+  const at = entries.findIndex((e) => e && e.rest);
+  if (at < 0) return;
+  // 字句の並びへ戻して綴る。`~~xs`・`~@u` は rest の名前が前置の印（`~_`・`@_`）で、続く名前が次の
+  // エントリになっているので、印が続く間は次のエントリまで1語として読む。
+  const toks = (e) => (e.rest ? ["~_", e.name] : e.pattern ? [e.pattern.flatMap(toks)] : [e.name]);
+  let word = toks(entries[at]);
+  for (let k = at + 1; k < entries.length && PREFIX_MARK.test(String(word[word.length - 1])); k++) word = [...word, ...toks(entries[k])];
+  // 名前と穴だけの並び（`x ~xs`・`~this`・`_ ~x`）なら括った綴りを示す。括り・印・`:` が混ざっていれば、
+  // 丸ごと括ると別の形になるので、形だけを言う。
+  const listed = entries.every((e) => e && !e.pattern && (isIdentifierToken(e.name) || e.name === "_")) ? spellTokens(entries.flatMap(toks)) : null;
+  const hint = listed ? `\`${listed}\` なら \`[${listed}]\`` : "`[x ~xs]`・`[~xs]`";
+  throw new OperationError(
+    `裸のストリーム仮引数（括りの外の \`~名前\`）は書けません: \`${spellTokens(word)}\`（2026-10-04 に廃止）。` +
+      `器は括りで受けます——${hint}` +
+      `（並べた実引数も括り1つの器になります。\`f 1 2 3\` は \`f (1 2 3)\`）`,
+    { reason: "bare-stream-param" }
+  );
+}
+
+// 前置・後置の印の字句（`~_`・`@_`・`##_`／`_~`・`_@`）。`__`（Unit）は印ではない。
+const PREFIX_MARK = /^[^\w<>[\]]+_$/;
+const POSTFIX_MARK = /^_[^\w<>[\]]+$/;
+
+// 字句を Sign の綴りへ戻す（断りの文面に内部の字句 `~_`・`<xs>`・`a>,<b` を出さないため）。識別子は
+// `<…>` を外し、印は字だけにして隣へ付け、括り・丸括弧は `[…]` に戻す（どちらも同じ器の括り）。
+function spellTokens(tokens) {
+  const one = (t) => {
+    if (!Array.isArray(t)) return String(t).replace(/^<(.+)>$/, "$1").replace(/^([^\w<>[\]]+)_$/, "$1").replace(/^_([^\w<>[\]]+)$/, "$1");
+    if (isTaggedBlock(t)) return "…";
+    const rows = isFlatTokenLine(t) ? [t] : t;
+    return `[${rows.map((r) => (Array.isArray(r) && !isTaggedBlock(r) ? spellTokens(r) : one(r))).join(" ")}]`;
+  };
+  return tokens
+    .map((t, i) => {
+      const glue = i === 0 || PREFIX_MARK.test(String(tokens[i - 1])) || (typeof t === "string" && POSTFIX_MARK.test(t));
+      return (glue ? "" : " ") + one(t);
+    })
+    .join("");
+}
+
 function buildParameterList(paramTokens, env) {
   // 単一の裸パラメータ（デフォルト・rest無し）は既存挙動をそのまま保つ
   // （identifierノード1つを返す。9/9テスト等、既存の出力形状との後方互換のため）。
@@ -1329,9 +1434,12 @@ function buildParameterList(paramTokens, env) {
     // 平坦化で潰さないよう、parseParamStatementsを使う。
     rawEntries = isBracket ? flattenParamStatements(paramLines).flatMap(parseParamLine) : parseParamStatements(paramLines);
   } else {
-    // 裸の空白区切り形式（例: g x, x ~xs, dist [h ~t]）
-    rawEntries = splitBareParamTokens(paramTokens);
+    // 裸の空白区切り形式（例: g x, dist [h ~t]）。1行も行の1つなので、字下げを深くした続きの行
+    // （`f : x`⏎`\t~xs`）にある `~` も `bareStreamRow` が拾う——`splitBareParamTokens` は字下げの
+    // ブロックを括りとして剥がせずに黙って捨てるので、門に届かなかった。
+    rawEntries = bareStreamRow(paramTokens, false) || splitBareParamTokens(paramTokens);
   }
+  if (!isBracket) refuseBareStreamParams(rawEntries);
 
   const allNames = new Set(rawEntries.map((e) => e.name));
   const boundSoFar = new Set();

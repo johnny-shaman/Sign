@@ -66,9 +66,7 @@ check("畳み込みは違う", streams("fold : s a ? (fold (s ' 1~) (a + 1)) | a
 {
 	const lam = compile("sep : [c ~rest] ?\n\tc = 1 : c (rest ' 0)\n\t!c & (c > 2) : c\n", { charset: "ascii" }).nodes[0].right;
 	check("仮引数はブラケットごと", printParams(lam.left), "[c ~rest]");
-	// ブラケットの有無で意味が変わる（1引数を分解する／先頭と可変長）ので、落としてはいけない。
-	const bareLam = compile("f : c ~rest ? c", { charset: "ascii" }).nodes[0].right;
-	check("裸の rest はブラケット無し", printParams(bareLam.left), "c ~rest");
+	// ブラケットは落としてはいけない（括りの外の `~rest` は書けない形である）。
 	check("ガードも印字できる", printNode(lam.right.lines[1].left), "(!c & ((c > 2)))");
 }
 

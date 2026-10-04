@@ -147,7 +147,9 @@ function isBracketEntryToken(token) {
   while (Array.isArray(cur) && cur.length === 1 && Array.isArray(cur[0]) && !isFlatLine(cur[0]) && !isTaggedBlockToken(cur[0])) {
     cur = cur[0];
   }
-  return Array.isArray(cur) && cur.length >= 1 && cur.every((line) => isFlatLine(line) || isTaggedBlockToken(line));
+  // 字下げのブロック（`INDENT_`）は括りの行にならない（pass2.js の peelParamLines と同じ規則。字句は括りの中で
+  // 字下げを INDENT に翻訳しない）。受けると、深く字下げした仮引数のブロックを括り1つと数えてしまう。
+  return Array.isArray(cur) && cur.length >= 1 && cur.every((line) => isFlatLine(line) || (isTaggedBlockToken(line) && line[0] !== '"INDENT_"'));
 }
 
 // **総スロット数と必須スロット数は、同じ歩き方を2つの数え方で歩いたものである。**

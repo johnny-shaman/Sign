@@ -374,7 +374,7 @@ function fromMs(v, paramSide) {
 	same("parser.sn = pass2: 定義 x : 20", "x : 20");
 	same("parser.sn = pass2: 2引数のラムダ", "f : x y ? x - y");
 	same("parser.sn = pass2: 器1つの仮引数", "f : [x y] ? x - y");
-	same("parser.sn = pass2: 残りの仮引数", "f : x ~xs ? ||xs||");
+	same("parser.sn = pass2: 括りの rest の仮引数", "f : [x ~xs] ? ||xs||");
 	same("parser.sn = pass2: 括りと裸の混ざった仮引数", "f : [~ts] k ? k");
 	same("parser.sn = pass2: 文字の定義", "c : \\a");
 
@@ -405,7 +405,8 @@ function fromMs(v, paramSide) {
 	// 実機で踏み抜いたので入れていない——`tokens` が返す `List(String)` を String を返す関数の
 	// 中で受ける形、つまり**置き場の中にさらに置き場が要る**形で、pass4 が「断る」と書きながら
 	// 断っていない所である（データを番地として読む：FAR が `1+2+3+4` の文字並びだった）。
-	check("そのうち括りの葉は pass2 が木にした（parser.sn はまだ降りない）", outsourcedLeaves, 87);
+	// 87 → 98 は、裸のストリーム仮引数の門（`bare_stream` ほか、2026-10-04）の行の括りの葉である。
+	check("そのうち括りの葉は pass2 が木にした（parser.sn はまだ降りない）", outsourcedLeaves, 98);
 	// 1語だけの列は `[x] ≅ x` で String に潰れるので、2語以上で訊く。
 	check("括りは1語のまま返る（器）", astText("expr [`[1 2 3]` , `+` , `1`]"), "ast : [\nop : `+`\nl : [1 2 3]\nr : 1\n]");
 	check("括りは1語のまま返る（丸括弧）", astText("expr [`(1 + 2)` , `*` , `3`]"), "ast : [\nop : `*`\nl : (1 + 2)\nr : 3\n]");
@@ -457,6 +458,35 @@ function fromMs(v, paramSide) {
 	};
 	bothRefuse("parser.sn = pass2: 弱い段で切れていても混在は断る", "a ' b + c @ d", "`a` , `'` , `b` , `+` , `c` , `@` , `d`");
 	bothRefuse("parser.sn = pass2: 並置で切れていても混在は断る", "f 0 @ l l ' 2", "`f` , `0` , `@` , `l` , `l` , `'` , `2`");
+	// **裸のストリーム仮引数も両方の前段が断る**（利用者の裁定 2026-10-04）。pass2 は仮引数の並びを組む所で名指しし
+	// （`bare-stream-param`）、parser.sn は `?` の左（前の `?` より後ろ）に `~` で始まる語が居れば `__` を返す。
+	// pass2 が仮引数の並びとして読むのは最初の `?` までの全部で、途中の演算子の語（`:`・`+`）では切らない——
+	// parser.sn も切らない。切っていた頃は `f : x ~xs : 3 ? x` を pass2 だけが断っていた。
+	// refused が null の行は、pass2 だけが断る（parser.sn の門の外）ことを書き置く。
+	const streamVerdict = (note, line, toks, refused) => {
+		check(note + "（parser.sn）", isUnit(astText("expr [" + toks + "]")), refused === true);
+		let reason = null;
+		try { compile(line, { parse: parser.parse }); } catch (e) { reason = e.reason || null; }
+		check(note + "（pass2）", reason === "bare-stream-param", refused !== false);
+	};
+	const streamRefused = (note, line, toks) => streamVerdict(note, line, toks, true);
+	streamRefused("parser.sn = pass2: 裸のストリーム仮引数は両方とも断る", "f : x ~xs ? ||xs||", "`f` , `:` , `x` , `~xs` , `?` , `||xs||`");
+	streamRefused("parser.sn = pass2: ~this だけの並びも断る", "f : ~this ? this", "`f` , `:` , `~this` , `?` , `this`");
+	streamRefused("parser.sn = pass2: 名前の無いラムダでも断る", "x ~xs ? x", "`x` , `~xs` , `?` , `x`");
+	// 行の頭（添字 0）の `~` の語も見る。頭を飛ばして数え始めても、上の行はどれも2語目以降に `~` の語が在るので緑のままだった。
+	streamRefused("parser.sn = pass2: 行頭の ~ の語でも断る", "~xs ? xs", "`~xs` , `?` , `xs`");
+	streamRefused("parser.sn = pass2: rest の後ろに : と既定値を書いても断る", "f : x ~xs : 3 ? x", "`f` , `:` , `x` , `~xs` , `:` , `3` , `?` , `x`");
+	streamRefused("parser.sn = pass2: ~xs : 既定値 だけの並びも断る", "f : ~xs : 3 ? xs", "`f` , `:` , `~xs` , `:` , `3` , `?` , `xs`");
+	streamRefused("parser.sn = pass2: 後ろに演算子が続いても断る", "r : ~x + 1 ? x", "`r` , `:` , `~x` , `+` , `1` , `?` , `x`");
+	streamRefused("parser.sn = pass2: 本体に書いたラムダの仮引数も断る", "f : x ? g ~y ? y", "`f` , `:` , `x` , `?` , `g` , `~y` , `?` , `y`");
+	// 演算子の語は `~` で始まっても印ではない（`~` は範囲、`~+` は規則）。両方とも裸のストリーム仮引数とは言わない。
+	streamVerdict("parser.sn = pass2: 演算子の ~ は裸のストリーム仮引数ではない", "f : x ~ y ? x", "`f` , `:` , `x` , `~` , `y` , `?` , `x`", false);
+	check("parser.sn: ? の右の ~ の語は仮引数ではない", isUnit(astText("expr [`f` , `:` , `x` , `?` , `g` , `~5`]")), false);
+	// **parser.sn の門が見るのは1行の字句の並びだけである**（まだ断れない所を数えて置く）。区間 `[?]` は pass2 が字句の段で
+	// 中置へ脱糖してから仮引数の並びを組むので断るが、parser.sn は区間を脱糖しない（`[?]` は1語の葉）——右の `~xs` は仮引数に
+	// 見えない。字下げのブロック（仮引数のブロック）も parser.sn はまだ読まない。どちらも pass2 だけが断る。parser.sn が区間を
+	// 脱糖するようになれば、ここが赤くなって「両方とも断る」の表へ移す合図になる。
+	streamVerdict("まだ：parser.sn は区間を脱糖しないので、区間の ~ の語を見ない", "g : [?] ~xs xs", "`g` , `:` , `[?]` , `~xs` , `xs`", null);
 	check("parser.sn: 並置の中でも1つの連なりなら混ぜない", isUnit(astText("expr [`g` , `0` , `@` , `m` , `'` , `1`]")), true);
 }
 

@@ -78,9 +78,9 @@ classify : x ?
 classify -3
 classify 0
 classify 7`,
-  rest_recursion: `\`裸のrestパラメータ（後置~で展開して渡す）
-sum : x ~xs ? x + (sum xs~)
-sum [1 2 3 4 5]~`,
+  rest_recursion: `\`括りの rest（頭と残りに割って再帰する）
+sum : [x ~xs] ? x + (sum xs)
+sum [1 2 3 4 5]`,
   chain_compare: `\`三項連鎖比較（comparison.md §4、中央の項を返す）
 x : 7
 5 < x < 10

@@ -383,8 +383,9 @@ pre-alpha 実装はアーカイブへ退避した（`documents/ja-jp/impl/append
   exportされたジェネリック関数に呼び出しサイトが無い場合のコンパイルエラー）の動作確認。
 - `test/nested_scope.test.js` — Pass1+Pass2を通した、ブロックスコープの連鎖の動作確認。
 - `test/multiline_block.test.js` — 複数行ブロックが1つのブロック内の複数文として正しく解決されることの確認。
-- `test/rest_param_typecheck.test.js` — 裸のrestパラメータ（`x ~xs ? ...`）への`~`なしList渡しが
-  TypeErrorになること（`coproduct_resolver.md`§5.4）の確認。
+- `test/bare_stream_param.test.js` — 裸のストリーム仮引数（括りの外の `~名前`、`f : x ~xs ?`・`f : ~this ?`・
+  ブロックの `~xs` の行）を仮引数の並びを組む所で名指しで断ること（`bare-stream-param`、利用者の裁定 2026-10-04）と、
+  括りの形（`[x ~xs]`・`[~xs]`）が通ることの確認。
 - `test/param_list.test.js` — Lambda定義行の仮引数部（`params[]`）が総当たり縮約に誤って
   素通しされず、専用処理されることの確認（裸の複数仮引数・rest・ブラケット形式・
   インデントブロック形のデフォルト引数とlet*的な逐次スコープ）。
@@ -444,8 +445,9 @@ npm run build:parser             # sign.pegjs から parser.js を生成（--for
 - Lambda/Atomカテゴリの判定（`getCategory`）とcompose/apply/apply_reverse/concatの優先度
   10.5〜10.0での総当たり縮約（`coproduct_resolver.md`§3-4）
 - List/Structの`~`必須マージルール（`coproduct_resolver.md`§5）
-- 裸のrestパラメータ（`x ~xs ? ...`）への`~`なしList渡しをTypeErrorで拒否（`coproduct_resolver.md`§5.4、
-  `test/rest_param_typecheck.test.js`で確認）。ブラケット形式（`[x ~xs] ? ...`、Eager）は対象外
+- 裸のストリーム仮引数（括りの外の `~名前`、`x ~xs ? ...`）を仮引数の並びを組む所で名指しで拒否
+  （`OperationError`、`bare-stream-param`、利用者の裁定 2026-10-04、`test/bare_stream_param.test.js`で確認）。
+  器は括り（`[x ~xs] ? ...`・`[~xs] ? ...`）で受ける
 - `$expr → Atom(Address)` / `@expr → 参照先の圏を継承`（`type_system.md`§2）を踏まえた、
   `$`/`@`の意味論的な扱い
 - 実例：`1+2*3`の優先順位、`f : x ? x + 1`のdefine/lambdaネスト、`$[array ' 0] # 3`の
@@ -486,7 +488,7 @@ npm run build:parser             # sign.pegjs から parser.js を生成（--for
 `reduceAll`（pass2.js）に、行の中にトップレベルの`?`があれば仮引数部を先に切り出す分岐
 （`resolveLambdaLine` / `buildParameterList`）を追加し、以下を実装した。
 
-- 裸の複数仮引数（`g x`）・裸のrestパラメータ（`x ~xs`）・ブラケット形式（`[x ~xs]`、1行に
+- 裸の複数仮引数（`g x`）・ブラケット形式（`[x ~xs]`、1行に
   複数の裸パラメータが同居するケース含む）が、`params[]`という専用ノードとして正しく構造化される
 - インデントブロック形のデフォルト引数（`function_guide.md`の`y : x + 1`構文）が、`define`文と
   誤解釈されずに「デフォルト式」として解決される

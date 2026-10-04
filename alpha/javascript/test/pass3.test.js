@@ -320,20 +320,19 @@ function checkMultipleRest(note, source) {
 }
 checkMultipleRest("[~u ~v] は境目が決まらない", "f : [~u ~v] ? v\nf [1 2 3 4]");
 checkMultipleRest("[~l x ~r] も焦点の位置が決まらない", "f : [~l x ~r] ? x\nf [1 2 3 4]");
-checkMultipleRest("裸の可変引数でも同じ", "f : x ~xs ~ys ? xs\nf 1 2 3");
 
-// **裸の並びでは rest が最後である。** 括りの中なら rest の後ろに固定スロットを置ける
-// ——器の長さは呼ぶ側で決まるので端から数えれば位置が決まる（上の文面の `[~u v]` `[a ~b c]`）。
-// 裸の並びに端は無い：実引数は余積で並んでいるだけなので rest が全部飲み、後ろの仮引数は
-// 永久に埋まらない。実測で `k : y ~ys z ? z` を `k 1 2 3` と呼ぶと、**診断ゼロで `__`**
-// だった（JavaScript の rest が最後でなければならないのと同じ理由、利用者 2026-09-24）。
+// **裸の並びに rest は書けない**（裸のストリーム仮引数の廃止、利用者の裁定 2026-10-04）。以前は
+// 「裸の並びでは rest が最後」を見ていた——実引数は余積で並んでいるだけなので rest が全部飲み、
+// `k : y ~ys z ? z` を `k 1 2 3` と呼ぶと**診断ゼロで `__`** だった。今は最後でも断る（仮引数の並びを
+// 組む所の門、`bare-stream-param`）。括りの中なら rest の後ろに固定スロットを置ける——器の長さは
+// 呼ぶ側で決まるので、端から数えれば位置が決まる（上の文面の `[~u v]` `[a ~b c]`）。
 {
 	const after = (src) => {
 		try {
 			compile(src, { parse: parser.parse });
 			return "通った";
 		} catch (e) {
-			return e.reason === "param-after-bare-rest" ? "断る" : "別の理由：" + String(e.message).slice(0, 36);
+			return e.reason === "bare-stream-param" ? "断る" : "別の理由：" + String(e.message).slice(0, 36);
 		}
 	};
 	const w = (note, got, want) => {
@@ -343,7 +342,8 @@ checkMultipleRest("裸の可変引数でも同じ", "f : x ~xs ~ys ? xs\nf 1 2 3
 	};
 	w("rest の後ろに裸の仮引数は断る", after("k : y ~ys z ? z\nk 1 2 3"), "断る");
 	w("rest の後ろの括りも断る", after("k : y ~ys [x ~xs] ? xs\nk 1 2 [3 4]"), "断る");
-	w("rest が最後なら通る", after("k : y z ~ys ? ys\nk 1 2 3 4"), "通った");
+	w("rest が最後でも裸なら断る", after("k : y z ~ys ? ys\nk 1 2 3 4"), "断る");
+	w("裸の可変引数 1つも断る", after("f : x ~xs ? xs\nf 1 2 3"), "断る");
 	w("括りの中は rest の後ろに置ける", after("k : [y ~ys z] ? z\nk [1 2 3]"), "通った");
 	w("括りが2つ並ぶのは通る", after("g : [x ~xs] [y ~ys] ? ys\ng [1 2] [3 4]"), "通った");
 }
@@ -355,7 +355,6 @@ checkStructOk("[~u v] は通る（右端が錨）", "f : [~u v] ? v\nf [1 2 3 4]
 checkStructOk("[a ~b c] は通る（両端が錨）", "f : [a ~b c] ? b\nf [1 2 3 4]");
 checkStructOk("[~a] は通る（rest ひとつ）", "f : [~a] ? a\nf [1 2 3]");
 checkStructOk("[a ~b] [c ~d] は別の並びなので通る", "g : [a ~b] [c ~d] ? b\ng [1 2] [3 4]");
-checkStructOk("裸の可変引数 1つは通る", "f : x ~xs ? xs\nf 1 2 3");
 // **ジッパーの綴りは `[~l] x [~r]` である**——ひとつの並びの中ではなく、**3つの別々の
 // 仮引数**として書く。各グループの rest はひとつずつなので上の規則をそのまま通り、
 // そして肝心なのは**焦点をどこに置くかを呼ぶ側が決める**ことである。受ける側の宣言には
@@ -411,10 +410,8 @@ checkWriteArg("転送でも場所を渡せば通る", "f : p ? p # 7\ng : q ? f 
 checkWriteArg("サイトのスコープで実引数を読む", "f : p ? p # 7\ng : s ? f (s ' 0)\ng `ab`", 1);
 checkWriteArg("その要素の場所なら通る", "f : p ? p # 7\ng : s ? f $(s ' 0)\ng `ab`", 0);
 
-// **位置が1対1にならない受け方は見ない。** `~y` は残りをまとめて受けるので、3番目の実引数と
-// 3番目のスロットは同じものではない——器を受ける位置の型は `Address` になりうるので、ここを
-// 外すと可変引数の関数が軒並み断られる（実測：`preprocessor.md` の `map` の例）。
-checkWriteArg("可変引数の位置は見ない", "map : f x ~y ? (@f x) , (map y~)\nmap $[* 2] 1 2 3 4 5", 0);
+// **位置が1対1にならない受け方は見ない。** 分解（`[h ~t]`）は渡された器1つを割るので、その位置の
+// 実引数と束縛名は1対1にならない——器を受ける位置の型は `Address` になりうる。
 checkWriteArg("分解で受ける位置も見ない", "f : p [h ~t] ? p # h\nx : 5\nf $x [1 2 3]", 0);
 
 // **表の外の型を相手にした算術**（pass3 の `arithmeticTypeInFlight`）。具体的な型どうしは layout.js の算術の域の表

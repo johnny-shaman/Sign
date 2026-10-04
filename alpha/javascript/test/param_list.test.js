@@ -60,19 +60,14 @@ const cases = [
 		note: "@g x（前置@で明示的に呼び出す）は正しく apply[g, x] に解決される。g x（@無し）とは違う挙動になることの確認",
 	},
 	{
-		source: "f : x ~xs ? x",
-		want: ["define[identifier(<f>), lambda[params[<x>, ~<xs>], identifier(<x>)]]"],
-		note: "裸のrestパラメータ (x ~xs) も params[] 内で正しく分割される",
-	},
-	{
 		source: "get_age : [x ~xs] ? x",
 		want: ["define[identifier(<get_age>), lambda[params[<x>, ~<xs>], identifier(<x>)]]"],
 		note: "ブラケット形式 [x ~xs]（1行に複数の裸パラメータが同居）でも正しく分割される",
 	},
 	{
-		source: "f :\n\tx\n\ty : x + 1\n\tz : y + 1\n\t~rest\n? x y z rest~",
+		source: "f :\n\tx\n\ty : x + 1\n\tz : y + 1\n? x y z",
 		want: [
-			"define[identifier(<f>), lambda[params[<x>, <y>:add[identifier(<x>), number(1)], <z>:add[identifier(<y>), number(1)], ~<rest>], construct[construct[construct[identifier(<x>), identifier(<y>)], identifier(<z>)], expand(identifier(<rest>))]]]",
+			"define[identifier(<f>), lambda[params[<x>, <y>:add[identifier(<x>), number(1)], <z>:add[identifier(<y>), number(1)]], construct[construct[identifier(<x>), identifier(<y>)], identifier(<z>)]]]",
 		],
 		note: "インデントブロック形のデフォルト引数: y:x+1 は add[x,1] として（define扱いされずに）解決され、z:y+1 は let* 的にひとつ前の y を正しく参照する",
 	},
@@ -138,15 +133,34 @@ for (const c of throwCases) {
 	}
 }
 
+// 裸のストリーム仮引数（括りの外の `~xs`）は名指しで断る（利用者の裁定 2026-10-04）。括りの形は上の表で通る。
+{
+	total++;
+	let reason = null;
+	try {
+		resolveSource("f : x ~xs ? x");
+	} catch (e) {
+		reason = e.reason || e.message;
+	}
+	const note = "裸のストリーム仮引数 (x ~xs) は名指しで断る（bare-stream-param）";
+	if (reason === "bare-stream-param") {
+		console.log(`OK   ${note}`);
+		passed++;
+	} else {
+		console.log(`FAIL ${note}`);
+		console.log(`     got: ${reason}`);
+	}
+}
+
 // requiredArity: デフォルト・rest以外の仮引数の数が正しく計算されること
 {
 	total++;
-	const pre = preprocess("f :\n\tx\n\ty : x + 1\n\tz : y + 1\n\t~rest\n? x y z rest~");
+	const pre = preprocess("f :\n\tx\n\ty : x + 1\n\tz : y + 1\n? x y z");
 	const lines = parser.parse(pre);
 	const env = buildEnv(lines);
 	const defineNode = reduceAll(lines[0], env);
 	const requiredArity = defineNode.right.left.requiredArity;
-	const note = "requiredArity: x のみデフォルト・rest無しなので 1 になる（y,z はデフォルト、rest は rest）";
+	const note = "requiredArity: x のみデフォルト・rest無しなので 1 になる（y,z はデフォルト）";
 	if (requiredArity === 1) {
 		console.log(`OK   ${note}`);
 		passed++;

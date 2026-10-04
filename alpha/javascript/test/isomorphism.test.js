@@ -419,8 +419,6 @@ checkTrue(
 	both("前に足す", "0 a~");
 	both("後ろに足す", "a~ 4");
 	both("構造の等しさ", "a == a");
-	both("裸の rest へ撒く", "f : x ~xs ? x\nf a~");
-	both("裸の rest へ撒いた残り", "f : x ~xs ? xs\nf a~");
 	both("括りの rest へ渡す", "g : [x ~xs] ? x\ng a");
 	both("括りの rest の残り", "g : [x ~xs] ? xs\ng a");
 }

@@ -428,20 +428,6 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 	//     実引数の側（`elementTypeOfNode`）が同じ既定を持っており、片方だけ外すと
 	//     「`String` の要素は何か」を2か所が違う答えで持つことになるので残す。
 }
-// **ストリーム形（`x ~xs`）は、実体化された器が渡る限り器形と同じ機械である。**
-//
-// 違うのは laziness——`~xs` は残りを包む遅延ストリームとしてサスペンドされる
-// （list_model.md §2.4①）——であって、渡ってくるのが `l~` のように実体化された
-// `{ptr, len}` なら、頭を読んで ptr を進め len を1減らす操作は変わらない。
-// サスペンドが効くのは相手が生成器のときだけで、そちらはカーソルの道である。
-{
-	check("ストリーム形は出る", asm("f : x ~xs ? x\nl : [1 2 3]\nf l~").diagnostics.length, 0);
-	// `~` 無しの List 渡しは §5.4 が禁じている（構文の側で弾かれる）ので、ここへは来ない。
-	const ls = body("f : x ~xs ? x\nl : [1 2 3]\nf l~", "f") || [];
-	checkTrue("頭を読んで ptr を進める", ls.some((l) => /^add x\d+, x\d+, #8$/.test(l)), ls.join(" / "));
-	checkTrue("残りの長さを1減らす", ls.some((l) => /^subs x\d+, x\d+, #1$/.test(l)), ls.join(" / "));
-	checkTrue("こちらも負にしない", ls.some((l) => /^csel x\d+, x\d+, xzr, pl$/.test(l)), ls.join(" / "));
-}
 // ---- デフォルト引数 ----
 //
 // **検査・デフォルトの充填・分解は宣言順に混ぜて出す。** 評価器が仮引数を1つずつ順に
@@ -1517,7 +1503,6 @@ f 1`, "f") || [];
 	checkTrue("2つ目の頭が数", kind("f : [a b ~r] ? b * 2\nf `!a`").length === 1);
 	checkTrue("数の頭へスカラーの文字（長さ1の器）", kind("f : [c ~r] ? c * 2\nf 0u0021").length === 1);
 	checkTrue("包んで展開して渡す文字列", kind("f : [c ~r] ? c * 2\ng : s ? f s~\ng `!`").length === 1);
-	checkTrue("ストリーム形の数の頭へ文字列", kind("f : x ~xs ? x + 1\ny : f [5 6]~\nf `!a`~").length === 1);
 	checkTrue("文字の頭へ数の器", kind("f : [c ~r] ? (c != 0u0061) & (c + 200)\nf [1 2]").length === 1);
 	// 型は `String` なのに束縛の要素型は `Int` と言う実引数——どちらかが嘘なので両方を数える。
 	checkTrue("型と要素型が食い違う実引数", kind("f : [c ~r] ? (c != 0u0061) & (c + 200)\ng : xs ? f xs~\ng [1 2]").length === 1);
@@ -1541,7 +1526,6 @@ f 1`, "f") || [];
 	checkTrue("名前へ置いた数の器", kind("f : [c ~r] ? c / 2\nxs : [5 6]\nf xs").length === 0);
 	checkTrue("数の積", kind("f : [a b ~r] ? a + b\nf (4 , 5)").length === 0);
 	checkTrue("混在形の数の頭へ数の器", kind("f : n [c ~r] ? c + n\nf 1 [3 4]").length === 0);
-	checkTrue("ストリーム形の数の頭へ数の器", kind("f : x ~xs ? x / 2\nf [5 6]~").length === 0);
 	checkTrue("文字の頭へ文字列", kind("f : [c ~r] ? c = 0u0061\nf `ab`").length === 0);
 	// `__` は種類を語らない（頭は読まれない）。`T | __` は T として読む。
 	checkTrue("数の頭へ __", kind("f : [c ~r] ? c + 1\nf __").length === 0);
