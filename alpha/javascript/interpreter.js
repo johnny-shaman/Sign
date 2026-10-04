@@ -1957,7 +1957,9 @@ function evalUnaryOp(name, v) {
       );
     }
     case "negate":
-      return isUnit(v) ? UNIT : -v;
+      // **数でないものに符号の反転は無い**（単項の演算と文字は射なし、利用者の裁定 2026-09-27 (4)）。
+      // JS の `-` に渡すと `-[1 2]` も `-\a` も NaN で漏れていた（観測すると `null`）。
+      return typeof v === "number" || typeof v === "bigint" ? -v : UNIT;
     case "not":
       return isUnit(v) ? IDENTITY : UNIT; // §4: !__ = Id射（真）、!非Unit = __（偽）
     case "input":
@@ -2006,6 +2008,9 @@ function evalUnaryOp(name, v) {
       return bitNot(v);
     case "factorial": {
       if (isUnit(v)) return UNIT;
+      // **数でないものに階乗は無い**（裁定 2026-09-27 (4)）。`\a!` も `` `ab`! `` も、JS の比較が偽で
+      // 掛け算を一度も回さず 1 を返していた。
+      if (typeof v !== "number" && typeof v !== "bigint") return UNIT;
       // **整数の階乗は `Int` を作る道なので、回す**（`wrapInt`）。Number のまま掛けると 2^53 で
       // 下の桁が丸まり（`20!` から）、`21!` は幅の外の数のまま返っていた。1段ごとに 64 bit へ
       // 収めるので数は膨らまず、0 になったら（66! 以降は 2^64 で割り切れる）そこで止める。
