@@ -7783,7 +7783,18 @@ function genWidened(node, want, env, em, scope, cell = null) {
 				const [po0, lo0] = pushPair(em);
 				if (lo0 === null) return em.fail(node, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
 				em.store(SCRATCH[1], po0, "ptr は返値スロット");
-				em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
+				// **`__` は長さ1の器ではなく、空の器である**（`__ = []`、`emitLiftToContainer` と
+				// 同じ規則）。値を書いた後でも len を 0 にすれば器は空になる。ここが無条件に 1 を
+				// 置いていたので、`__` を返す枝で `||f 0||` が 1（解釈 0）だった。
+				// 値は SCRATCH[0] に残っている（書いた後も、ptr を置いた後も触っていない）。
+				if (!cannotBeUnit(node, env, scope)) {
+					em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
+					em.emit(`cmp ${SCRATCH[0]}, x12`);
+					em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
+					em.emit(`csel ${SCRATCH[0]}, xzr, ${SCRATCH[0]}, eq`, "ただし __ なら len = 0（__ = []）");
+				} else {
+					em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
+				}
 				em.store(SCRATCH[0], lo0, "len");
 				return 2;
 			}

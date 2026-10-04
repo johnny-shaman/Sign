@@ -107,7 +107,11 @@ export const CORPUS = [
 	// 自身の枠に在り、返るときに捨てられていた——器へ入るのはその番地なので `len` は正しく、
 	// 中身だけが死ぬ。`expr (tokens `1 + 2`)` は長さ 9 のまま `[[+] <00> <01>]` を返していた。
 	// いまは記述子の後ろに中身の置き場を取って、呼び先にそこへ書かせる。
-	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [{ severity: "information", includes: "take_word: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "tokens: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 949, plain: 1669 }, digest: { full: "8a6fb1b080afe0fd", plain: "4e960f7519256fde" } },
+	//
+	// **+3 命令（2026-10-05）。** 1要素の枝を返値スロットへ書く道（`genWidened`）が、`__` でも
+	// len = 1 を置いていた（`__` を返す枝で `||f 0||` が 1、解釈 0）。`s ' 0` の枝に niche の照合
+	// （`cmp`・`mov`・`csel`）が足りた分である。
+	{ rel: "alpha/sign/lexer.sn", front: 0, asm: [{ severity: "information", includes: "take_word: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "tokens: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 952, plain: 1672 }, digest: { full: "62c0d728d5b4ba98", plain: "d25309b89738d1ef" } },
 	{ rel: "alpha/sign/parser.sn", front: 0, asm: [{ severity: "information", includes: "out: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_as: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "out_one: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした・添字で回る再帰の段数を、その添字が走る器で抑えた・撒きながら食う枝を、段ごとに消えたぶんで見積もった）" }, { severity: "information", includes: "out_jk: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }, { severity: "information", includes: "expr_at: 返す器の上界は見積もりです（輪の相手が食っていることを根拠にした" }], insn: { full: 2129, plain: 3139 }, digest: { full: "860ea4a1bde8e7ab", plain: "9a35113c35fef0e8" } },
 	// 表だけの1枚。命令は `_.main` の `ret` 1つきりで、正規化後 824 行のうち
 	// **823 行がディレクティブとラベル**である。ディレクティブを落とす比べ方なら、この1枚は
