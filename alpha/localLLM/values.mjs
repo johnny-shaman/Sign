@@ -13,11 +13,30 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { REPO, HERE, RUNS, parseArgs } from "./lib.mjs";
 
 const JS = path.join(REPO, "alpha", "javascript");
 const CORPUS = path.join(JS, "test", "codegen_corpus");
 const OUT = path.join(HERE, "values.jsonl");
+
+/**
+ * **規則が変わると答えが変わる課題**（2026-10-04 の R1・R3）。消さずに `changes` の印を付ける。
+ *
+ * R1 は裸の仮引数に器（String・List・Struct）が来たら TypeError にする（まだ入っていない）。下の 24 本は
+ * 裸の仮引数で文字列を受けているので、R1 が入ると値ではなく断りになる（書き換えるなら `[~s]` で受ける）。
+ * `uncalled` は呼ばれないので値は 3 のままだが、R1 の断りの見本へ書き換える予定の1本である。
+ * R3（裸のストリーム仮引数の廃止）に当たる課題は無い——コーパスに `f : x ~xs ?` の形は 0 個。
+ *
+ * 一覧は棚卸し（inventory §2、裸の仮引数に器が来る所の全件）から写した。推測で足さない。
+ */
+const CHANGES_UNDER = new Map(
+	[
+		"args9", "chr_cmpalu", "dup_fn", "idx", "idx_oob", "idxtype", "key", "lift", "normsplit", "post_str",
+		"slice", "slice00", "slice_k0", "slice_p0", "sparam", "sret", "sret_call", "str_edge", "str_empty",
+		"streq", "sunit", "sunit_arg", "uncalled", "width_cond",
+	].map((id) => [id, "R1"])
+);
 
 export function show(v, I) {
 	if (I.isUnit(v)) return "__";
@@ -32,8 +51,9 @@ export function show(v, I) {
 }
 
 async function harvest() {
-	const { compile } = await import(path.join(JS, "compile.js"));
-	const I = await import(path.join(JS, "interpreter.js"));
+	// `import()` は絶対パスを URL として読む——Windows の `C:\…` は読めないので file URL で渡す。
+	const { compile } = await import(pathToFileURL(path.join(JS, "compile.js")).href);
+	const I = await import(pathToFileURL(path.join(JS, "interpreter.js")).href);
 	const readImport = (p) => fs.readFileSync(path.join(REPO, "alpha", "sign", path.basename(p)), "utf8");
 	const rows = [];
 	for (const f of fs.readdirSync(CORPUS).filter((x) => x.endsWith(".sn")).sort()) {
@@ -43,13 +63,21 @@ async function harvest() {
 			const env = I.newRuntimeEnv();
 			let r = I.UNIT;
 			for (const n of nodes) r = I.evaluate(n, env);
-			rows.push({ id: f.replace(/\.sn$/, ""), program: src.trim(), value: show(r, I) });
+			const id = f.replace(/\.sn$/, "");
+			const row = { id, program: src.trim(), value: show(r, I) };
+			if (CHANGES_UNDER.has(id)) row.changes = CHANGES_UNDER.get(id);
+			rows.push(row);
 		} catch (e) {
 			// 前段が断るプログラムは「値」の課題にならない（断りの課題は別に立てる）
 		}
 	}
+	// **門：印の表の課題が全部ここに在り、印が付いていること。** コーパスの名前が変わったり、規則が入って前段が
+	// 断るようになったりすると、表が黙って空振りする——そのときは表を直す（推測で足さない）。
+	const unmarked = [...CHANGES_UNDER.keys()].filter((id) => !rows.some((r) => r.id === id && r.changes));
+	if (unmarked.length) throw new Error(`changes の表に在るのに印の付いた課題が無い: ${unmarked.join(" ")}`);
 	fs.writeFileSync(OUT, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-	console.log(`値の課題 ${rows.length} 件を ${path.relative(process.cwd(), OUT)} に書いた`);
+	const marked = rows.filter((r) => r.changes).length;
+	console.log(`値の課題 ${rows.length} 件を ${path.relative(process.cwd(), OUT)} に書いた（うち ${marked} 件は規則が変わると答えが変わる：changes）`);
 }
 
 const SYSTEM = `あなたは Sign 言語のプログラムの値を当てる。Sign の常識は他の言語と違う。
