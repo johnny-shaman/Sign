@@ -27,6 +27,14 @@ main.sn      →  Program entry point
 
 `main.sn` forms the outermost scope of the binary. All imported `.sn` files are brought into scope as inner functions nested inside `main`.
 
+> [!IMPORTANT]
+> **One file is one function — a rule, not a metaphor** (user, 2026-10-04). A `.sn` file defines exactly one
+> function, named after the file. Every other definition in the file is an inner definition of that function and is
+> invisible outside. Only the exports written with prefix `#` inside the function's block are visible; the export set
+> is built from those `#` lines. The only exception is `main.sn`: `main` is the outermost scope itself, so it exists
+> only as a file. Reading "a file runs like one function" as a metaphor (any number of top-level definitions, all
+> visible) is rejected; name clashes between helpers of different files come only from that reading.
+
 ---
 
 ## 2. Imports as Inner Function Definitions
@@ -37,6 +45,11 @@ main.sn      →  Program entry point
 ```
 
 This operation does not dynamically load a file at runtime; it statically binds `add` as an inner function in the local scope.
+
+Both import spellings resolve at compile time: `` `math.sn`@ `` is the function `math` itself (its exports are
+looked up by name: `` add @ `math.sn`@ ``), and `` `math.sn`@~ `` defines `math` and spreads its **exports** into the
+current scope. Inner helpers are never spread. (alpha has not landed this yet: it spreads every top-level binding,
+and the unspread form returns the literal text.)
 
 ---
 
