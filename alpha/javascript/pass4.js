@@ -3062,6 +3062,32 @@ function genExpr(node, env, em, scope, tail = false) {
 			return em.fail(n, `\`~\` で持ち上げられるのはレジスタ1本の値か器だけです（${w} 本）`);
 		}
 		const off = (em.slot - 1) * 8;
+		// **返値の持ち上げは、呼ぶ側の場所へ置く。** 自分の枠（`sub sp`）に置いた器は、返った
+		// 瞬間に死んだ場所を指す——`f : n ? ~n` を2回呼ぶと2回目が1回目を上書きしていた
+		// （解釈 12 ／実機 生番地、診断ゼロ）。計画（`collectSretPlanOnce`）は出て行く前置 `~` を
+		// 「組む」と数えるので、スロットをもらっている。もらっていないなら名指しで断る（原理4）。
+		if (tail && scope && scope.selfLabel && n.escapesFrame !== false) {
+			if (em.sretDest === null || em.sretDest === undefined) {
+				em.pop(1);
+				return em.fail(n, "`~` で持ち上げた器は返せません（長さ1の器を置く場所が要りますが、返す器の置き場（sret）をもらっていません）");
+			}
+			const cell = elementCellSize(n.elementType || (n.atomType === "String" ? "Char" : null), em.conf);
+			const cw = cell && cell.size && cell.size <= 8 ? cell.size : 8;
+			emitSretCapacityNeed(em, 1);
+			em.load(SCRATCH[0], off, "持ち上げる値");
+			em.load(SCRATCH[1], em.sretDest, "返値スロット（sret）");
+			em.emit(storeElem(SCRATCH[0], SCRATCH[1], 0, cw), "長さ1の器として呼ぶ側の場所へ置く");
+			em.emit("movz x12, #0x8000, lsl #48", "__ の niche");
+			em.emit(`cmp ${SCRATCH[0]}, x12`);
+			em.emit(`mov ${SCRATCH[0]}, #1`, "len は 1");
+			em.emit(`csel ${SCRATCH[0]}, xzr, ${SCRATCH[0]}, eq`, "ただし __ なら len = 0（__ = []）");
+			em.pop(1);
+			const [ps, ls] = pushPair(em);
+			if (ls === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
+			em.store(SCRATCH[1], ps, "ptr は返値スロット");
+			em.store(SCRATCH[0], ls, "len");
+			return 2;
+		}
 		const po = emitLiftToContainer(em, n, off, "`~` で長さ1の器へ持ち上げる");
 		if (po === false) return false; // 層が許さない（名指し済み）
 		if (po === null) return em.fail(n, `式が深すぎます（スロットは ${MAX_SLOTS} まで）`);
@@ -8159,11 +8185,19 @@ function collectReturnedParams(nodes) {
 // 参照を運べる型。これ以外（数・文字・恒等射）は器を外へ持ち出せない。
 const CONTAINER_TYPES = new Set(["String", "List", "Struct", "Iterator", "Implicit", "Address"]);
 
+/** 前置 `~` の持ち上げ（入力 `~@X` は番地を置くだけなので除く）。 */
+function isLiftNode(u) {
+	return !!(u && u.type === "operation" && u.position === "prefix" && u.name === "continuous" && u.operand && u.atomType !== "Reader");
+}
+
 function markEscapes(nodes, returnedParams) {
 	const visit = (n, escaping) => {
 		const u = n;
 		if (!u || typeof u !== "object") return;
 		if (u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name)) u.escapesFrame = escaping;
+		// **前置 `~` の持ち上げも器を作る**（`~x` は `[x]`）。スカラーを持ち上げると場所が要る
+		// ので、出て行くかどうかを同じ印で持つ（`emitLiftToContainer` は `sub sp` で取る）。
+		if (isLiftNode(u)) u.escapesFrame = escaping;
 		// 構造体ブロックも器である。`COPRODUCT_BUILD_OPS` は operation しか拾わないので、
 		// ここで印を付けないと `escapesFrame` が undefined のまま残る——**判定していない
 		// ことを「出て行く」と決めたことにしてしまい**、フレームに置ける形すら置けない。
@@ -9096,6 +9130,11 @@ function returnSizeBound(lam, name, known, group, env = null) {
 			const lit = literalElemCount(q, elemType);
 			if (lit !== null) {
 				k += lit;
+				continue;
+			}
+			// **スカラーの持ち上げ（`~x`）は1要素である。** 型は器だが、置くのは値1つ。
+			if (isLiftNode(q) && q.operand.atomType && !isBoxType(q.operand.atomType)) {
+				k += 1;
 				continue;
 			}
 			if (isBoxType(q.atomType) && !(elemType && isBoxType(elemType))) {
@@ -10818,6 +10857,13 @@ function collectSretPlanOnce(nodes, em, known, groups) {
 			// （構造体は `{ptr}` の1本で運ぶので、器の `{ptr, len}` 2本にはならない）。
 			if (u && u.slotOrigins && u.mergeBase === "name") return;
 			if (u && u.type === "operation" && COPRODUCT_BUILD_OPS.has(u.name) && u.escapesFrame !== false && !rejoinPair(u, rejoinScope)) {
+				build = u;
+				return;
+			}
+			// **スカラーを前置 `~` で持ち上げて返すのも組む形である。** 長さ1の器を置く場所が要る
+			// ——自分の枠（`sub sp`）に置くと、返った先で死ぬ（`f : n ? ~n` が呼ぶたびに同じ場所を
+			// 指し、2回目が1回目を上書きした：解釈 12 ／実機 生番地）。
+			if (isLiftNode(u) && u.escapesFrame !== false && slotsOfNode(u.operand, em.conf, lam.scope || em.env) === 1) {
 				build = u;
 				return;
 			}
