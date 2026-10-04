@@ -978,6 +978,27 @@ function emitSliceLift(em, node, env, scope) {
 }
 
 /**
+ * **切り出しの元は、このフレームより長生きするか。**
+ *
+ * `emitSliceLift` の器は元の器の中を指す（`{A.ptr + i×幅, 1}`）。その器が呼ぶ側へ出て行く
+ * 位置（返値・sret の要素・追記）では、A も呼ぶ側より先に死んではいけない。
+ *
+ *   字面（`.rodata`）            …… 長生きする
+ *   名前（仮引数・束縛）          …… 長生きする。仮引数は呼ぶ側の器で、そこへ渡す器の置き場は
+ *                                  呼ぶ側が決める（`collectReturnedParams` が切り出しを返す
+ *                                  仮引数も数える）。束縛は `_.main` の枠か `.rodata` に在る
+ *   呼び出しの結果・その場で組んだ器 …… 自分の枠（自分が取った sret のスロット・`sub sp`）に在る
+ */
+function sliceSourceOutlivesFrame(node) {
+	const u = unwrap(node);
+	if (!u || u.type !== "operation" || u.name !== "get_prop") return false;
+	const base = unwrap(u.left);
+	if (!base) return false;
+	if (base.type === "atom" && base.kind === "string") return true;
+	return isIdentifierNode(base);
+}
+
+/**
  * **実行時に `__` になった要素は、並べない**（連結の単位元）。
  *
  * `__` は連結の単位元なので `1 __ 3` は `[1 3]` である。書かれた `__` は
@@ -4153,7 +4174,8 @@ function genExpr(node, env, em, scope, tail = false) {
 		const per = em1 && em1.size === 16 ? 2 : 1;
 		const pushElem = (p) => {
 			if (per === 1) return genScalar(p, env, em, scope, "追記に並べる要素はレジスタ1本の値です");
-			const r = emitSliceLift(em, p, env, scope);
+			// 追記は呼ぶ側の宛先へ書くので、指す元もこのフレームより長生きでなければならない。
+			const r = sliceSourceOutlivesFrame(p) ? emitSliceLift(em, p, env, scope) : null;
 			if (r === false) return false;
 			if (r === null) {
 				// 元の器の中に居ない値（計算で作った1文字など）は、置く場所そのものが無い。
@@ -7341,7 +7363,12 @@ function genMatch(node, env, em, scope, tail = false) {
 		// **器の中の1つは、指し直すだけで長さ1の器になる。** `A ' i` なら
 		// `{A.ptr + i×幅, 1}`——確保ゼロ、範囲外なら len 0（＝`__`）まで正しい。
 		// ちょうど `outs` の位置へ積まれるので、写しも要らない。
-		if (direct && width === 2 && slotsOfNode(line, em.conf, env) === 1) {
+		// **指し直してよいのは、元の器がこのフレームより長生きするときだけである。** 合流が
+		// 返値（末尾）なら、`{A.ptr + i×幅, 1}` は呼ぶ側へ出て行く。A が自分の枠に在る器
+		// ——呼び出しの結果（自分が取った sret のスロット）やその場で組んだ器——なら、返った
+		// 瞬間に死んだ場所を指す（`(mk n) ' 0` を返す枝で、2回目の呼び出しが1回目を上書き
+		// した：解釈 1 ／実機 2）。そこは下の名指しの断りへ落とす。
+		if (direct && width === 2 && slotsOfNode(line, em.conf, env) === 1 && (!tail || sliceSourceOutlivesFrame(line))) {
 			const sliced = emitSliceLift(em, line, env, scope);
 			if (sliced === false) return false;
 			if (sliced !== null) return true;
@@ -7763,7 +7790,9 @@ function genWidened(node, want, env, em, scope, cell = null) {
 	// で済む（リテラルは `.rodata`、器の中の1つはスライス）ので、その組をそのまま返値スロット
 	// へ 16 byte 書けば「枡1つぶんの器」になる。**代金は生成後のコードでは払わない**（原理8）。
 	if (cell === 16 && em.sretDest !== null && em.sretDest !== undefined) {
-		let pair = emitSliceLift(em, node, env, scope);
+		// 返値スロットへ書く要素は呼ぶ側へ出て行くので、指す元もこのフレームより長生きで
+		// なければならない（`sliceSourceOutlivesFrame`）。
+		let pair = sliceSourceOutlivesFrame(node) ? emitSliceLift(em, node, env, scope) : null;
 		if (pair === false) return false;
 		if (pair === null) {
 			pair = emitCharLiteralBox(node, env, em);
@@ -8116,6 +8145,24 @@ function collectReturnedParams(nodes) {
 				if (isIdentifierNode(t)) {
 					const i = params.indexOf(t.value);
 					if (i >= 0 && !set.has(i)) { set.add(i); changed = true; }
+					continue;
+				}
+				// **仮引数の切り出しも、仮引数の場所である。** `s ' 1~`（範囲で引く）は s の領域を
+				// 指したまま頭をずらした器で、要素1つ（`s ' i`）も器を返す関数では長さ1の器
+				// `{s.ptr + i×幅, 1}`（`emitSliceLift`）として返る。どちらも呼ぶ側の器の中を指すので、
+				// そこへ渡す器は呼ぶ側のフレームより長生きしなければならない（R2：括りの切り出しは
+				// 呼ぶ側の場所）。ここが識別子と組む形しか見ていなかったので、呼ぶ側は引数を自分の
+				// 枠に組み、返った先で死んでいた：
+				//
+				//     f : [~s] ? s ' 1~
+				//     k : n ? f ((\a + n) (\b + n) (\c + n))
+				//     pickc (k 0) (k 1)        解釈 3 ／実機 4（診断ゼロ）
+				if (t.type === "operation" && t.name === "get_prop") {
+					const b = unwrap(t.left);
+					if (isIdentifierNode(b) && (isBoxType(t.atomType) || isBoxType(lam.right && lam.right.atomType))) {
+						const i = params.indexOf(b.value);
+						if (i >= 0 && !set.has(i)) { set.add(i); changed = true; }
+					}
 					continue;
 				}
 				// **返す器の中に居る仮引数も出て行く。** `mul_go : … ? acc , i` は `acc` を組の
