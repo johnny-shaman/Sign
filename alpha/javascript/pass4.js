@@ -7052,6 +7052,19 @@ function genStringCompare(node, env, em, scope) {
 	// られない。黙って ptr どうしを比べるより断る（原理4）。
 	if (cmpCell.size === 16) return em.fail(node, "要素が参照で運ばれる器どうしの比較はまだ出せません（もう一段辿る必要があります）");
 	const w = cmpCell.size;
+	// **広げてよいのは、器の要素と同じ型の1本だけである。** 1本の値を長さ1の器へ広げると、
+	// 比べるのは要素の幅（文字なら 1 byte）だけになる。`Int` を文字列と比べると下位の 1 byte
+	// だけを見て、その 1 byte を左辺として返していた——`n : 353` / `` (n == `a`) | 7 `` が
+	// 解釈 7 ／機械 97（診断ゼロ）。文字は文字か `0u…` とだけ比べる（裁定 10-05）。`__` は
+	// 空の器へ広がるので通す。突き合わせる相手は器の側の要素型である——`cmpElem` は左辺から
+	// 先に引くので、左辺が `Int` の1本だと `Int` になり、文字列を 8 byte 刻みで読んでいた。
+	const lW1 = slotsOfNode(node.left, em.conf, env) === 1;
+	if (lW1 !== (slotsOfNode(node.right, em.conf, env) === 1)) {
+		const [one, box] = lW1 ? [node.left, node.right] : [node.right, node.left];
+		const st = one && one.atomType;
+		const et = elementTypeOfNode(box, env);
+		if (st !== "Unit" && et && st !== et) return em.fail(node, `器（要素は ${et}）と ${st} の1本は比べられません（広げると要素の幅だけを比べて黙って誤答になります）`);
+	}
 	const lb = genBoxOperand(node.left, env, em, scope);
 	if (lb === false) return false;
 	if (lb === null) return em.fail(node, `比べる左辺を長さ1の器へ広げられません（${node.left && node.left.atomType}）`);
@@ -7088,6 +7101,36 @@ function genStringCompare(node, env, em, scope) {
 	em.emit(`b.ne ${diff}`);
 	em.emit("add x13, x13, #1");
 	em.emit(`b ${loop}`);
+
+	// **左辺が1本で運ばれる値なら、答えも1本である。** 比べるために長さ1の器へ広げたのは
+	// 表現の都合であって（原理8）、型は左辺の型のまま（`Char` なら `Char`、裁定B：`==` は
+	// 左辺を返す）。器のまま返すと受ける側は1本だけ読み、**ptr を文字として読む**——
+	// `c : \a` / `` c == `a` `` が番地を返していた（解釈 97、診断ゼロ）。広げた器の先頭を
+	// 読み戻して返す（偽なら niche）。
+	const narrowLeft = slotsOfNode(node.left, em.conf, env) === 1 && slotsOfNode(node, em.conf, env) === 1;
+	if (narrowLeft) {
+		const lt = node.left && node.left.atomType;
+		const sext = w < 8 && SIGNEDNESS[lt] === "signed" ? (w === 1 ? "sxtb" : w === 2 ? "sxth" : "sxtw") : null;
+		const put1 = (isTrue) => {
+			if (isTrue) {
+				em.load(SCRATCH[1], lo, "広げた左辺の ptr");
+				em.emit(`${memMnemonic("input", w)} ${memNarrow(w) ? "w14" : "x14"}, [${SCRATCH[1]}, #0]`, "左辺の値を読み戻す");
+				if (sext) em.emit(`${sext} x14, w14`);
+				em.store("x14", lo, "真なら左辺（1本）");
+			} else {
+				em.emit("movz x14, #0x8000, lsl #48", "偽なら __");
+				em.store("x14", lo);
+			}
+		};
+		em.label(same);
+		put1(wantEqual);
+		em.emit(`b ${end}`);
+		em.label(diff);
+		put1(!wantEqual);
+		em.label(end);
+		em.pop(3); // 右辺の2本と、左辺の len。結果は左辺の ptr のスロットに1本。
+		return 1;
+	}
 
 	// 真なら左辺、偽なら `__`（`len = 0`）。どちらの枝も左辺のスロットへ揃える。
 	const put = (isTrue) => {
