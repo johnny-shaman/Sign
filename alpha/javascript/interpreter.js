@@ -1084,7 +1084,23 @@ function alignForCompare(a, b) {
   }
   return [x, y];
 }
+// **文字列どうしは辞書順で比べる**（利用者の裁定 2026-09-30「String の `<` は辞書順、文字と文字列の
+// `=` は1文字の文字列として比べる」）。上の `scalarForCompare` は1文字だけを符号位置へ読み替えるので、
+// 片側が2文字以上だと数と文字列の JS の比較になって必ず偽だった——`` `a` < `ab` `` も `` `ab` < `b` ``
+// も `__`。両辺が文字列（文字は1文字の文字列）なら、長さによらず符号位置の並びとして比べる：先頭から
+// 最初に違う文字で決まり、片方が尽きたら短い方が小さい。UTF-16 の単位では比べない。
+function codePointOrder(a, b) {
+  const x = [...a];
+  const y = [...b];
+  const n = Math.min(x.length, y.length);
+  for (let i = 0; i < n; i++) {
+    const d = x[i].codePointAt(0) - y[i].codePointAt(0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return x.length === y.length ? 0 : x.length < y.length ? -1 : 1;
+}
 function compareValues(name, a, b) {
+  if (typeof a === "string" && typeof b === "string") return COMPARE_OPS[name](codePointOrder(a, b), 0);
   const [x, y] = alignForCompare(a, b);
   return COMPARE_OPS[name](x, y);
 }
