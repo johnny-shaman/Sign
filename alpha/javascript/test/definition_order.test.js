@@ -253,6 +253,39 @@ agree("並べ直し：順に書いた形は今までどおり", L("a : 1", "b : 
 }
 agree("並べ直し：ラムダを引く値も揃う", L("k : p 1", "p : n ?", T + "n = 0 : 1", T + "q (n - 1)", "q : n ?", T + "n = 0 : 0", T + "p (n - 1)", "k"));
 
+// **器の中の鍵は名前であって参照ではない**（鍵の位置の裸の識別子はいつも名前、裁定 2026-09-28）。
+// 並べ直しが器の `鍵 : 値` の鍵まで「その名前を使う」と数えていたので、束縛の名前が入れ子の鍵と同じ綴り
+// だと「m は f を使い、f は m を使う」の輪になり、`f` が `m` より先に並んだ：
+//
+//   m :⏎ f :⏎ ff :⏎ fff : 5 / f : fff @ ff @ f @ m / f     解釈器 __（診断ゼロ）／機械は名指しで断る
+//   束縛の名前を g にすると                                 両方 5
+//
+// 法則は「束縛の名前を替えても値は変わらない」。綴り2通り（`@` と `'`）、名前3通り（どの段の鍵でも）、
+// 関数の本体の中、`$` の実体化を通す形で見る。解釈器と機械は別々に判定する（機械が断る形は数えない）。
+{
+	const M = L("m :", T + "f :", T + T + "ff :", T + T + T + "fff : 5");
+	const sameBy = (note, a, b) => {
+		check(`${note}（解釈）`, interp(a), interp(b));
+		if (!HW) { skipped++; return; }
+		const [ma, mb] = [machine(a), machine(b)];
+		if (ma.startsWith("出せない") && mb.startsWith("出せない")) { skipped++; return; }
+		check(`${note}（機械）`, ma, mb);
+	};
+	for (const nm of ["f", "ff", "fff"]) {
+		sameBy(`鍵の名前：束縛 ${nm} の @ は g と同じ`, M + L(`${nm} : fff @ ff @ f @ m`, nm), M + L("g : fff @ ff @ f @ m", "g"));
+		sameBy(`鍵の名前：束縛 ${nm} の ' は g と同じ`, M + L(`${nm} : ((m ' f) ' ff) ' fff`, nm), M + L("g : ((m ' f) ' ff) ' fff", "g"));
+	}
+	sameBy("鍵の名前：関数の本体の中でも同じ", M + L("h : n ? (fff @ ff @ f @ m) + n", "f : h 0", "f"), M + L("h : n ? (fff @ ff @ f @ m) + n", "g : h 0", "g"));
+	sameBy("鍵の名前：$ の実体化を通しても同じ", M + L("ap : p x ? @p x", "f : ap $(x ? ((x ' f) ' ff) ' fff) m", "f"), M + L("ap : p x ? @p x", "g : ap $(x ? ((x ' f) ' ff) ' fff) m", "g"));
+	// 並びそのもの：器が先、それを引く値が後。
+	const c = compile(M + L("f : fff @ ff @ f @ m", "f"), { charset: "ascii" });
+	const names = c.nodes.filter((n) => n && n.type === "operation" && n.name === "define" && n.left).map((n) => n.left.value);
+	check("鍵の名前：器を引く値は器の後に並ぶ", names, ["<m>", "<f>"]);
+	// 対照：鍵の名前が別に束縛されていても鍵として引く。省略記法の行（`j` だけ）は値を引くので辺が残る。
+	agree("鍵の名前：別に束縛された名前でも鍵（対照）", L("k : 9", "m :", T + "k : 7", "m ' k"));
+	agree("鍵の名前：省略記法は後ろの値を引く（対照）", L("m :", T + "k : 7", T + "j", "j : 2", "m ' j"));
+}
+
 // **循環は繕わない**（`a : b + 1` と `b : a + 1`）。並べ直しでは決着しないので元の順に
 // 任せる。機械はそこを断るので、値の一致ではなく「断られること」で覆う。
 {

@@ -489,9 +489,19 @@ function orderDefinitions(lines) {
   if (defAt.size === 0) return lines;
   // その行が触れている識別子（入れ子の奥まで）。仮引数で隠れた名前まで拾う**多めの見積もり**
   // である——余計な辺は「使う所より前」をさらに前へ動かすだけで、読みを変えない。
+  //
+  // **定義の左辺は参照ではない。** 器の中の `鍵 : 値` の鍵は名前であって、同じ綴りのトップレベルの
+  // 束縛を指さない（鍵の位置の裸の識別子はいつも名前、裁定 2026-09-28）。ここが鍵も参照と数えていた
+  // ので、`m :⏎ f :⏎ ff :⏎ fff : 5` と `f : fff @ ff @ f @ m` が「m は f を使い、f は m を使う」の輪に
+  // なり、`f` が `m` より先に並んだ——解釈器は `m` がまだ無いので `__`（診断ゼロ）、機械は名指しで
+  // 断っていた。束縛の名前を `g` にすると輪が消えて 5 になる。行の頭の `名前 :` だけを除く（省略記法の
+  // `x` だけの行は値を引くので残す）。`'` の右辺の鍵は、変数の中身で添字を引く古い読み（`s ' i`、`s ' i~`
+  // への書き換えは別の片）がまだ値を引くので、ここでは数えたままにする。
   const idsIn = (x, out) => {
-    if (Array.isArray(x)) for (const y of x) idsIn(y, out);
-    else if (isId(x) && defAt.has(x)) out.add(x);
+    if (Array.isArray(x)) {
+      const from = isId(x[0]) && x[1] === ":" ? 1 : 0;
+      for (let k = from; k < x.length; k++) idsIn(x[k], out);
+    } else if (isId(x) && defAt.has(x)) out.add(x);
     return out;
   };
   const order = [];
