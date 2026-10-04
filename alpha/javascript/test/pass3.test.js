@@ -463,5 +463,30 @@ checkArith("番地 × 族は族（昇格すれば番地の域ではない）", "
 checkArith("生の値 + 直和は相手の型（生の値は最弱）", UNION_G + "h : n ? @0x40200000 + (g n)", "Int | List");
 checkArith("直和 + 数は左辺を通す", UNION_G + "h : n ? (g n) + 1", "Int | List");
 
+// **`$__` は点である**（裁定 2026-09-30）。指す先の無い場所は作れないので、零対象の番地は零対象そのもの。
+// 番地の型を付けていたので、解釈器は算術の域を番地として読み（`$__ + 3` が `__`、`__ + 3` は 3）、
+// `$__ | 5` も `Address` を名乗っていた。法則：`$__` を書いた式は `__` を書いた式と同じ型である。
+function lastTypeOf(source) {
+	const { nodes } = compile(source, { parse: parser.parse });
+	const last = nodes[nodes.length - 1];
+	return last ? last.atomType : null;
+}
+function checkSameType(note, a, b) {
+	extra++;
+	const [ta, tb] = [lastTypeOf(a), lastTypeOf(b)];
+	if (ta === tb) {
+		console.log(`OK   ${note}`);
+		extraPassed++;
+	} else {
+		console.log(`FAIL ${note}`);
+		console.log(`     ${a.replace(/\n/g, " / ")} → ${ta}、${b.replace(/\n/g, " / ")} → ${tb}`);
+	}
+}
+checkSameType("$__ は __ と同じ型", "$__", "__");
+checkSameType("$__ | 5 は __ | 5 と同じ型", "$__ | 5", "__ | 5");
+checkSameType("$__ + 3 は __ + 3 と同じ型", "$__ + 3", "__ + 3");
+checkSameType("括っても同じ（$(__)）", "$(__) + 3", "__ + 3");
+checkSameType("名前の番地は番地のまま（対照）", "x : 1\n$x", "0x10");
+
 console.log(`\n${passed + extraPassed}/${cases.length + extra} passed`);
 process.exit(passed === cases.length && extraPassed === extra ? 0 : 1);

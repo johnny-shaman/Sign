@@ -5157,11 +5157,14 @@ function genCursorIndex(node, env, em, scope, group, cbase) {
 function addressFromDollar(node, env) {
 	const t = unwrap(node);
 	if (!t) return false;
-	if (t.type === "operation" && t.position === "prefix" && t.name === "address") return true;
+	// **`$__` は番地ではなく点である**（裁定 2026-09-30、pass3 は型 `Unit` を付ける）。算術では
+	// `__` と同じ単位元なので、番地を表に出す門の対象ではない。
+	const isAddr = (x) => !!(x && x.type === "operation" && x.position === "prefix" && x.name === "address" && x.atomType !== "Unit");
+	if (isAddr(t)) return true;
 	if (isIdentifierNode(t) && env) {
 		const b = envLookup(env, t.value);
 		const v = b && b.valueNode ? unwrap(b.valueNode) : null;
-		return !!(v && v.type === "operation" && v.position === "prefix" && v.name === "address");
+		return isAddr(v);
 	}
 	return false;
 }

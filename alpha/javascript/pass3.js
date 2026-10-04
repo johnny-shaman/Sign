@@ -1882,6 +1882,14 @@ function computeAtomType(node, env) {
       // 指す先を1つ足しても命令は1つも増えない。
       if (node.position === "prefix" && node.name === "address") {
         const p = inferAtomType(node.operand, env);
+        // **`$__` は点である**（裁定 2026-09-30）。指す先の無い場所は作れない——零対象の番地は
+        // 零対象そのもので、型も `Unit` である。ここが無条件に `Address` を返していたので、
+        // 解釈器は算術の域を番地として読み（`$__ + 3` が `__`、`__ + 3` は 3）、`$__ | 5` の
+        // 型も `Address` を名乗っていた（値は 5）。見るのは字面の `__` だけ——`__` を束ねた
+        // 名前（`n : __` の `$n`）は束縛の場所を指すので、解釈器は番地を作る（そこはこの片の外）。
+        let lit = node.operand;
+        while (lit && Array.isArray(lit.lines) && lit.lines.length === 1) lit = lit.lines[0];
+        if (lit && lit.type === "atom" && lit.kind === "unit") return "Unit";
         if (p && p !== "Unit") {
           node.pointee = p;
           const el = node.operand && node.operand.elementType;
