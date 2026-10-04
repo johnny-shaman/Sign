@@ -1545,5 +1545,22 @@ f 1`, "f") || [];
 	checkTrue("欄を引いた形（Int）には構造体の門は掛からない", structAlu("f : s ? (s ' a) + 1\nf [a : 1]").length === 0);
 }
 
+// **出せない仮引数の形の断りは、廃止した形を「まだ」と言わない。** 括りでない並びの rest（裸のストリーム
+// 仮引数）は前段が断る（`bare-stream-param`）ので、ここで出せないのは括りの形（`[~h t]`・`[first ~mid last]`
+// など）だけである。「（裸の rest はまだ）」と書いていたので、廃止した形が実装待ちのように読めた。
+{
+	const ds = asm("f : [~h t] ? t\nf [1 2 3]").diagnostics.map((d) => String(d.message));
+	checkTrue("出せない括りの形は名指しする", ds.some((m) => m.includes("（ほかの括りの形はまだ）")), ds.join(" / "));
+	checkTrue("その断りは裸の rest を「まだ」と言わない", !ds.some((m) => m.includes("裸の rest")), ds.join(" / "));
+}
+// 括りでない並びの rest は前段が断るので、ここへは届かない。届いたら機械は出さずに止める——値の仮引数として
+// 読めば黙って違う。前段を飛ばすために、括りの仮引数の木から括りの印だけを外して確かめる。
+{
+	const { nodes, env } = compile("f : [x ~xs] ? x\nf [1 2]");
+	nodes[0].right.left.bracket = false;
+	const ds = generateAsm(nodes, env, { target: "aarch64_qemu", regAlloc: false }).diagnostics.map((d) => String(d.message));
+	checkTrue("前段を飛ばして届いた括りでない rest を、機械は出さない", ds.some((m) => m.startsWith("f: ") && m.includes("を出せます")), ds.join(" / "));
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

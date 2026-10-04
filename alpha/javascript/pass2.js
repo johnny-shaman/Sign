@@ -483,32 +483,11 @@ function getCategory(node, env, closed = false) {
   return "Atom";
 }
 
-// identifierノードのenv上のBinding（{category, restParam}）を取得する。
-// getCategoryと違い、Lambdaのrestパラメータ形状（coproduct_resolver.md §5.4）を
-// 見るために生のBindingそのものが必要な箇所（coproductReduceのapply分岐）で使う。
+// identifierノードのenv上のBindingを取得する。getCategoryと違い、生のBindingそのものが
+// 要る箇所（撒いた名前の右辺の綴り・束縛の型）で使う。
 function identifierBinding(node, env) {
   if (!env || !node || node.type !== "atom" || node.kind !== "identifier") return undefined;
   return envLookup(env, node.value);
-}
-
-// bの「List性」を判定する。素のブロック（[1 2 3]等）か、後置~でマークされたブロックかを見て、
-// { isList, tilde } を返す（tilde=trueなら意図的な展開渡し、falseなら素の塊渡し）。
-// §5.4の検査専用。isRealListValueを使い、`(col + 1)`のような単なるグルーピングの括弧を
-// Listと誤判定しない（下のAtom-Atom分岐のpush/concat判定は従来通りisListLikeを直接使う
-// ——あちらは「並置された両辺の構造をどう結合するか」の判断で、意味が異なる）。
-// **文字列も List である**（`String ≅ List(Char)`、coproduct_resolver.md §5.4、利用者の裁定 2026-09-28）。ストリーム形へ
-// `~` 無しで文字列を渡すと、解釈器は文字列を丸ごと `x` に束縛して `xs` を空にし（§5.4 が List で禁じた静かな挙動
-// そのもの）、機械は割って頭を取っていた——`f : x ~xs ? x` / `` f `abc` `` が解釈 "abc" ／機械 'a' で割れていた。
-// 見るのは List と同じく字面（括りで包んだものも）だけである。
-function isTextLiteral(node) {
-  const x = unwrapSoloBlock(node);
-  return !!(x && x.type === "atom" && x.kind === "string");
-}
-
-function listShape(node) {
-  if (isRealListValue(node) || isTextLiteral(node)) return { isList: true, tilde: false };
-  if (hasPostfixTilde(node) && (isRealListValue(node.operand) || isTextLiteral(node.operand))) return { isList: true, tilde: true };
-  return { isList: false, tilde: false };
 }
 
 function isListLike(node) {
@@ -524,9 +503,8 @@ const LIST_PRODUCING_NAMES = new Set([
 
 // ブロックが「本当にList値」なのか、単なる式のグルーピングなのかを判定する。
 // isListLikeは中身を一切見ずに括弧ブロックを全てList扱いするため、`(col + 1)` のような
-// 優先順位のためだけの括弧までListと見なしてしまう。§5.4の検査（Listを後置~なしで
-// 裸rest関数へ渡す誤用の拒否）にそれを使うと、正当な `f (a + 1)` が誤ってTypeErrorに
-// なる（8-Queensをrestパラメータで書き直そうとして発覚）。
+// 優先順位のためだけの括弧までListと見なしてしまう——廃止した §5.4 の検査（裸の rest へ `~` の
+// 無い List を渡すのを断る門）がそれを使って、正当な `f (a + 1)` を TypeError にしていた。
 // 複数行のブロックはList/構造体リテラル、1行なら中身が余積/直積/範囲の構築演算である
 // 場合のみList——単一のリテラル・識別子・算術式はスカラーのグルーピングに過ぎない。
 function isRealListValue(node) {
@@ -618,7 +596,7 @@ function refuseSpreadGetContainer(name, left, right, env) {
 // （余積 ⇒ 積への一意な射）と、値を食う（評価射）である。前者は積より内側、後者は積より
 // 外側に居るのが筋だが、表では同じ1段に同居している。だから `f 1, 2, 3` は今
 // `(f 1) , 2 , 3` と読まれ、**書き手が意図した `f (1, 2, 3)` とは別の関数呼び出しになる**
-// ——`f : x ~xs ?` に対しては x に 1 だけが入り、残りは呼び出しの**結果**と積を作る。
+// ——`f : [x ~xs] ?` で受けても x に 1 だけが入り、残りは呼び出しの**結果**と積を作る。
 //
 // 読みが2つ立つ所は括りで決めさせる（利用者 2026-09-24「`f 1, 2, 3` は断るべき」）。
 // 実測では、この門を当てても検査は1本も落ちない——`alpha/sign` の実コードは既に
@@ -656,22 +634,7 @@ function coproductReduce(a, b, env) {
   // 総称の本体が走る道で、解釈器が黙って合成関数を返していた（11 のはず）。
   if (catA === "Lambda" && catB === "Lambda" && (isAtHeaded(a) || isClosedAtApply(b))) return mk("apply", a, b);
   if (catA === "Lambda" && catB === "Lambda") return mk("compose", a, b);
-  if (catA === "Lambda" && catB === "Atom") {
-    // coproduct_resolver.md §5.4: 裸のrestパラメータ（`x ~xs ? ...`）を持つLambdaに
-    // 後置~なしでListを渡すのは、意図（各要素を位置引数に分配）と乖離した挙動
-    // （list全体が単一のxに束縛されxsが空になる）になるため、TypeErrorで拒否する。
-    // ブラケット形式（`[x ~xs] ? ...`）はrestParam==='bracket'であり対象外。
-    const binding = identifierBinding(a, env);
-    if (binding && binding.restParam === "bare") {
-      const shape = listShape(b);
-      if (shape.isList && !shape.tilde) {
-        throw new TypeError(
-          `coproduct_resolver.md §5.4違反: 裸のrestパラメータ ('${a.value} ~xs' 形式) を持つ関数に、List や文字列を後置 ~ なしで渡すことはできません（意図: 各要素を位置引数に分配するなら 後置~ を付けてください。文字列は String ≅ List(Char)）`
-        );
-      }
-    }
-    return mk("apply", a, b);
-  }
+  if (catA === "Lambda" && catB === "Atom") return mk("apply", a, b);
   if (catA === "Atom" && catB === "Lambda") {
     // 10.3: UFCS 的な receiver 記法（`x f`）。**固有のノードは作らず、通常の apply
     // （`f x`）へ展開する糖衣として扱う。**
@@ -709,7 +672,7 @@ function coproductReduce(a, b, env) {
     // その結果 `` `x` (`y`) `` が construct ではなく push に落ち、String 同士の
     // 連結（§3.2 の余積族）が起きずに2要素のリストになっていた——Sign で
     // 字句解析器を書こうとして発覚（`(s ' 0) (f (s ' 1~))` が文字列を連結せず
-    // ペアを積み上げる）。§5.4 の検査では既に isRealListValue へ移行済みだったが、
+    // ペアを積み上げる）。廃止した §5.4 の検査は既に isRealListValue へ移行済みだったが、
     // ここだけ古い判定のまま残っていた。
     // **識別子は中身を見て分類する。** `m : [1 2] [3 4]` と束縛してから `m [5 6]` と書くと、
     // `m` は identifier ノードなので block でも縮約済みノードでもなく、List と認識されずに

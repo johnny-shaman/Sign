@@ -474,7 +474,7 @@ npm run build:parser             # sign.pegjs から parser.js を生成（--for
 - 同一スコープ内での再定義は後勝ちで単純に上書きする。
 - 本来のPass1（`compiler_pipeline.md`）が持つべき`.ist`（`type_system.md`§5 Pass1a）は
   `{ category, restParam }`という一部分のみを先取り実装済み（`restParam`は仮引数列の
-  `~xs`が裸かブラケット内かを見て`'bare'|'bracket'|null`を判定、`coproduct_resolver.md`§5.4で使用）。
+  `~xs`がブラケット内かを見て`'bracket'|null`を判定、Pass 4 で使用。裸の`~xs`は2026-10-04に廃止——Pass2が断る）。
   `arity`・`atom_type`・`callsites`（Pass1b、`@ref`のジェネリック具体化）・export印（`#`/`##`/`###`）は未実装。
 
 ## Lambda仮引数部の専用処理（`params[]`ノード、デフォルト引数対応）

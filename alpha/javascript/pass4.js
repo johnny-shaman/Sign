@@ -815,29 +815,6 @@ function paramShapesOf(paramNode) {
 		}
 		return [null];
 	}
-	// **ストリーム形（`x ~xs`）は、実体化された器が渡る限り器形と同じ機械である。**
-	//
-	// 違うのは laziness——`~xs` は残りを包む遅延ストリームとしてサスペンドされる
-	// （list_model.md §2.4①）——であって、渡ってくるのが `l~` のように実体化された
-	// `{ptr, len}` なら、頭を読んで ptr を進め len を1減らすという操作は変わらない。
-	// **サスペンドが効くのは相手が生成器のときだけ**であり、そちらはカーソルの道である。
-	//
-	// §5.4 が `~` 無しの List 渡しを禁じているので、ここへ来るのは展開された形だけである。
-	if (
-		!paramNode.bracket &&
-		(paramNode.entries || []).length === 2 &&
-		paramNode.entries[1] &&
-		paramNode.entries[1].rest &&
-		paramNode.entries[1].name &&
-		paramNode.entries[0] &&
-		paramNode.entries[0].name &&
-		!paramNode.entries[0].rest &&
-		!paramNode.entries[0].pattern &&
-		!paramNode.entries[0].default &&
-		!paramNode.entries[1].default
-	) {
-		return [{ kind: "destructure", head: paramNode.entries[0].name, rest: paramNode.entries[1].name, stream: true }];
-	}
 	return (paramNode.entries || []).map((e) => {
 		if (e.pattern) {
 			// いま出せるのは `[h ~t]`——先頭と残りの2つに割る形だけである。
@@ -853,6 +830,8 @@ function paramShapesOf(paramNode) {
 			}
 			return null;
 		}
+		// 括りの外の rest（裸のストリーム仮引数）は前段が名指しで断る（pass2 の `bare-stream-param`）ので、
+		// ここへは来ない。来たら出さずに止める——値の仮引数として読めば黙って違う。
 		if (e.rest) return null;
 		// **デフォルトを持つ仮引数も裸である。** 違うのは「渡されなかったとき何を置くか」
 		// だけであり、受け取り方は同じ1つの値である。デフォルト式はここでは持ち回るだけで、
@@ -2511,7 +2490,7 @@ function genExpr(node, env, em, scope, tail = false) {
 		// 実引数そのものの種類ではなく要素の種類である。頭の型は本体の字面が決めることがあり（`c * 2` の `2`
 		// から来る既定値の `Int`）、`` f `!` `` と呼ぶと解釈器は文字の繰り返しで `"!!"`、機械は文字列の頭から
 		// 8 byte を数として読んで 66 だった（`c + 1` なら 34 ／ 24866）。2つ目の頭（`[a b ~r]` の `b`）、混在形
-		// （`n [c ~r]`）、ストリーム形（`x ~xs`）、長さ1の器へ持ち上げて渡すスカラーの文字も同じだった。
+		// （`n [c ~r]`）、長さ1の器へ持ち上げて渡すスカラーの文字も同じだった。
 		//
 		// **要素の種類が型から読めない実引数は、頭が数なら断る。** 要素型の無い `List`、族、積（`Struct`）は、
 		// 文字の器でありうる。解釈器は値で文字を見分けるので、読めないまま通すと文字が数の命令で読まれても
@@ -2583,9 +2562,7 @@ function genExpr(node, env, em, scope, tail = false) {
 				const sh = e.shape;
 				const who = !e.ofElement
 					? `${bareName(sh.name)} `
-					: sh.stream
-						? `\`${bareName(sh.head)} ~${bareName(sh.rest)}\` の頭`
-						: `\`[${(sh.heads || [sh.head]).map(bareName).join(" ")} ~${bareName(sh.rest)}]\` の頭`;
+					: `\`[${(sh.heads || [sh.head]).map(bareName).join(" ")} ~${bareName(sh.rest)}]\` の頭`;
 				em.pop(total);
 				return em.fail(
 					n,
@@ -10477,7 +10454,7 @@ function paramRegWidths(lambdaNode, em, callees = {}) {
 	const kindsOfHeads = (heads) => valueKindsOf(heads.map((h) => typeOf(h)).filter(Boolean).join(" | "));
 	return keep.map((idx) => {
 		let sh = allShapes[idx];
-		if (!sh) return { shape: null, error: "裸の仮引数・デフォルト付き・`[h ~t]`・`[~x]` を出せます（裸の rest はまだ）" };
+		if (!sh) return { shape: null, error: "裸の仮引数・デフォルト付き・`[h ~t]`・`[~x]` を出せます（ほかの括りの形はまだ）" };
 		if (sh.kind === "bare") {
 			// **`[~x]` は宣言そのものが「器である」と言っている。** 型の解決を待たずに
 			// 渡し方が決まる——要素の並びは `{ptr, len}` の2本である（stack_abi.md §4.6）。

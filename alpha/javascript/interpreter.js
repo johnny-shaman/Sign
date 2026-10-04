@@ -208,32 +208,27 @@ function collectApplyChain(node) {
 }
 
 // 実引数ノード1個を評価して値配列にする。後置~（expand）付きなら複数の位置引数へ展開する
-// （pattern_guide.md「関数にListを渡すときは必ず後置~を使う」）。`callee` は評価済みの呼び先で、
-// 文字列を撒くかどうかだけに使う（`spreadsTextInto`）。
-function evalArgValues(argNode, env, callee) {
+// （pattern_guide.md「関数にListを渡すときは必ず後置~を使う」）。
+function evalArgValues(argNode, env) {
   if (argNode.type === "operation" && argNode.position === "postfix" && argNode.name === "expand") {
     const v = evaluate(argNode.operand, env);
     if (Array.isArray(v)) return v;
-    // **文字列を文字へ撒くのは、ストリーム形で受けるときだけである。** `String ≅ List(Char)` なので
-    // `` `abc`~ `` は文字3つのストリームでもあり（list_model.md §2.4①）、`f : x ~xs ? x` へ `` f `abc`~ `` と
-    // 渡せば `x` は 'a' になる（Pass 4 も 'a'）。1文字は撒いても1つ（それは `Char` である）、空文字列は
-    // 0個——`__` を渡したのと同じで、完全性公理がそこで止める。
-    //
-    // **それ以外の受け手には器のまま渡す。** 後置 `~` は段を1つ下ろすが、String だけは μ が強制なので
-    // `s~ = s` で器が残る（2026-09-23 の裁定）。ここが呼び先を見ずに撒いていたので、`n : s ? ||s||` へ
+    // **文字列は位置引数へ撒かない。** 後置 `~` は段を1つ下ろすが、String だけは μ が強制なので
+    // `s~ = s` で器が残る（2026-09-23 の裁定）。呼び先を見ずに撒いていたときは、`n : s ? ||s||` へ
     // `` n `abc`~ `` と渡すと s が 'a' になって 1 を返し（機械は 3）、余った 'b' 'c' は黙って捨てられて
     // いた——`` x : `abc`~ `` を挟んで `n x` と書けば 3 なので、代入しただけで値が変わる形だった。
     // 2引数の `` m `abc`~ `de` `` は s='a'・t='b' に、既定の引数には撒いた文字が流れ込んでいた。
-    if (typeof v === "string") return spreadsTextInto(callee) ? [...v] : [v];
+    // 撒く受け手として残していた裸のストリーム仮引数（`x ~xs`）は 2026-10-04 に廃止した。
+    if (typeof v === "string") return [v];
     // **撒いた文字列の値も同じである。** `` x : `abc`~ `` の `x` や `` `abc`~~ `` の中身は文字列の撒き（`text` の
     // 印の付いた walk）で、JS の文字列ではない。見ていたのが JS の文字列だけだったので、`n x~` や `` n `abc`~~ `` は
-    // まだ下の `asList` で文字へ撒かれて 1 を返していた（機械は 3）。ストリーム形で受けるときだけ撒く。
-    if (isIterator(v) && v.spread && v.text && !spreadsTextInto(callee)) return [v];
+    // まだ下の `asList` で文字へ撒かれて 1 を返していた（機械は 3）。
+    if (isIterator(v) && v.spread && v.text) return [v];
     // **規則も展開する。** `余積のリスト化 ＝ イテレータの生成` なので（利用者 2026-09-24）、
     // `1 2 3` と `[1 ~ 3]` は同じ列の2つの綴りである。実測でも ||…||・添字・切り出し・撒き・
     // 畳み込み・構築・比較・括りの rest まで**18 形のうち 17 形が同じ答え**で、割れていたのは
-    // ここだけだった——`f : x ~xs ?` へ `f [1 ~ 3]~` と撒くと、規則が1つの実引数として渡って
-    // `x` が列ごと飲んでいた（`f 1 2 3` なら `x` は 1）。
+    // ここだけだった——`f : a b c ?` へ `f [1 ~ 3]~` と撒くと、規則が1つの実引数として渡って
+    // `a` が列ごと飲んでいた（`f 1 2 3` なら `a` は 1）。
     //
     // 終端の無い規則は位置引数にできない（個数が無い）。ここは `asList` が空にするので
     // `__` が渡り、完全性公理がその場で止める。
@@ -241,15 +236,6 @@ function evalArgValues(argNode, env, callee) {
     return [v];
   }
   return [evaluate(argNode, env)];
-}
-
-// **文字列の `~` を位置引数へ撒く受け手か。** 撒くのはストリーム形（ブラケットでない仮引数の並びに
-// rest がある、`x ~xs` の形）だけである。器形（`[x ~xs]`）・混在形（`a [h ~t]`）・裸の仮引数は1個の器を
-// 受けて自分で割り、仮引数の並びを持たない呼び先（`!__`・ポイントフリー・合成・`__`）も1個の値を受ける
-// ——`` !__ `abc`~ `` が 'a'、`` [+ 1] `abc`~ `` が 'b' になって、`~` を外した形と答えが割れていた。
-function spreadsTextInto(callee) {
-  const p = callee && callee.__lambda__ ? callee.params : null;
-  return !!(p && p.type === "params" && !p.bracket && (p.entries || []).some((e) => e.rest));
 }
 
 function paramEntriesOf(paramsNode) {
@@ -839,7 +825,7 @@ function evaluateTail(node, env) {
       const { calleeNode, argNodes } = collectApplyChain(node);
       const callee = evaluate(calleeNode, env);
       const argValues = [];
-      for (const a of argNodes) argValues.push(...evalArgValues(a, env, callee));
+      for (const a of argNodes) argValues.push(...evalArgValues(a, env));
       // compose/pointfree/組み込み関数（JS function）は素朴なLambda呼び出しではないため
       // トランポリンの対象外——安全側に倒して通常のapplyClosureへ委譲する。
       if (callee && callee.__lambda__ && !callee.__compose__ && !callee.__pointfree__) {
@@ -2793,10 +2779,10 @@ function evaluate(node, env) {
         // 後置~（expand）で渡された引数は、1個のList値としてではなく複数の位置引数へ
         // 展開する（pattern_guide.md「関数にListを渡すときは必ず後置~を使う」「後置~を
         // 使ったときに、それぞれの引数リストに分配して渡される」）。これが無いと
-        // 裸のrestパラメータでの再帰（xs~の展開）が終端せず無限再帰する。
+        // 撒いた器の要素が位置の仮引数へ届かない。
         const argValues = [];
         for (const a of argNodes) {
-          argValues.push(...evalArgValues(a, env, callee));
+          argValues.push(...evalArgValues(a, env));
         }
         return applyClosure(callee, argValues, env);
       }
@@ -2818,7 +2804,7 @@ function evaluate(node, env) {
         const callee = evaluate(calleeNode, env);
         const argValues = [];
         for (const a of argNodes) {
-          argValues.push(...evalArgValues(a, env, callee));
+          argValues.push(...evalArgValues(a, env));
         }
         if (!callee || !callee.__lambda__ || callee.__compose__ || callee.__pointfree__) {
           // pass2の静的判定は素のLambda識別子のみを対象にしているため通常来ないはずだが、

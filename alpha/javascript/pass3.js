@@ -22,7 +22,7 @@
  *   混在させる形（例: `foo:1, bar:2`、ドキュメントに例が無い）は非対応・未定義動作。
  * - `Implicit(T)`（場所）と `Iterator(T)`（ストリーム）は type_system.md §2 に型として
  *   定義されたが、ここではまだ推論しない。仮引数の形による割り当て
- *   （`f : [x ~xs]` → `Implicit(List(T))` / `f : x ~xs` → `Iterator(T)`、list_model.md §2.4）も、
+ *   （`f : [x ~xs]` → `Implicit(List(T))`、list_model.md §2.4）も、
  *   `'`・前置`#` が `Implicit` を返すことも未実装。
  *   **前置 `~` はこの一覧から外れた。** 作るのは場所ではなく長さ1の器（`List`）である
  *   ——番地を表に出さないと決めた以上、「場所」という観測可能な型には仕事が残っていない。
@@ -522,8 +522,7 @@ function checkNoDuplicateSlotNames(lines) {
  * **`[~u v]` と1文字も違わない答え**が診断ゼロで返っていた。決めていたのは書かれた形
  * ではなく実装の貪欲さだったので、`checkNoDuplicateSlotNames` と同じ理由・同じ強さで断る。
  *
- * 裸の可変引数（`x ~xs`）も同じ並びなので同じ規準。器を2つ受ける形（`[a ~b] [c ~d]`）は
- * それぞれ別の並びなので、どちらも1つずつでよい。
+ * 器を2つ受ける形（`[a ~b] [c ~d]`）はそれぞれ別の並びなので、どちらも1つずつでよい。
  */
 function checkOneRestPerGroup(node) {
   if (!node || node.name !== "lambda" || !node.left || !Array.isArray(node.left.entries)) return;
@@ -545,30 +544,6 @@ function checkOneRestPerGroup(node) {
         `——左文脈は呼び出しの側に在ります`,
       { spec: "0_design_principles.md 原理4", reason: "multiple-rest-params" }
     );
-  }
-  // **裸の並びでは rest が最後である。**
-  //
-  // 括りの中なら rest の後ろに固定スロットを置ける——器の長さが呼ぶ側で決まるので、端から
-  // 数えれば位置が決まる（`[~u v]` `[a ~b c]`、下の文面のとおり）。裸の並びには**端が無い**。
-  // 実引数は余積で並んでいるだけなので、rest が全部飲んでしまい後ろの仮引数は永久に埋まらない
-  // ——実測で `k : y ~ys z ? z` を `k 1 2 3` と呼ぶと、診断ゼロで `__` が返っていた。
-  // JavaScript の rest が最後でなければならないのと同じ理由である（利用者 2026-09-24）。
-  if (!node.left.bracket) {
-    const es = node.left.entries;
-    const ri = es.findIndex((e) => e && e.rest && e.name);
-    const after = ri >= 0 ? es.slice(ri + 1).filter(Boolean) : [];
-    if (after.length) {
-      const restName = `~${bareKey(es[ri].name)}`;
-      const tail = after.map((e) => (e.pattern ? `[…]` : bareKey(e.name))).join(" ");
-      throw new OperationError(
-        `裸の仮引数の並びでは rest（\`${restName}\`）が最後でなければなりません` +
-          `（後ろに \`${tail}\` が在ります）。括りの中なら器の端から数えて位置が決まるので` +
-          `rest の後ろに固定スロットを置けますが（\`[~u v]\` \`[a ~b c]\`）、裸の並びに端は` +
-          `ありません——実引数は余積で並んでいるだけなので、rest が全部飲んで後ろは永久に` +
-          `埋まりません。器で受けるなら \`[y ~ys z]\` と括ってください`,
-        { spec: "0_design_principles.md 原理4", reason: "param-after-bare-rest" }
-      );
-    }
   }
 }
 
@@ -2470,9 +2445,10 @@ function inferParamTypesFromUsage(bodyNode, paramNames, scope, bareNames = null,
             return;
           }
           // **`xs~` はスロットへ「要素」を渡す。** 後置 `~` は展開なので、呼び先のスロットに
-          // 入るのは rest 自身ではなくその要素である。したがってスロットの型がそのまま
-          // rest の**要素型**になる——`sum : x ~xs ? x + (sum xs~)` の `xs` の要素は、
-          // 展開された先が `x` である以上 `x` と同じ型でなければならない。
+          // 入るのは xs 自身ではなくその要素である。この道を作ったのは裸のストリーム仮引数
+          // （`sum : x ~xs ? x + (sum xs~)`、2026-10-04 に廃止）で、スロットの型が rest の要素型に
+          // なっていた。今ここへ来るのは括り・裸の仮引数を撒く形（`f : [~xs] ? g xs~`）で、仮引数には
+          // スロットの型（要素の型）がそのまま入る——器の仮引数の型は、括りを場所の型にするときに見直す。
           if (isSpreadNode(arg) && isIdentifierNode(arg.operand) && paramNames.has(arg.operand.value)) {
             refine(arg.operand.value, t);
           }
@@ -2649,7 +2625,7 @@ function inferLambdaParamTypes(lambdaNode, env) {
   // **裸の仮引数は、証拠が何も無くても `Atom` まで決まる。**
   //
   // 裸の仮引数（rest でもブラケット分割代入でもない）は1個の値を受ける。集合を受け取る
-  // なら `[x ~xs]`（参照渡し）か `~xs`（stream）で宣言するので、宣言の形が既に「点で
+  // なら `[x ~xs]`（参照渡し）で宣言するので、宣言の形が既に「点で
   // ある」ことを語っている（原理3 の表）。さらにデフォルトが無ければ `__` を渡せない
   // ——完全性公理により呼び出しごと潰れるので、本体に入った時点で非Unitが保証される。
   //
@@ -2862,22 +2838,17 @@ function* liveDefines(nodes) {
  *
  * 集合そのもの（`els` / `cts`）も返す。一致の判定を呼び手側でやり直す場所があるためで、
  * `noteElementType` は集合を丸ごと受ける。
- *
- * `unwrapSpread` は**ストリーム形の仮引数**（`f : x ~xs`）のためにある。そこへ渡るのは
- * 展開された1つ（`f l~`）なので、剥いでから観測する——`~` 無しの List は §5.4 が禁じて
- * いる。器形と違うのは実体化するかどうかだけで、型の読み方は同じである。
  */
-function observeArgTypes(sites, index, env, unwrapSpread = false) {
+function observeArgTypes(sites, index, env) {
   const els = new Set();
   const cts = new Set();
   for (const args of sites) {
     if (args.length <= index) continue;
     const sc = args.scope || env;
     const a = args[index];
-    const inner = unwrapSpread && isSpreadNode(a) ? a.operand : a;
-    const el = containerElementType(inner, sc) || elementTypeOf(inner, sc);
+    const el = containerElementType(a, sc) || elementTypeOf(a, sc);
     if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) els.add(el);
-    const ct = inferAtomType(inner, sc);
+    const ct = inferAtomType(a, sc);
     if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) cts.add(ct);
   }
   return { els, cts, el: els.size === 1 ? [...els][0] : null, ct: cts.size === 1 ? [...cts][0] : null };
@@ -2932,9 +2903,7 @@ function collectCallsiteParamTypes(nodes, env) {
               ? e.pattern.length === 1 && e.pattern[0].rest && e.pattern[0].name
                 ? e.pattern[0].name
                 : null
-              : e.rest
-                ? null
-                : e.name || null
+              : e.name || null
           )
         : [];
     // **ブラケットで受ける形は実引数1個を分解する。**
@@ -2944,40 +2913,6 @@ function collectCallsiteParamTypes(nodes, env) {
     // 合わせる形）では扱えないが、**要素型は呼び出しサイトが知っている**。ここを丸ごと
     // 飛ばしていたので、器を1つ受けて分解する関数の `c` がいつまでも族（`Atom`）の
     // ままで、Pass 4 が「要素の幅が決まりません」と言うしかなかった。
-    // **ストリーム形（`x ~xs`）は位置で照合できない。**
-    //
-    // 渡るのは展開された1つ（`f l~`）であり、それが頭と残りの両方を埋める——`x` は先頭の
-    // 要素、`~xs` は残りを包む遅延ストリームである（list_model.md §2.4①）。ところが観測は
-    // 実引数を位置で照合していたので、`x` に器の型が入り `xs` は何も観測されないまま
-    // （`["List", null]`）だった。**器形と同じ観測がここにも要る**——違うのは実体化する
-    // かどうかだけで、型の読み方は同じである。
-    if (
-      paramNode &&
-      paramNode.type === "params" &&
-      !paramNode.bracket &&
-      entries.length === 2 &&
-      entries[1] &&
-      entries[1].rest &&
-      entries[0] &&
-      entries[0].name &&
-      !entries[0].rest &&
-      !entries[0].pattern
-    ) {
-      const ssites = callsitesOf(nodes, node.left.value, sitesIndex);
-      const sscope = rhs.scope;
-      if (ssites.length > 0 && sscope) {
-        // 展開（`l~`）で渡されたものだけを見る＝`observeArgTypes` の `unwrapSpread`。
-        const { el, ct } = observeArgTypes(ssites, 0, env, true);
-        const hb = envLookup(sscope, entries[0].name);
-        if (hb && el && hb.atomType !== el) { hb.atomType = el; changed = true; }
-        const rb2 = envLookup(sscope, entries[1].name);
-        if (rb2 && ct) {
-          if (rb2.atomType !== ct) { rb2.atomType = ct; changed = true; }
-          if (el && rb2.elementType !== el) { rb2.elementType = el; changed = true; }
-        }
-      }
-      continue;
-    }
     // **構造体を受ける仮引数には、並び（オフセット表）を届ける。**
     //
     // 名前でフィールドを引く（`s ' foo`）には、名前がどのオフセットかを Pass 4 が知って
@@ -3035,7 +2970,7 @@ function collectCallsiteParamTypes(nodes, env) {
             ? e.pattern.find((q) => q && q.rest && q.name) || null
             : isBracket
               ? (e.rest ? e : null)
-              : (e.rest ? null : e);
+              : e;
           if (!recv || !recv.name) return;
           const ai = isBracket ? 0 : i;
           // 渡ってくるのが構造体そのものか、**構造体を要素にする器**かで置く先が変わる。
@@ -4249,15 +4184,14 @@ function addressSlots(lambdaNode, binding) {
   const names = isIdentifierNode(paramNode)
     ? [paramNode.value]
     : paramNode && paramNode.type === "params" && !paramNode.bracket
-      ? (paramNode.entries || []).map((e) => (!e.pattern && !e.rest && e.name ? e.name : null))
+      ? (paramNode.entries || []).map((e) => (!e.pattern && e.name ? e.name : null))
       : [];
   const types = (binding && binding.paramTypes) || [];
   const slots = [];
-  // **名前で受けている位置だけを見る。** 可変引数（`~y`）や分解（`[h ~t]`）は実引数の
-  // 位置と1対1にならない——`map : f x ~y ?` を `map $[* 2] 1 2 3 4 5` と呼ぶと、3番目の
-  // スロットは `2 3 4 5` をまとめて受けるのに、位置で引くと `2` が当たる（実測で
-  // `preprocessor.md` の例を誤って断った）。器を受ける位置の型は `Address` になりうるので、
-  // ここを外すと可変引数の関数が軒並み断られる。
+  // **名前で受けている位置だけを見る。** 分解（`[h ~t]`）は渡された器1つを割るので、その位置の
+  // 実引数と束縛名は1対1にならない——器を受ける位置の型は `Address` になりうるので、ここを外すと
+  // 器を受ける関数が軒並み断られる。裸の並びの可変引数（`map : f x ~y ?`）も同じ理由で外していたが、
+  // その形は 2026-10-04 に廃止した（仮引数の並びを組む所で断る）。
   types.forEach((t, i) => {
     if (t === "Address" && names[i]) slots.push({ i, name: names[i] });
   });

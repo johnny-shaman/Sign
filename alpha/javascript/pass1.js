@@ -2,7 +2,7 @@
  * Pass1（最小実装）: ブロック階層に沿ってネストした識別子環境（env）の構築。
  *
  * env は { bindings: Map<識別子, Binding>, parent: env|null } という連鎖構造。
- * Binding は { category: 'Lambda'|'Atom', restParam: 'bare'|'bracket'|null,
+ * Binding は { category: 'Lambda'|'Atom', restParam: 'bracket'|null,
  * atomType, exported: '#'|'##'|'###'|null } という .ist（type_system.md §5 Pass1a）の
  * ごく一部を先取りした最小スキーマ。exportedは前置export記号（#/##/###）の有無を示す
  * （Pass1b、compiler_pipeline.md §6.3「呼び出しサイトの無いexportはコンパイルエラー」で使う）。
@@ -13,14 +13,12 @@
  *   <id> : ... ? ...   （行内に : があり、その後に ? がある）  → category = 'Lambda'
  *   <id> : ...          （: はあるが ? がない）                 → category = 'Atom'
  *
- * restParam（list_model.md §2.4 / coproduct_resolver.md §5.4）:
+ * restParam（list_model.md §2.4）:
  * Lambdaの仮引数列（`:`と`?`の間のトークン列）を見て、後置マーク済みチルダ前置演算子
  * トークン "~_" （peggyパーサーが `~xs` を ["~_", "<xs>"] という隣接ペアで返す）が
- *   - 仮引数列のトップレベルに直接現れる     → restParam = 'bare'   （例: x ~xs ? ...）
- *   - ネストした配列（[...]ブロック）の中に現れる → restParam = 'bracket'（例: [x ~xs] ? ...）
- *   - どちらにも現れない                    → restParam = null
- * を判定する。bare/bracketの区別が、list_model.md §2.4のLazy(stream)/Eager(実体化)の
- * 区別にそのまま対応する。
+ * ネストした配列（[...]ブロック）の中に現れれば restParam = 'bracket'（例: [x ~xs] ? ...）、
+ * 現れなければ null。仮引数列のトップレベルの `~xs`（裸のストリーム仮引数）は 2026-10-04 に
+ * 廃止した——pass2 の buildParameterList が名指しで断るので、ここで印を付ける読み手がいない。
  *
  * ネスト: ブロック（[...] {...} (...) やインデントブロック）に遭遇したら、
  * そのブロック内の行だけを対象に新しいスコープ（子env、parent=呼び出し時のenv）を作る。
@@ -48,7 +46,6 @@ function containsToken(items, token) {
 }
 
 function detectRestParamShape(paramTokens) {
-  if (paramTokens.includes("~_")) return "bare";
   if (paramTokens.some((t) => Array.isArray(t) && containsToken(t, "~_"))) return "bracket";
   return null;
 }

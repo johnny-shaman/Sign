@@ -148,20 +148,21 @@ function paramTypeText(entry, usageTypes, fieldReqs, known = null) {
   }
   const fields = fieldReqs.get(entry.name);
   if (fields && fields.size > 0) return `{${[...fields].sort().join(", ")}}`;
-  if (known && !entry.rest) return known;
+  if (known) return known;
   const inferred = usageTypes.get(entry.name);
-  if (inferred) return entry.rest ? `${inferred}~` : inferred;
-  // 裸の仮引数（rest でもブラケット分割代入でもない）は**1個の値**を受ける。集合を受け取る
-  // なら `[x ~xs]`（参照渡し）か `~xs`（stream）で宣言するので、宣言の形が既に「点である」
-  // ことを語っている（原理3 の表）。さらにデフォルトが無ければ `__` を渡せない——完全性
-  // 公理により呼び出しごと潰れるので、本体に入った時点で非Unitが保証される。
+  if (inferred) return inferred;
+  // 裸の仮引数（ブラケット分割代入でない）は**1個の値**を受ける。集合を受け取るなら
+  // `[x ~xs]`（参照渡し）で宣言するので、宣言の形が既に「点である」ことを語っている
+  // （原理3 の表）。さらにデフォルトが無ければ `__` を渡せない——完全性公理により呼び出し
+  // ごと潰れるので、本体に入った時点で非Unitが保証される。
   //
   // したがって演算子から何も逆算できなくても `_` ではなく `Atom` まで書ける。`Atom` は
   // §4 の記法定義で「String を**含む**スカラー」＝ `Scalar | String` である。多相に見えて
   // 下限が決まっている——具体的な型は呼び出しサイトで確定する（§5 Pass 1b）。
   //
-  // rest とブラケットには付けない。前者は stream、後者は構造であり、どちらも点ではない。
-  return entry.rest ? `${UNKNOWN}~` : UNKNOWN;
+  // ブラケットには付けない（構造であって点ではない——上の `entry.pattern` の節）。裸の並びの
+  // rest（`~xs`、型は `T~` と書いていた）は 2026-10-04 に廃止したので、ここへは来ない。
+  return UNKNOWN;
 }
 
 // ノード1つ分の型表記。`List` は要素型を伴って `List(T)` と書く（§2 の記法）。
@@ -421,7 +422,7 @@ function signatureText(name, params, ret, retResolved) {
   //
   // 型が決まっていれば `List(Char)` のように書かれる（形へ落ちるのは決まらなかったとき
   // だけ）ので、括りの形をしていること自体が「決まらなかった」の印である。
-  const isHole = (x) => x === UNKNOWN || x === `${UNKNOWN}~` || (x.startsWith("[") && x.endsWith("]"));
+  const isHole = (x) => x === UNKNOWN || (x.startsWith("[") && x.endsWith("]"));
   const unresolved = params.filter(isHole).length + (ret === UNKNOWN && !retResolved ? 1 : 0);
   const lhs = params.length > 0 ? params.join(" ") : "__";
   return { name, text: `${name} : ${lhs} -> ${ret}`, unresolved };
