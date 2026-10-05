@@ -63,6 +63,8 @@ f :
 	? x y z
 ```
 
+Indent the parameter block two steps and the `?` row one step. When the body is written as a block, indent the body two steps as well. A bracketed parameter block (`[` … `]`) is indented the same way. A `?` at column 0 is refused by name. Not only at column 0, these placements are refused by name too: a `?` at or above the depth of the definition line, at the depth of the parameter rows, or two or more steps in after one-line parameters; parameter rows that are not all two steps in (a row three or more steps in); and a `?` following the closing row of a bracket written over several rows. Leading spaces do not count as indentation.
+
 > [!IMPORTANT]
 > **Default argument expressions permit pure values and Input operations. IO and Output store operators (`#`) are strictly prohibited.**
 >
