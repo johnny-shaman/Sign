@@ -15,6 +15,7 @@ import { compile } from "../compile.js";
 import * as I from "../interpreter.js";
 import { preprocess } from "../lexer.js";
 import { parse } from "../parser.js";
+import { REFUSED, KEPT } from "./question_rows.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const snPath = path.join(__dirname, "..", "..", "sign", "preprocess.sn");
@@ -45,20 +46,19 @@ const renv = I.newRuntimeEnv(env);
 for (const n of nodes) I.evaluate(n, renv);
 
 // 入力は識別子経由で渡す。Sign の文字列リテラルに改行やバッククォートは書けないため。
-function runSn(text) {
+function runSnValue(text) {
 	I.envDefine(renv, "<__in__>", text);
-	return String(
-		I.evaluate(
-			{
-				type: "operation",
-				name: "apply",
-				left: { type: "atom", kind: "identifier", value: "<preprocess>" },
-				right: { type: "atom", kind: "identifier", value: "<__in__>" },
-			},
-			renv
-		)
+	return I.evaluate(
+		{
+			type: "operation",
+			name: "apply",
+			left: { type: "atom", kind: "identifier", value: "<preprocess>" },
+			right: { type: "atom", kind: "identifier", value: "<__in__>" },
+		},
+		renv
 	);
 }
+const runSn = (text) => String(runSnValue(text));
 
 const astOf = (s) => {
 	try {
@@ -183,6 +183,47 @@ sameParsed("括弧の中の演算子で始まる行", "xs : [1\n, 2\n, 3]");
 sameParsed("括弧の中の TAB で揃えた行は別の要素", "m : [\n\t1 2 3\n\t4 5 6\n]");
 sameParsed("行頭の | は空白が続くときだけ続き（括弧の中）", "xs : [\n\ta\n\t| b\n\t||c||\n]");
 sameParsed("コメント行を越えてつなぐ", "x : 1\n`note\n 2");
+
+// ---- 3. `?` の行の字下げ（利用者の裁定 2026-10-05） ----
+//
+// `?` の行は、定義の行から1段だけ字下げする（仮引数のブロックは2段、`?` は1段、本体のブロックも2段。括りの仮引数を
+// 複数の行に書いたら `?` は閉じの次の行）。続きの行は前の行へつないでから後の段へ渡るので、`?` の行がどの深さに
+// あったかを見られるのは前処理だけである——門は両方の前処理に1つずつある。JS は名指しで断り
+// （`question-row-indent`）、preprocess.sn は前処理の全体が `__` になる。表（question_rows.js）の断る綴りの
+// それぞれで両方が断り、残る綴りでは同じ木を出すことを見る。
+for (const [note, input] of REFUSED) {
+	let reason = null;
+	try {
+		preprocess(input);
+	} catch (e) {
+		reason = e.reason || e.message;
+	}
+	check(`? の行の字下げを断る（JS）: ${note}`, reason === "question-row-indent", `     got: ${reason}`);
+	const sn = runSnValue(input);
+	check(`? の行の字下げを断る（preprocess.sn）: ${note}`, I.isUnit(sn), `     sn: ${show(String(sn))}`);
+}
+for (const [note, input] of KEPT) same(`? の行の字下げ（残る）: ${note}`, input);
+
+// **preprocess.sn の門には深さの限りがある。** 書いた行の深さを Int の2進の桁に持つので、TAB 61 個より深い行
+// （括弧の中の行を除く）があれば、溢れた桁で判定せずに前処理の全体が `__` になる（`q_bad` の `d > 61`）。JS 側に
+// 限りは無い。限りの位置を両側から見る——仮引数の行が TAB 61 個の正しい字下げは両方が同じ木を出し、62 個は
+// preprocess.sn だけが断る。限りは `?` の行の有無によらない。
+{
+	const TAB = String.fromCharCode(9);
+	const deep = (k) => ["g :", TAB.repeat(k - 2) + "f :", TAB.repeat(k) + "x", TAB.repeat(k - 1) + "? x", "g"].join("\n");
+	same("深さの限りの内（仮引数の行が TAB 61 個）", deep(61));
+	let js = "通る";
+	try {
+		preprocess(deep(62));
+	} catch (e) {
+		js = e.reason || e.message;
+	}
+	const sn = runSnValue(deep(62));
+	check("深さの限りの外（仮引数の行が TAB 62 個）は preprocess.sn だけが断る", I.isUnit(sn) && js === "通る", `     sn: ${show(String(sn))}\n     js: ${js}`);
+	const flat = ["a :", TAB.repeat(62) + "1"].join("\n");
+	check("限りの外の行は ? の行が無くても preprocess.sn が断る", I.isUnit(runSnValue(flat)), `     sn: ${show(String(runSnValue(flat)))}`);
+	same("括弧の中の行は深さの限りに数えない", ["a : [", TAB.repeat(62) + "1", "]"].join("\n"));
+}
 
 // ---- 実ファイルを一巡させる ----
 //

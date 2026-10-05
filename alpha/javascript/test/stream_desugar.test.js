@@ -196,13 +196,17 @@ check("器が並ぶ形は均さない", streams("f : [c ~rest] ?\n\tc = `;` : c 
 	// **TAB 1つが1段になって（利用者の決定 2026-09-15）スタックが無くなった。** 深さはそれを決めた行の位置で持ち、
 	// DEDENT / INDENT は `beyond`（行頭の TAB のうち n 個より後ろのぶんだけ並べる）1つが出す。`gap` は枝が `beyond` へ
 	// 移るので同じ群に入る。かつて1状態で均せた `close_all` は `beyond ks 0 dedent` になり、状態が3つなので均さない。
-	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["beyond", "body_cls", "delta", "drop_line", "dstr_cls", "esc_cls", "gap", "head_line", "in_quote", "sep", "str_cls"]);
+	// `?` の行の字下げの門（2026-10-05）の6つも並ぶ。行を歩く `q_bad`、行頭の空白を読み飛ばす `q_lead`、括りを閉じた
+	// 後の `?` を探す `close_q` は、並べる要素の無い末尾呼び出しと終わりの枝だけでできた走査で、どれも群が閉じる
+	// （`q_lead` は状態が1つなので均せる。`close_q` は文字と括りの深さの2つなのでまだ均さない）。`cut`・`mark`・
+	// `q_off` は枝の最後が呼び出し（`low`・`q_deeper`）なので形の上で並ぶが、呼び先がストリームでないので群は閉じない。
+	check("preprocess.sn のストリーム", found.map((f) => f.name).sort(), ["beyond", "body_cls", "close_q", "cut", "delta", "drop_line", "dstr_cls", "esc_cls", "gap", "head_line", "in_quote", "mark", "q_bad", "q_lead", "q_off", "sep", "str_cls"]);
 	check("in_quote の枝の本数", found.find((f) => f.name === "in_quote").arms.map((a) => a.prefix.length), [1, 1, 1]);
 	const groups = groupStreamFunctions(found);
-	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["beyond", "gap"]]);
+	check("閉じた群だけ残る", groups.map((g) => g.map((f) => f.name)), [["sep", "in_quote"], ["delta"], ["head_line"], ["beyond", "gap"], ["q_lead"], ["close_q"], ["q_bad"]]);
 	// 実際に均せるのは、状態が1つで、式に再帰が埋まっていないものだけ。
 	const gen = (nm) => generatePullers(groups.find((g) => g[0].name === nm)) !== null;
-	check("均せる群", groups.map((g) => g[0].name).filter(gen), ["sep", "head_line"]);
+	check("均せる群", groups.map((g) => g[0].name).filter(gen), ["sep", "head_line", "q_lead"]);
 	// 名前が群に在ることも見る——在らない名前を渡すと `generatePullers(undefined)` が null で、黙って通る。
 	checkTrue("状態が2つ以上ならまだ均さない", groups.some((g) => g[0].name === "beyond") && !gen("beyond"));
 	checkTrue("式に再帰が埋まっていたら均さない", !gen("delta"));

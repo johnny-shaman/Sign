@@ -98,7 +98,10 @@ export const SELF_OPTION_WARNINGS = SELF_OPTION.warnings;
  * （`x9`/`x10`）から niche（`x12`）へ替わった。命令の数と綴り（`csel`）は変わらない。
  */
 export const CORPUS = [
-	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [{ severity: "information", includes: "beyond: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "gap: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "walk: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "preprocess: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 3711, plain: 5628 }, digest: { full: "8e35f8d0a07dc74a", plain: "2494ff932efb4e17" } },
+	// 2026-10-05：`?` の行の字下げの門（`q_bad` ほか、利用者の裁定）が乗った（3711 → 4733、最適化なし
+	// 5628 → 7017）。足した12関数（`q_bad` が最も大きい）と入口 `preprocess` の分岐のぶんで、ほかの関数の命令は
+	// 1つも動いていない。診断は前と同じ4件（門を入口の分岐に置き、返す器の上界を持つ関数を増やしていない）。
+	{ rel: "alpha/sign/preprocess.sn", front: 0, asm: [{ severity: "information", includes: "beyond: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "gap: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "walk: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }, { severity: "information", includes: "preprocess: 返す器の上界は見積もりです（撒きながら食う枝を、段ごとに消えたぶんで見積もった" }], insn: { full: 4733, plain: 7017 }, digest: { full: "6be0bb1d5b6c55b2", plain: "990a61d1d3bce469" } },
 	// **語 ＝ 次の空白まで**（文字列の中と括りの中は数えない）。規則1つで `is_digit` も `<=` も
 	// `[a ~b]` も1語になる——空白が余積演算子そのものだから、空白で割ることが余積の項を取り
 	// 出すことになる。括りは1語のまま返し、中身を字句へ投げ返すのは構文解析の仕事である。

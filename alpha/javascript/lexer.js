@@ -19,6 +19,7 @@
  */
 
 import { buildLexerRegex } from './operator_table.js';
+import { OperationError } from './errors.js';
 
 export function separateInfix(input) {
   const lexerRegex = buildLexerRegex();
@@ -158,6 +159,107 @@ function bracketDelta(content) {
   return depth;
 }
 
+// **`?` の行は、定義の行から1段だけ字下げする**（利用者の裁定 2026-10-05）。
+//
+//     f :                f : x y
+//     		x            	? x + y
+//     		y : 3
+//     	? x + y
+//
+// 仮引数のブロックは2段、`?` は1段、本体をブロックで書くなら本体も2段（深さ k の定義なら k+2・k+1・k+2）。
+// 括りの仮引数のブロック（`[` … `]`）も同じ字下げで書き、`?` は閉じの次の行に置く。形は1つだけで、外れた形は
+// 名指しで断る。
+//
+// `?` で始まる行は続きの行なので、置いた深さでどの行に付くかが決まる（下の markBlock）。深い TAB は揃えで
+// 今の行に付き、浅ければ閉じた段の先の行に付く。だから門は**書いた行**（続きの行でも括弧の中の行でもない行）の
+// 深さで見る。`?` の行の深さを q とすると、付いてよいのは次の2つが揃うときだけである:
+//
+//   1. q - 1 に書いた行（定義の行）があり、q に書いた行が無い。q に書いた行があれば `?` はその行に付く——
+//      0桁目の `?`（1行の仮引数の次の行でも）、入れ子の定義と同じ深さの `?`、仮引数の行と同じ深さの `?` が
+//      これで、最後のものは**最後の仮引数の行に付き**、`y : 3 ? x + y`（`3` という名の仮引数を取る `y` の定義）
+//      として黙って読まれていた。q - 1 に書いた行が無ければ、`?` は定義の行から2段以上離れている（1行の
+//      仮引数の `?` を2段に置いた形、仮引数3段・`?` 2段の形）。
+//   2. q より深い書いた行（仮引数の行）が無いか、いちばん浅いものが q + 1 にあり、しかもその行が**字下げを
+//      深くして開いた段**にある。仮引数を3段以上に置いた形（`?` は1段）と、最初の仮引数の行を3段に置いてから
+//      2段へ戻した形（2段は跳んだ途中の段を後から埋めた段）をここで断る。
+//
+// 深さ k の定義でも同じ2つで、1行の仮引数（q より深い書いた行が無い）にも仮引数のブロックにも当てはまる。
+// 行頭の空白の後の `?`（`\t ? x`）も同じ所に付く——空白は余積で、つないだ後の木は `?` で始まる行と変わらない。
+//
+// **括りの仮引数を複数の行に書いたら、`?` は閉じの行に続けない**（`questionAfterClose`）。括りの中の行は
+// 字下げを数えないので、閉じの行（`]` …）は書いた行ではなく、その後ろの `?` は行の頭に来ない。括りの中で
+// 始まった行が括りの外（深さ 0）へ出て、同じ行に `?` があれば断る。1行の括り（`f : [x ~xs] ? x`）は閉じが
+// 開きと同じ行なので当たらない。
+//
+// **字句の段でしか見えない。** 続きの行は前の行へ空白でつながれるので、後の段（Pass 2・parser.sn）には
+// `y : 3`⏎`\t\t? x + y` と1行に書いた `y : 3 ? x + y` が同じ木で届く。Sign 側の前処理
+// （preprocess.sn の `q_bad`）も同じ深さで同じ判定をする。
+//
+// 断らないもの：ファイルの最初の行の `? 5`（続ける行が無いので続きにならない）、括弧の中の `?`（括弧の中は
+// 字下げを数えない）。仮引数の行より1段深い `?` は、1行の仮引数の `?` と深さでは見分けられない——前の行が
+// 定義の行か仮引数の行かは字句の段では決まらないので、ここでは断らない（未決、2026-10-05）。
+const QUESTION_ROW_RULE =
+  "`?` で始まる行は、定義の行から1段だけ字下げします（仮引数のブロックは2段、`?` は1段、本体のブロックも2段。" +
+  "仮引数を定義の行に並べたときも `?` の行は1段。括りの仮引数を複数の行に書いたら `?` は閉じの次の行）。";
+
+function refuseMisplacedQuestionRow(content, q, depth, written) {
+  let k = written.length - 1;
+  while (k >= 0 && written[k].depth > q) k--;
+  const at = k >= 0 ? written[k].depth : -1;
+  const deeper = written[k + 1];
+  if (q >= 1 && at === q - 1 && (deeper === undefined || (deeper.depth === q + 1 && deeper.opened))) return;
+  let where;
+  if (at === q) {
+    where =
+      q === depth
+        ? "直前の行と同じ深さなので、その行の続きになります（仮引数の行と同じ深さなら、最後の仮引数の行に付きます）"
+        : "同じ深さに書いた行（定義の行）の続きになります";
+  } else if (at < 0) {
+    where = "その上に書いた行がありません";
+  } else if (at < q - 1) {
+    where = `その上に書いた行（TAB ${at} 個）から ${q - at} 段下がっています`;
+  } else if (deeper.depth !== q + 1) {
+    where = `定義の行（TAB ${at} 個）から1段ですが、仮引数の行が定義の行から ${deeper.depth - at} 段下がっています（仮引数の行は2段）`;
+  } else {
+    where = `定義の行（TAB ${at} 個）から1段ですが、仮引数の行が定義の行から2段の所で始まっていません（字下げを跳んで深く書いた行の後に、2段の行を書いています）`;
+  }
+  throw new OperationError(`${QUESTION_ROW_RULE}この行（TAB ${q} 個の \`${content}\`）は${where}`, {
+    reason: "question-row-indent",
+  });
+}
+
+// 括りの中で始まった行が、括りの外（深さ 0）へ出た後に `?` を書いているか。数え方は bracketDelta と同じ
+// （文字列とエスケープの中は数えない）。
+function questionAfterClose(content, depth) {
+  let i = 0;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '`' || ch === '"') {
+      const close = content.indexOf(ch, i + 1);
+      if (close === -1) return false;
+      i = close + 1;
+      continue;
+    }
+    if (ch === '[' || ch === '(' || ch === '{') depth++;
+    else if (ch === ']' || ch === ')' || ch === '}') depth--;
+    else if (ch === '?' && depth <= 0) return true;
+    i++;
+  }
+  return false;
+}
+
+function refuseQuestionAfterClose(content, q) {
+  throw new OperationError(
+    `${QUESTION_ROW_RULE}この行（TAB ${q} 個の \`${content}\`）は複数の行に書いた括りを閉じた行で、閉じの後ろに \`?\` を続けています` +
+      "——`?` は閉じの次の行の頭に置きます",
+    { reason: "question-row-indent" }
+  );
+}
+
 // Indent・Dedentのマーキング関数。**入力は `classifyNewlines` を通したもの**で、処理行は CR で切る。
 // 行の中の LF は `\` と組んだ文字の改行であり、行の区切りではない（preprocessor.md §0）。
 //
@@ -185,6 +287,12 @@ function markBlock(input) {
   //
   // かつては行頭の空白を「空白インデント」として断り、`\` + 改行の後だけ許していた（`prevEndsWithEscape`、
   // その後は常に断った）。括弧の中では逆に黙って削っていたので、`(1` の次の ` + 1` は `[1, (+ 1)]` になった。
+  //
+  // **書いた行の深さ**（`refuseMisplacedQuestionRow` が読む）。続きの行でも括弧の中の行でもない行の TAB の数を、
+  // 開いている間だけ浅い順に積む。字下げを跳んで深くなったとき（0 → 2）、途中の段には書いた行が無い。
+  // `opened` はその段を**その行が字下げを深くして開いた**か——跳んだ途中の段へ後から戻って書いた行（0 → 3 → 2 の
+  // 2）や、閉じた段へ書いた行は開いていない。同じ深さの次の行はその段の印を変えない。
+  const written = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -218,6 +326,8 @@ function markBlock(input) {
     }
 
     if (bracketDepth > 0) {
+      // 複数の行に書いた括りを閉じた行の後ろの `?`（上の refuseMisplacedQuestionRow の注）。
+      if (questionAfterClose(content, bracketDepth)) refuseQuestionAfterClose(content, leadingWs.length);
       // **ブラケットの中ではタブ深さを INDENT/DEDENT に翻訳しない。** 見やすさのために
       // 中を深くインデントする書き方（function_guide.md の func_mixed 例）で、本来無い
       // インデントブロックが二重に差し込まれるのを防ぐ。行頭のタブだけ落として、
@@ -233,6 +343,14 @@ function markBlock(input) {
     }
 
     const currentIndent = leadingWs.length; // タブの数をインデントレベルとする
+
+    // `?` で始まる行が付く先は、この行を前の行へつなぐ前（下の DEDENT の前）の深さで決まる。行頭の空白の後の `?`
+    // （`\t ? x`）も同じ所に付く——空白は余積で、つないだ後の木は `?` で始まる行と変わらない。
+    if (isContinuation && /^ *\?/.test(content) && lastContentLineIdx !== -1) refuseMisplacedQuestionRow(content, currentIndent, depth, written);
+    while (written.length > 0 && written[written.length - 1].depth > currentIndent) written.pop();
+    if (!isContinuation && (written.length === 0 || written[written.length - 1].depth !== currentIndent)) {
+      written.push({ depth: currentIndent, opened: currentIndent > depth });
+    }
 
     // インデントが浅くなった場合、戻った段の数だけ DEDENT マーカーを出力
     if (currentIndent < depth) {

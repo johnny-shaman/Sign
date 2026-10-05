@@ -41,6 +41,14 @@ pre-alpha 実装はアーカイブへ退避した（`documents/ja-jp/impl/append
   ブロックが二重に差し込まれてパースが壊れる問題があった。他の多くの言語のオフサイドルールと
   同様、ブラケットが未クローズの間はインデント/デデントの意味を一時的に無効化することで解消
   （`test/param_list.test.js`で確認）。
+  **`?` の行の字下げを見る**（`refuseMisplacedQuestionRow`・`questionAfterClose`、利用者の裁定 2026-10-05）：`?` の行は
+  定義の行から1段だけ字下げする（仮引数のブロックは2段、`?` は1段、本体のブロックも2段。括りの仮引数を複数の行に
+  書いたら `?` は閉じの次の行）。続きの行は前の行へつないでから後の段へ渡るので、`?` の行の深さを見られるのは
+  前処理だけである。定義の行と同じ深さ以下（0桁目を含む）・仮引数の行と同じ深さ・1行の仮引数の後で2段以上下げた `?`、
+  仮引数の行が定義の行から2段でない（3段以上、または3段から2段へ戻した）ブロックの `?`、複数の行に書いた括りの
+  閉じの行に続けた `?` を名指しで断る（`OperationError`、`question-row-indent`、`test/question_row_indent.test.js`。
+  Sign 側は `alpha/sign/preprocess.sn` の `q_bad` で、`test/preprocess_sn.test.js` が同じ表で突き合わせる。
+  preprocess.sn の門は書いた行の深さを Int の桁に持つので、TAB 61 個より深い行があれば断る）。
 - `operator_table.js` — 演算子定義。`documents/ja-jp/impl/syntax/operator_table.js`から移植（正式仕様）。
   **`buildLexerRegex()`のバグを修正済み**：ダブルクォート文字列内の`(\\.|[^"\r\n])*`が捕捉
   グループのままだったため、`lexer.js`の`separateInfix`が読むグループ番号が1つずれ、
@@ -386,6 +394,11 @@ pre-alpha 実装はアーカイブへ退避した（`documents/ja-jp/impl/append
 - `test/bare_stream_param.test.js` — 裸のストリーム仮引数（括りの外の `~名前`、`f : x ~xs ?`・`f : ~this ?`・
   ブロックの `~xs` の行）を仮引数の並びを組む所で名指しで断ること（`bare-stream-param`、利用者の裁定 2026-10-04）と、
   括りの形（`[x ~xs]`・`[~xs]`）が通ることの確認。
+- `test/question_row_indent.test.js` — `?` の行を定義の行から1段でない所に置く・仮引数の行を2段でない所に置く・
+  複数の行に書いた括りの閉じの行に `?` を続けると前処理が名指しで断ること（`question-row-indent`、利用者の裁定
+  2026-10-05）と、正しい字下げ（仮引数2段・`?` 1段・本体2段、1行の仮引数なら `?` の行は1段）が通ることの確認。
+  綴りの表は `test/question_rows.js` の1つで、`test/preprocess_sn.test.js` も同じ表で JS と preprocess.sn の両方が
+  断ることを見る。
 - `test/param_list.test.js` — Lambda定義行の仮引数部（`params[]`）が総当たり縮約に誤って
   素通しされず、専用処理されることの確認（裸の複数仮引数・rest・ブラケット形式・
   インデントブロック形のデフォルト引数とlet*的な逐次スコープ）。
