@@ -434,7 +434,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 // 見るのと同じ順序でなければならない——デフォルト式は前の仮引数を参照でき（`let*`）、
 // かつ Input（前置 `@`）を含みうるので、**どの順で何回読むかが観測できる**。
 {
-	const src = "f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3";
+	const src = "f :\n\t\tn\n\t\tas : 7\n\t?\n\t\tn + as\nf 3";
 	const r = asm(src);
 	check("デフォルト付きは出る", r.diagnostics.length, 0);
 	const ls = body(src, "f");
@@ -448,11 +448,11 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 	const main = body(src, "_.main");
 	checkTrue("呼ぶ側が __ を置く", main.some((l) => l === "movz x1, #0x8000, lsl #48"), main.join(" / "));
 	// 全部渡せば埋めない。
-	checkTrue("全部渡せば埋めない", !body("f :\n\tn\n\tas : 7\n?\n\tn + as\nf 3 5", "_.main").some((l) => /^movz x1,/.test(l)));
+	checkTrue("全部渡せば埋めない", !body("f :\n\t\tn\n\t\tas : 7\n\t?\n\t\tn + as\nf 3 5", "_.main").some((l) => /^movz x1,/.test(l)));
 }
 // デフォルト式は前の仮引数を読める（`let*`）。
 {
-	const ls = body("f :\n\tn\n\ta : n + 1\n?\n\tn + a\nf 3", "f");
+	const ls = body("f :\n\t\tn\n\t\ta : n + 1\n\t?\n\t\tn + a\nf 3", "f");
 	// 前の仮引数と足し合わせている（置き先は問わない）。
 	checkTrue("前の仮引数を読む", ls.some((l) => /^add x\d+, x9, x10$/.test(l)), ls.join(" / "));
 }
@@ -460,7 +460,7 @@ checkTrue("片側が文字なら相手も文字として比べる", (body("f : c
 // `__` を置いても何も変わらない。宣言の内容は「この引数について完全性公理を働かせない」
 // の一点であり、検査を飛ばせば足りる——定義域の持ち上げは機械の上では何も無い。
 {
-	const src = "f :\n\tn\n\ts : __\n?\n\tn + 1\nf 3 5";
+	const src = "f :\n\t\tn\n\t\ts : __\n\t?\n\t\tn + 1\nf 3 5";
 	const ls = body(src, "f");
 	check("公理の検査は n の分だけ", ls.filter((l) => /^b\.eq \.Lunit/.test(l)).length, 1);
 	checkTrue("埋める命令は出ない", !ls.some((l) => /^b\.ne \.Lhave/.test(l)), ls.join(" / "));
@@ -1490,7 +1490,7 @@ f 1`, "f") || [];
 	checkTrue("数と文字で呼ぶ（域の端）", kind("f : c ? c + 1\nf 3\nf 0u007F").length === 1);
 	checkTrue("包んで渡す：外の呼び出しを断る", kind("f : c ? c / 2\ng : c ? f c\ng 3\ng 0u0061").length === 1);
 	checkTrue("export の2引数に文字", kind("#g : c n ? (c / 2) + (0 + n)\ng 0u0061 1").length === 1);
-	checkTrue("デフォルトが数と言う仮引数に文字", kind("g :\n\tc : 0\n? c / 2\ng 0u0061").length === 1);
+	checkTrue("デフォルトが数と言う仮引数に文字", kind("g :\n\t\tc : 0\n\t? c / 2\ng 0u0061").length === 1);
 	checkTrue("文字か数かを返す呼び出しを渡す", kind("pick : n ? n = 0 & 0u0061 | 3\nf : c ? c / 2\nf (pick 0)").length === 1);
 	checkTrue("文字の仮引数に数", kind("f : c ? c = 0u0061\nf 3").length === 1);
 	// 対照：どの呼び出しも同じ種類なら断らない。
@@ -1519,7 +1519,7 @@ f 1`, "f") || [];
 	checkTrue("積を数の頭へ（数と番地）", kind("f : [a ~r] ? a - 5\nf (4 , 0x10)").length === 1);
 	checkTrue("積は文字の頭へも断る", kind("f : [a ~r] ? (a != 0u0062) & (0 + a)\nf (0u0061 , 5)").length === 1);
 	// デフォルト式の中から渡す仮引数は型が決まらない（`s` は呼び出しサイトから見えない）。
-	checkTrue("型の決まらない実引数を数の頭へ", kind("f : [c ~r] ? c + 1\ng :\n\ts\n\tc : f s\n? c\ng `!a`").length === 1);
+	checkTrue("型の決まらない実引数を数の頭へ", kind("f : [c ~r] ? c + 1\ng :\n\t\ts\n\t\tc : f s\n\t? c\ng `!a`").length === 1);
 	// 対照：要素が静的に数と分かる器は、展開しても名前へ置いても断らない。文字の頭へ文字列も出る。
 	checkTrue("数の頭へ数の器", kind("f : [c ~r] ? c + 1\nf [3 4]").length === 0);
 	checkTrue("数の器を展開して渡す", kind("f : [c ~r] ? c / 2\nf [5 6]~").length === 0);

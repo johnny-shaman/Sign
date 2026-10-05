@@ -57,7 +57,7 @@ check("f 3 __ → __（完全性公理: デフォルト無しのパラメータ�
 
 check(
 	"g 3 → 7（デフォルト引数: y:x+1が評価され 3+4=7）",
-	run("g :\n\tx\n\ty : x + 1\n? x + y\ng 3"),
+	run("g :\n\t\tx\n\t\ty : x + 1\n\t? x + y\ng 3"),
 	7
 );
 
@@ -65,19 +65,19 @@ check(
 // 「全要素が文字列」でない行を文の並びとみなして中身へ降り、最終的に文字列トークンを
 // 受け取って `for...of` が1文字ずつ回ることで無限再帰していた（スタックオーバーフロー）。
 // デフォルト引数は仕様上ローカル変数の置き場なので、そこで括弧が書けないのは実用上痛い。
-check("デフォルト式のカッコ: f 10 → 15（x が 5 になる）", run("f :\n\ta\n\tx : (2 + 3)\n? a + x\nf 10"), 15);
-check("デフォルト式のブラケット: f 10 → 15", run("f :\n\ta\n\tx : [2 + 3]\n? a + x\nf 10"), 15);
-check("let* で前のパラメータを括弧越しに参照: f 10 → 30", run("f :\n\ta\n\tx : a + (a * 2)\n? x\nf 10"), 30);
+check("デフォルト式のカッコ: f 10 → 15（x が 5 になる）", run("f :\n\t\ta\n\t\tx : (2 + 3)\n\t? a + x\nf 10"), 15);
+check("デフォルト式のブラケット: f 10 → 15", run("f :\n\t\ta\n\t\tx : [2 + 3]\n\t? a + x\nf 10"), 15);
+check("let* で前のパラメータを括弧越しに参照: f 10 → 30", run("f :\n\t\ta\n\t\tx : a + (a * 2)\n\t? x\nf 10"), 30);
 
 check(
 	"g 3 __ → 7（yにUnitが渡されてもデフォルト値にフォールバックし、崩壊しない）",
-	run("g :\n\tx\n\ty : x + 1\n? x + y\ng 3 __"),
+	run("g :\n\t\tx\n\t\ty : x + 1\n\t? x + y\ng 3 __"),
 	7
 );
 
 check(
 	"g __ 5 → __（xにデフォルトが無いため、Unitで呼び出し全体が崩壊）",
-	run("g :\n\tx\n\ty : x + 1\n? x + y\ng __ 5"),
+	run("g :\n\t\tx\n\t\ty : x + 1\n\t? x + y\ng __ 5"),
 	"__"
 );
 
@@ -91,7 +91,7 @@ check(
 // 関数として適用しようとしました」で実行時に落ちていた。仮引数リストをローカル変数
 // として使う書き方（function_guide.md「仮引数リストは関数の状態ベクタである」）では
 // 必ず踏むため、実害があった。
-const withDefault = "f :\n\ta\n\tb : 1\n? a + b\n";
+const withDefault = "f :\n\t\ta\n\t\tb : 1\n\t? a + b\n";
 check("f 3 → 4（デフォルトが埋まる）", run(withDefault + "f 3"), 4);
 check("f 3 99 → 102（裸の連鎖はデフォルトを上書きできる）", run(withDefault + "f 3 99"), 102);
 check("(f 3) 99 → [4,99]（カッコで閉じたら値として確定し、99とは余積で並ぶ）", run(withDefault + "(f 3) 99"), [4, 99]);
@@ -122,9 +122,9 @@ check("1行でも `名前 : ラムダ` は構造体のまま", run("obj :\n\tm :
 // 以前は本体の `識別子 : 値` を定義として扱っていたため、最も分岐させたい対象である
 // 仮引数を条件に書けなかった。`ready : send` が「準備できていれば送る」ではなく
 // ready の再束縛になり、しかも無言で別の意味になるため気づけなかった。
-const dev = "f :\n\tout\n\tready : 7\n?\n\tready : `SENT`\n\t`BUSY`\n";
+const dev = "f :\n\t\tout\n\t\tready : 7\n\t?\n\t\tready : `SENT`\n\t\t`BUSY`\n";
 check("本体の `ready : X` は match_case（真）", run(dev + "f 42"), "SENT");
-check("本体の `ready : X` は match_case（偽）", run("f :\n\tout\n\tready : __\n?\n\tready : `SENT`\n\t`BUSY`\nf 42"), "BUSY");
+check("本体の `ready : X` は match_case（偽）", run("f :\n\t\tout\n\t\tready : __\n\t?\n\t\tready : `SENT`\n\t\t`BUSY`\nf 42"), "BUSY");
 check("本体は構造体にならない（全行 `識別子 : 値` でも match_case 連鎖）", run("f : x y ?\n\ta : x\n\tb : y\nf 1 2"), "__");
 check("構造体を返すにはカッコで囲む", run("f : x y ? [\n\ta : x\n\tb : y\n]\nf 1 2"), { a: 1, b: 2 });
 // 定義の右辺のインデントブロック（設定宣言など）はラムダ本体ではないので構造体のまま。
@@ -1108,7 +1108,7 @@ check(
 // 短絡評価テストとして扱うよう修正（左辺が識別子の行は今まで通りの変数定義のまま）。
 {
 	const func_mixed =
-		"func_mixed :\n\t[\n\t\tx\n\t\ty : x + 1\n\t\t~z\n\t]\n?\n\tx > 3 : x - y\n\ty\n";
+		"func_mixed :\n\t\t[\n\t\t\tx\n\t\t\ty : x + 1\n\t\t\t~z\n\t\t]\n\t?\n\t\tx > 3 : x - y\n\t\ty\n";
 	check("func_mixed [5] → -1（x=5,y=6、x>3が真なのでx-yで短絡）", run(func_mixed + "func_mixed [5]"), -1);
 	check("func_mixed [2] → 3（x=2,y=3、x>3が偽なのでフォールバックのyへ）", run(func_mixed + "func_mixed [2]"), 3);
 	check("func_mixed [2 10] → 10（x=2,y=10、x>3が偽なのでフォールバックのyへ）", run(func_mixed + "func_mixed [2 10]"), 10);
@@ -1430,7 +1430,7 @@ check("[_!] 5 → 120（後置演算子のポイントフリー版、階乗関�
 //
 // 作用域はカッコで区切られる——ブロックの各行は resolveBlock 経由で reduceAll を通るため、
 // ブロック内のホールはその行のレベルで包まれ、外側へは漏れない。
-const holeG = "g :\n\tx\n\ty : x + 1\n? y\n";
+const holeG = "g :\n\t\tx\n\t\ty : x + 1\n\t? y\n";
 check("h : g _ 5 / h 10 → 5（hole_desugaring.md 実行例2）", run(holeG + "h : g _ 5\nh 10"), 5);
 check("g 1 (3 < 2) → 2（動的な __ は脱糖せず、デフォルトへフォールバック。実行例1）", run(holeG + "g 1 (3 < 2)"), 2);
 
@@ -1629,7 +1629,7 @@ check(
 	// 見えず `construct` へ落ち、そこだけが両側を無条件に撒いていたためである
 	// ——**中身が同じでもコンパイラに見えるかどうかで意味が変わっていた**（`n [2 3]` は
 	// 撒かれない）。例外を消したので、書いた通りになる。
-	const ACC = "acc :\n\tn\n\tas : __\n?\n\tn = 0 : as\n\tacc (n - 1) (n as~)\n";
+	const ACC = "acc :\n\t\tn\n\t\tas : __\n\t?\n\t\tn = 0 : as\n\t\tacc (n - 1) (n as~)\n";
 	check("蓄積は余積で積む（`,` だと入れ子になる）", run(ACC + "acc 3"), [1, 2, 3]);
 	check("ブラケットなら展開すら要らない", run(ACC + "g : [a b c] ? a + b + c\ng (acc 3)"), 6);
 	checkTrue(
@@ -1885,13 +1885,13 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 // なので、性質として報告する。
 {
 	const infos = (src) => compile(src).diagnostics.filter((d) => d.reason === "lifted-domain");
-	const lifted = "f :\n\tn\n\tas : __\n?\n\tas\nf 3";
+	const lifted = "f :\n\t\tn\n\t\tas : __\n\t?\n\t\tas\nf 3";
 	check("`: __` は information で名指しする", infos(lifted).length, 1);
 	check("level は information（誤りではない）", infos(lifted)[0].level, "information");
 	// **見るのは書かれた形であって推論された型ではない。** 計算されるデフォルトは、返値型が
 	// 未解決な周回では `Unit` に見えるが、それは「まだ分かっていない」であって宣言ではない。
-	check("計算されるデフォルトは持ち上げではない", infos("g : x ? x\nf :\n\tn\n\tas : g n\n?\n\tas\nf 3").length, 0);
-	check("値のデフォルトは持ち上げではない", infos("f :\n\tn\n\tas : 0\n?\n\tas\nf 3").length, 0);
+	check("計算されるデフォルトは持ち上げではない", infos("g : x ? x\nf :\n\t\tn\n\t\tas : g n\n\t?\n\t\tas\nf 3").length, 0);
+	check("値のデフォルトは持ち上げではない", infos("f :\n\t\tn\n\t\tas : 0\n\t?\n\t\tas\nf 3").length, 0);
 	check("デフォルト無しは持ち上げではない", infos("f : n as ? as\nf 3 4").length, 0);
 	// 実プログラムでは `preprocess.sn` の `walk` だけが持ち上げている。
 	check("n_queens は持ち上げていない", infos(fs.readFileSync(path.join(__dirname, "..", "..", "..", "documents", "ja-jp", "guide", "examples", "n-queen", "n_queens.sn"), "utf8")).length, 0);
@@ -1906,7 +1906,7 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 {
 	const infos = (src) => compile(src).diagnostics.filter((d) => d.reason === "lifted-domain").length;
 	// 公理を止める書き方。動くが定義域が持ち上がる。
-	const lifted = "f :\n\ts : __\n\tst\n?\n\t!s : st\n\tf (s ' 1~) (st + 1)\nf `abc` 0";
+	const lifted = "f :\n\t\ts : __\n\t\tst\n\t?\n\t\t!s : st\n\t\tf (s ' 1~) (st + 1)\nf `abc` 0";
 	check("公理を止めても動く", run(lifted), 3);
 	check("その代わり定義域が持ち上がる", infos(lifted), 1);
 	// 崩壊を `|` で受ける書き方。持ち上げが要らない。
@@ -1939,19 +1939,19 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 {
 	const err = (src) => { try { compile(src); return null; } catch (e) { return e.message; } };
 	const cases = [
-		["[x ~xs] : [1 2]", "f :\n\t[x ~xs] : [1 2]\n?\n\tx\nf __"],
-		["[~xs] : [1 2]", "f :\n\t[~xs] : [1 2]\n?\n\txs\nf __"],
+		["[x ~xs] : [1 2]", "f :\n\t\t[x ~xs] : [1 2]\n\t?\n\t\tx\nf __"],
+		["[~xs] : [1 2]", "f :\n\t\t[~xs] : [1 2]\n\t?\n\t\txs\nf __"],
 	];
 	for (const [note, src] of cases) {
 		checkTrue(note + " は構文エラー", /デフォルト値は書けません/.test(err(src) || ""), String(err(src)).slice(0, 60));
 	}
 	// 裸の `~xs` の行は既定値の有無によらず、裸のストリーム仮引数として名指しで断る。
 	const why = (src) => { try { compile(src); return null; } catch (e) { return e.reason || e.message; } };
-	check("~xs : [1 2]（裸の行）は裸のストリーム仮引数として断る", why("f :\n\t~xs : [1 2]\n?\n\txs\nf __"), "bare-stream-param");
-	check("~xs : 1（平らな既定式）も同じ", why("f :\n\t~xs : 1\n?\n\txs\nf __"), "bare-stream-param");
+	check("~xs : [1 2]（裸の行）は裸のストリーム仮引数として断る", why("f :\n\t\t~xs : [1 2]\n\t?\n\t\txs\nf __"), "bare-stream-param");
+	check("~xs : 1（平らな既定式）も同じ", why("f :\n\t\t~xs : 1\n\t?\n\t\txs\nf __"), "bare-stream-param");
 	// 裸の仮引数のデフォルトは今まで通り書ける（値はレジスタか .rodata に在るので、
 	// 作る場所の問題が起きない）。
-	check("裸の仮引数のデフォルトは通る", err("f :\n\tn\n\tas : 0\n?\n\tas\nf 3"), null);
+	check("裸の仮引数のデフォルトは通る", err("f :\n\t\tn\n\t\tas : 0\n\t?\n\t\tas\nf 3"), null);
 	check("分解の形そのものは通る", err("f : [x ~xs] ? x\nf [1 2]"), null);
 }
 
@@ -2022,7 +2022,7 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 	check("2引数の1つ目は文字列のまま", run("m : s t ? s\nm `abc`~ `de`"), "abc");
 	check("2引数の2つ目も文字列のまま", run("m : s t ? t\nm `abc` `de`~"), "de");
 	check("撒いた文字が次の仮引数へずれない", run("e : s i ? s ' i\ne `abc`~ 1"), "b");
-	check("既定の引数へ文字が流れ込まない", run("n :\n\ts\n\tt : 5\n? ||s|| + t\nn `abc`~"), 8);
+	check("既定の引数へ文字が流れ込まない", run("n :\n\t\ts\n\t\tt : 5\n\t? ||s|| + t\nn `abc`~"), 8);
 	check("部分適用でも文字列のまま（(m s~) t == (m s) t）", run("m : s t ? (||s|| * 10) + ||t||\n(m `abc`~) `de`"), run("m : s t ? (||s|| * 10) + ||t||\n(m `abc`) `de`"));
 	check("部分適用の値", run("m : s t ? (||s|| * 10) + ||t||\n(m `abc`~) `de`"), 32);
 	check("合成の頭へ渡しても文字列のまま", run("f : s ? ||s||\ng : x ? x + 1\n(f g) `abc`~"), 4);
@@ -2033,7 +2033,7 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 	check("器形は1個の器を割る（残りは文字列）", run("f : [x ~xs] ? xs\nf `abc`~"), "bc");
 	check("混在形も1個の器を割る", run("f : a [h ~t] ? t\nf 1 `abc`~"), "bc");
 	// List は位置の仮引数へ撒く（仮引数が2つなら2つへ。後置 `~` は段を1つ下ろす）。撒くのを止めてよいのは String だけ。
-	check("List は位置の仮引数へ撒く", run("m :\n\ta\n\tb : 5\n? a + b\nm [1 2]~"), 3);
+	check("List は位置の仮引数へ撒く", run("m :\n\t\ta\n\t\tb : 5\n\t? a + b\nm [1 2]~"), 3);
 	// **撒いた文字列の値も器のまま渡る。** 撒きを名前に置いた形・撒きをもう一度撒いた形・仮引数の撒きを仮引数へ渡す形。
 	check("撒いた文字列をもう一度撒いても器のまま", run(N + "n `abc`~~"), 3);
 	check("撒きを名前に置いてから撒いても", run(N + "x : `abc`~\nn x~"), 3);

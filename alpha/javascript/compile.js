@@ -2048,4 +2048,7 @@ function synthesizePointfreeIn(node, scope) {
 // `definedNameOf` は、**印がどの行に付いているかを決める唯一の場所**である。門
 // （`test/export_symbol.test.js`）が「その枚が自分で公開した名前」を数えるのに要るので
 // 出す——門が自前の正規表現を持つと、同じ事実が2か所になって片方だけ動く。
-export { compile, definedNameOf };
+// `inlineSoloLambdaBlocks` は、`compile` を通さずに Pass 2 を直に呼ぶ試験（`test/param_list.test.js`）が
+// 仮引数のブロックを同じ段で剥がすのに要る——正しい字下げ（仮引数を2段、`?` を1段）の定義は、剥がす前は
+// 「`[仮引数] ? 本体` の1行を持つブロック」である。
+export { compile, definedNameOf, inlineSoloLambdaBlocks };

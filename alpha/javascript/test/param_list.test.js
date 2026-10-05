@@ -17,6 +17,7 @@ import { fileURLToPath } from "url";
 import { preprocess } from "../lexer.js";
 import { reduceAll } from "../pass2.js";
 import { buildEnv } from "../pass1.js";
+import { inlineSoloLambdaBlocks } from "../compile.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const grammarPath = path.join(__dirname, "..", "sign.pegjs");
@@ -38,9 +39,12 @@ function show(node) {
 	return JSON.stringify(node);
 }
 
+// 字句・構文の段は `compile` と同じ道を通す。正しい字下げ（仮引数を2段、`?` を1段）の定義は、構文の段では
+// 「`[仮引数] ? 本体` の1行を持つブロック」で、`compile` は Pass 2 の前にそれを定義の行へ剥がす（`inlineSoloLambdaBlocks`）。
+const linesOf = (source) => parser.parse(preprocess(source)).map(inlineSoloLambdaBlocks);
+
 function resolveSource(source) {
-	const pre = preprocess(source);
-	const lines = parser.parse(pre);
+	const lines = linesOf(source);
 	const env = buildEnv(lines);
 	return lines.map((line) => show(reduceAll(line, env)));
 }
@@ -65,19 +69,19 @@ const cases = [
 		note: "ブラケット形式 [x ~xs]（1行に複数の裸パラメータが同居）でも正しく分割される",
 	},
 	{
-		source: "f :\n\tx\n\ty : x + 1\n\tz : y + 1\n? x y z",
+		source: "f :\n\t\tx\n\t\ty : x + 1\n\t\tz : y + 1\n\t? x y z",
 		want: [
 			"define[identifier(<f>), lambda[params[<x>, <y>:add[identifier(<x>), number(1)], <z>:add[identifier(<y>), number(1)]], construct[construct[identifier(<x>), identifier(<y>)], identifier(<z>)]]]",
 		],
 		note: "インデントブロック形のデフォルト引数: y:x+1 は add[x,1] として（define扱いされずに）解決され、z:y+1 は let* 的にひとつ前の y を正しく参照する",
 	},
 	{
-		source: "f :\n\t[\n\t\tx\n\t\t~y\n\t]\n? x",
+		source: "f :\n\t\t[\n\t\t\tx\n\t\t\t~y\n\t\t]\n\t? x",
 		want: ["define[identifier(<f>), lambda[params[<x>, ~<y>], identifier(<x>)]]"],
 		note: "ブラケットを定義行より深くインデントして複数行で書いても（lexer.jsのbracketDepth対応）正しくパースされる",
 	},
 	{
-		source: "func_mixed :\n\t[\n\t\tx\n\t\ty : x + 1\n\t\t~z\n\t]\n? x",
+		source: "func_mixed :\n\t\t[\n\t\t\tx\n\t\t\ty : x + 1\n\t\t\t~z\n\t\t]\n\t? x",
 		want: [
 			"define[identifier(<func_mixed>), lambda[params[<x>, <y>:add[identifier(<x>), number(1)], ~<z>], identifier(<x>)]]",
 		],
@@ -106,11 +110,11 @@ for (const c of cases) {
 // let*的な逐次スコープの強制: 前方参照・自己参照はReferenceErrorになる
 const throwCases = [
 	{
-		source: "f :\n\tx\n\ty : z + 1\n\tz : 1\n? x y z",
+		source: "f :\n\t\tx\n\t\ty : z + 1\n\t\tz : 1\n\t? x y z",
 		note: "前方参照: y のデフォルト式が、まだ束縛されていない後ろの z を参照 → ReferenceError",
 	},
 	{
-		source: "f :\n\tx\n\ty : y + 1\n? x y",
+		source: "f :\n\t\tx\n\t\ty : y + 1\n\t? x y",
 		note: "自己参照: y のデフォルト式が自分自身の y を参照 → ReferenceError",
 	},
 ];
@@ -155,8 +159,7 @@ for (const c of throwCases) {
 // requiredArity: デフォルト・rest以外の仮引数の数が正しく計算されること
 {
 	total++;
-	const pre = preprocess("f :\n\tx\n\ty : x + 1\n\tz : y + 1\n? x y z");
-	const lines = parser.parse(pre);
+	const lines = linesOf("f :\n\t\tx\n\t\ty : x + 1\n\t\tz : y + 1\n\t? x y z");
 	const env = buildEnv(lines);
 	const defineNode = reduceAll(lines[0], env);
 	const requiredArity = defineNode.right.left.requiredArity;
@@ -185,8 +188,8 @@ function checkOperationError(note, source, shouldThrow) {
 	let threw = false;
 	let name = null;
 	try {
-		const env = buildEnv(parser.parse(preprocess(source)));
-		for (const node of parser.parse(preprocess(source))) reduceAll(node, env);
+		const env = buildEnv(linesOf(source));
+		for (const node of linesOf(source)) reduceAll(node, env);
 	} catch (e) {
 		threw = true;
 		name = e.name;
@@ -201,12 +204,12 @@ function checkOperationError(note, source, shouldThrow) {
 	}
 }
 
-checkOperationError("デフォルト式の `#` は OperationError", "ptr : 0x40011000\nbad :\n\tx : ptr # 42\n? x", true);
-checkOperationError("デフォルト式の `@`（Input）は許可（状態の初期化）", "ptr : 0x40011000\ng :\n\tx : @ptr\n? x", false);
-checkOperationError("本体の `#` は許可（無条件に評価される）", "ptr : 0x40011000\ng :\n\tx\n? ptr # x", false);
+checkOperationError("デフォルト式の `#` は OperationError", "ptr : 0x40011000\nbad :\n\t\tx : ptr # 42\n\t? x", true);
+checkOperationError("デフォルト式の `@`（Input）は許可（状態の初期化）", "ptr : 0x40011000\ng :\n\t\tx : @ptr\n\t? x", false);
+checkOperationError("本体の `#` は許可（無条件に評価される）", "ptr : 0x40011000\ng :\n\t\tx\n\t? ptr # x", false);
 checkOperationError("構造体リテラルの `#` は許可（スロットは無条件に1回評価）", "ptr : 0x40011000\ns : [\n\tx : ptr # 5\n\ty : 2\n]", false);
-checkOperationError("入れ子の式に隠れた `#` も見つける", "ptr : 0x40011000\nbad :\n\tx : ptr # 42 + 1\n? x", true);
-checkOperationError("括弧で包んだ `#` も見つける", "ptr : 0x40011000\nbad :\n\tx : 1 + (ptr # 42)\n? x", true);
+checkOperationError("入れ子の式に隠れた `#` も見つける", "ptr : 0x40011000\nbad :\n\t\tx : ptr # 42 + 1\n\t? x", true);
+checkOperationError("括弧で包んだ `#` も見つける", "ptr : 0x40011000\nbad :\n\t\tx : 1 + (ptr # 42)\n\t? x", true);
 
 // デフォルト式の中で括弧・ブラケットが使えること。
 //
@@ -221,8 +224,8 @@ function checkDefaultValue(note, source, want) {
 	total++;
 	let got;
 	try {
-		const env = buildEnv(parser.parse(preprocess(source)));
-		const nodes = parser.parse(preprocess(source)).map((n) => reduceAll(n, env));
+		const env = buildEnv(linesOf(source));
+		const nodes = linesOf(source).map((n) => reduceAll(n, env));
 		got = nodes.length > 0 ? "ok" : "empty";
 	} catch (e) {
 		got = `${e.name}: ${e.message.slice(0, 40)}`;
@@ -236,9 +239,9 @@ function checkDefaultValue(note, source, want) {
 	}
 }
 
-checkDefaultValue("デフォルト式のカッコ（`x : (2 + 3)`）が縮約できる", "f :\n\ta\n\tx : (2 + 3)\n? a + x", "ok");
-checkDefaultValue("デフォルト式のブラケット（`x : [2 + 3]`）も同様", "f :\n\ta\n\tx : [2 + 3]\n? a + x", "ok");
-checkDefaultValue("let* で前のパラメータを括弧越しに参照できる", "f :\n\ta\n\tx : a + (a * 2)\n? x", "ok");
+checkDefaultValue("デフォルト式のカッコ（`x : (2 + 3)`）が縮約できる", "f :\n\t\ta\n\t\tx : (2 + 3)\n\t? a + x", "ok");
+checkDefaultValue("デフォルト式のブラケット（`x : [2 + 3]`）も同様", "f :\n\t\ta\n\t\tx : [2 + 3]\n\t? a + x", "ok");
+checkDefaultValue("let* で前のパラメータを括弧越しに参照できる", "f :\n\t\ta\n\t\tx : a + (a * 2)\n\t? x", "ok");
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
