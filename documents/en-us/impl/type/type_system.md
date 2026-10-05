@@ -64,6 +64,7 @@ __
 > **Asymmetry of `$` and `@`**
 >
 > `$expr` always returns `Atom(Address)` regardless of whether `expr` is a Lambda or Atom.
+> The one exception is `$__`, which is the point: there is no place for nothing, so the address of the zero object is the zero object itself, typed `Unit` (`$__ + 3` is `__ + 3`, i.e. 3).
 > `@expr` dereferences the address and inherits the structural domain of the target (returns `Lambda` if calling a function, or `Atom` if loading data).
 
 ### Layer 2: Atom Subtypes
