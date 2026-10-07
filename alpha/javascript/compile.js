@@ -1790,9 +1790,13 @@ function expandGreedyFold(node) {
  *
  * 一番外側の括弧だけ剥がす（`[+] [1 2 3]` の `[…]`）。**要素の括弧は剥がさない**
  * ——`(1 2)` は入れ子の器であって、外の並びの1要素である。
+ *
+ * **剥がすのは器の括りだけである。** `|…|`（絶対値）と `||…||`（要素数）も1行の括りの形をしているが、
+ * 中の並びではなく1つの値である。`solo` で剥がしていたので `[+] ||1 2 3||` が `1 + 2 + 3` ＝ 6
+ * （要素数は 3）、`[* 2,] ||1 2 3||` が `[2 4 6]` になっていた。
  */
 function constructLeaves(node) {
-  const outer = solo(node);
+  const outer = node && node.type === "block" && node.kind !== "paren" ? node : solo(node);
   const isChain = (n) => !!(n && n.type === "operation" && n.name === "construct" && n.position === "infix");
   if (!isChain(outer)) return null;
   const leaves = [];
