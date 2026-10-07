@@ -2115,5 +2115,49 @@ checkTrue("`__` と `!__` は等しくない（真なので恒等射が返る）
 	check("構造体の切り出しの頭は添字で引いた値", run(P + "||(p ' [1 ~ 1]) ' 0||"), run(P + "||p ' 1||"));
 	check("スカラーの切り出しは段0のまま（対照）", run("5 ' [0 ~ 0]"), run("5"));
 }
+// ---- 文字列は符号位置で引く：字面のまま引く道と、広げて引く道（2026-10-07）----
+//
+// `s ' i`・`s ' i~`・`s ' [a ~ b]`・`||s||` は、サロゲートを含まない文字列なら字面のまま（UTF-16 の位置で）引き、
+// 含む文字列（対も片割れも）は符号位置の並びへ広げて引く（interpreter.js の `isBmpOnly`）。速い道を含む文字列へ
+// 広げると、ここが対の片側（UTF-16 の半分）を返して落ちる。判定を覚える長さ（64 単位以上）の文字列でも見る。
+{
+	const runU = (source) => {
+		const { nodes } = compile(source, { parse: parser.parse, charset: "utf32" });
+		const env = newRuntimeEnv(null, "utf32");
+		let result = UNIT;
+		for (const node of nodes) result = evaluate(node, env);
+		return observe(result);
+	};
+	const A = "\u{10000}";
+	const B = "\u{10001}";
+	const S = "s : `" + A + "a" + B + "b`\n"; // 符号位置4つ、UTF-16 で6単位
+	check("非 BMP：s ' 1 は2つ目の符号位置", runU(S + "s ' 1"), "a");
+	check("非 BMP：s ' 2 は対で1字", runU(S + "s ' 2"), B);
+	check("非 BMP：負の添字も符号位置で数える", runU(S + "s ' (0 - 2)"), B);
+	check("非 BMP：s ' 1~ は符号位置で切る", runU(S + "s ' 1~"), "a" + B + "b");
+	check("非 BMP：s ' 2~ は対を割らない", runU(S + "s ' 2~"), B + "b");
+	check("非 BMP：範囲で引いても対を割らない", runU(S + "s ' [1 ~ 2]"), "a" + B);
+	check("非 BMP：||s|| は符号位置の数", runU(S + "||s||"), 4);
+	check("非 BMP：切った残りの長さ", runU(S + "||s ' 1~||"), 3);
+	check("非 BMP：1字どうしの比較は符号位置で", runU(S + "(s ' 0) < (s ' 2)"), A);
+	check("非 BMP：1字に数を足すと、ずれた字", runU(S + "(s ' 0) + 1"), B);
+	check("非 BMP：1字どうしの隔たり", runU(S + "(s ' 2) - (s ' 0)"), 1);
+	check("非 BMP：1字の繰り返し", runU(S + "(s ' 0) * 2"), A + A);
+	const LONG = "s : `" + "a".repeat(70) + A + "b`\n"; // 判定を覚える長さ
+	check("長い非 BMP：||s||", runU(LONG + "||s||"), 72);
+	check("長い非 BMP：s ' 70", runU(LONG + "s ' 70"), A);
+	check("長い非 BMP：s ' 70~", runU(LONG + "s ' 70~"), A + "b");
+	check("長い非 BMP：範囲で引く", runU(LONG + "s ' [69 ~ 70]"), "a" + A);
+	// 片割れのサロゲートも1つの符号位置（`[...s]` と同じ数え方）
+	const LONE = "s : `x\uD800y`\n";
+	check("片割れ：||s||", runU(LONE + "||s||"), 3);
+	check("片割れ：s ' 1", runU(LONE + "s ' 1"), "\uD800");
+	check("片割れ：s ' 1~", runU(LONE + "s ' 1~"), "\uD800y");
+	// 対照：BMP だけの文字列（字面のまま引く道）
+	check("BMP：s ' 1~", runU("`abc` ' 1~"), "bc");
+	check("BMP：負の添字", runU("`abc` ' (0 - 1)"), "c");
+	check("BMP：範囲で引く", runU("`abc` ' [0 ~ 1]"), "ab");
+	check("BMP：||s||", runU("||`ab`||"), 2);
+}
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

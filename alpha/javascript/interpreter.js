@@ -1119,7 +1119,7 @@ const COMPARE_OPS = {
  * ここを1か所にする。
  */
 function scalarForCompare(x) {
-  return typeof x === "string" && [...x].length === 1 ? x.codePointAt(0) : x;
+  return isOneCodePoint(x) ? x.codePointAt(0) : x;
 }
 function alignForCompare(a, b) {
   let x = scalarForCompare(a);
@@ -1229,7 +1229,7 @@ function roundHalfAwayFromZero(x) {
  */
 // 算術の値として扱える1語か（数・BigInt・1文字）。`__` や器・文字列は含まない。
 function isScalarValue(x) {
-  return typeof x === "number" || typeof x === "bigint" || (typeof x === "string" && [...x].length === 1);
+  return typeof x === "number" || typeof x === "bigint" || isOneCodePoint(x);
 }
 
 // **番地と文字の域では `__` は吸収元である**（番地は生き返らせない、文字は域の外へ出たものを次のずらしで
@@ -1295,7 +1295,7 @@ function arithOnValues(name, l, r, resultType, charset = DEFAULT_CHARSET) {
     if (d <= 0) return UNIT;
   }
   if ((name === "div" || name === "mod") && resultType === "Int") {
-    const d = typeof r === "string" && [...r].length === 1 ? r.codePointAt(0) : r;
+    const d = isOneCodePoint(r) ? r.codePointAt(0) : r;
     if (d === 0 || d === 0n) {
       if (name === "mod") return l;
       return 0;
@@ -1311,7 +1311,7 @@ function arithOnValues(name, l, r, resultType, charset = DEFAULT_CHARSET) {
   //
   // `String` は長さによらず文字列の域（§3.2）で、文字の道には入らない。
   // ここで長さ2以上だけを弾けば足りるのは、1文字の `String` を入口で型から弾いてあるからである。
-  const cp = (x) => (typeof x === "string" && [...x].length === 1 ? x.codePointAt(0) : null);
+  const cp = (x) => (isOneCodePoint(x) ? x.codePointAt(0) : null);
   const lc = cp(l);
   const rc = cp(r);
   // **どちらが文字でも同じ道に入る。** 左辺が文字なら文字の域（ずらす）、左辺が数なら数の域（符号位置を数と
@@ -1464,7 +1464,7 @@ function evalArith(node, env) {
   // は、同じ `f : s ? s * 2` が `f `a`` で "aa"、`f `ab`` で右辺を読まずに `__` を返していた（1文字は短絡しない
   // ので値の道へ届く）。回数に文字・文字列・`__` を置いた形は `repeatText` と `arithOnValues` が値で落とす。
   const repeats = name === "mul" && typeof l === "string";
-  if (typeof l === "string" && [...l].length !== 1 && !repeats) return arithOnValues(name, l, undefined, node.atomType, charsetOf(env));
+  if (typeof l === "string" && !isOneCodePoint(l) && !repeats) return arithOnValues(name, l, undefined, node.atomType, charsetOf(env));
   const r = unspreadScalar(evaluate(node.right, env));
   // **型が `String` と言う辺は、1文字でも `Char` ではない**（type_system.md §2 の書き方の表、§3.2）。
   // 値は同じ JS 文字列なので、見分けるのは型である——見ないと `(s ' 2~) / 0` が JS の Infinity を漏らす。
@@ -1620,7 +1620,7 @@ function affineStepOf(op, step) {
 // 走っていた（無限ループではないが実用上はハング）。
 function isRangePoint(v, allowChar) {
   if (typeof v === "number" || typeof v === "bigint") return true;
-  return allowChar && typeof v === "string" && [...v].length === 1;
+  return allowChar && isOneCodePoint(v);
 }
 
 // 文字の範囲（`\a ~ \e` → `abcde`）。文字は Layer 2 では String だが、範囲の端点
@@ -1630,7 +1630,7 @@ function isRangePoint(v, allowChar) {
 // ——数値経路の `v + step` は文字列に対して `"a"` → `"a1"` → `"a11"` と伸ばし続け、
 // 100万回のガードに当たるまで走り続けてしまう（実際にハングとして踏んだ）。
 function buildCharRange(start, end) {
-  const isChar = (v) => typeof v === "string" && [...v].length === 1;
+  const isChar = (v) => isOneCodePoint(v);
   if (!isChar(start) || !isChar(end)) return null;
   const s = start.codePointAt(0);
   const e = end.codePointAt(0);
@@ -2206,6 +2206,42 @@ function collapseSlice(arr, left) {
   return arr.length === 1 ? arr[0] : arr;
 }
 
+// **文字列の符号位置を、全文を広げずに引く。** `[...s]` は呼ぶたびに文字列の長さに比例した並びを作るので、
+// `s ' i` で字面を端から1字ずつ読む Sign のコード（lower.sn は前処理した全文をこう読む）では、1字を引くたびに
+// 全文を写していた——lower.sn で lexer.sn を下ろす1周の CPU の 23.8% がここだった（2026-10-05 の測り直し）。
+// サロゲート（U+D800–U+DFFF の符号単位）を1つも含まない文字列なら、UTF-16 の位置が符号位置と同じなので、
+// 字面をそのまま引けば `[...s]` と同じ答えになる。含む文字列（対も片割れも）は今までどおり広げる——片割れも
+// `[...s]` では1つの符号位置なので、含むか含まないかで道を分ければ、どちらの道でも答えは変わらない。
+const SURROGATE_UNIT = /[\uD800-\uDFFF]/;
+// 長い文字列は同じもの（前処理した全文・.ist・option.ms）を何度も引くので、判定を覚えておく。覚える数には上限を
+// 置き、溢れたら全部忘れる——判定は字面だけで決まるので、忘れても答えは変わらず、遅くなるだけである。
+const BMP_MEMO_MIN_LENGTH = 64;
+const BMP_MEMO_MAX_ENTRIES = 256;
+const bmpOnlyMemo = new Map();
+/** サロゲートの符号単位を1つも含まない文字列か（UTF-16 の位置＝符号位置）。 */
+function isBmpOnly(s) {
+  if (s.length < BMP_MEMO_MIN_LENGTH) return !SURROGATE_UNIT.test(s);
+  let v = bmpOnlyMemo.get(s);
+  if (v === undefined) {
+    v = !SURROGATE_UNIT.test(s);
+    if (bmpOnlyMemo.size >= BMP_MEMO_MAX_ENTRIES) bmpOnlyMemo.clear();
+    bmpOnlyMemo.set(s, v);
+  }
+  return v;
+}
+/** 文字列の符号位置の数（`[...s].length` と同じ答え）。 */
+function codePointLength(s) {
+  return isBmpOnly(s) ? s.length : [...s].length;
+}
+/**
+ * 符号位置1つだけの文字列か（`typeof x === "string" && [...x].length === 1` と同じ答え）。符号位置1つは UTF-16 で
+ * 1単位か2単位なので、3単位以上の文字列は広げずに偽と言える——1文字かを訊く所（比較・算術・範囲の端）に長い
+ * 文字列が来ても、全文を写さない。
+ */
+function isOneCodePoint(x) {
+  return typeof x === "string" && x.length > 0 && x.length <= 2 && [...x].length === 1;
+}
+
 // **引ける並びとして見る。** `'` は器の種類を問わず「位置で引く」ので、まず並びへ均す
 // ——String は符号位置の列（`String ≅ List(0u)`）、名前付きスロットは宣言順の値の列、
 // それ以外は1要素の器（`[x] ≅ x`、原理8）。
@@ -2237,6 +2273,8 @@ function getPropByValue(l, r) {
       return cur;
     }
     const asStr = typeof l === "string";
+    // 文字列は、サロゲートが無ければ字面のまま切る（`[...l].slice(from).join("")` と同じ答えで、全文を広げない）
+    if (asStr && isBmpOnly(l)) return l.slice(from);
     const items = asIndexableList(l);
     // 負の添字は末尾から数える（`slice` の負 start 解釈が Sign の規約と一致する）。
     //
@@ -2269,7 +2307,9 @@ function getPropByValue(l, r) {
   // ない**（同一性は `===` と `' !__` が担う、§6.2）。したがって
   // `point == point2` が真でありながら `point ' 0` と `point2 ' 0` が違う値になるのは、
   // `==` が比較していない別の性質を測っているだけであり、正しい観測である。
-  const asIndexable = asIndexableList(l);
+  // 文字列は、サロゲートが無ければ字面のまま引く——UTF-16 の位置が符号位置と同じなので、`l[i]` と `l.length` が
+  // `[...l][i]` と `[...l].length` と同じ答えになる（下の位置の解き方も、範囲で引いて繋ぐ道もそのまま通る）
+  const asIndexable = isString && isBmpOnly(l) ? l : asIndexableList(l);
   // 負のインデックスは末尾から数える（`-1`=最後の要素、length+indexへ写像）。
   // 正側は0始まり、負側は-1始まり（-0が無いため対称にはならない）。
   // type_system.md §4.1: `'` は Address（位置）を構造的に要求するため、Float が
@@ -2874,7 +2914,7 @@ function evaluate(node, env) {
       // **文字列は符号位置で数える。** `String ≅ List(Char)` の Char は符号位置なので、
       // JS の `.length`（UTF-16 単位）では非 BMP が 2 と数えられる——実際 `𐀀𐀁𐀂` が
       // 6 になり、**実機の 3 のほうが正しかった**（オラクルの側が壊れていた）。
-      if (typeof inner === "string") return [...inner].length;
+      if (typeof inner === "string") return codePointLength(inner);
       if (isNamedSlots(inner)) return Object.keys(inner).length;
 
       // **番地は器ではない**（利用者の裁定 2026-09-20）。器でないものは長さ1として数える
