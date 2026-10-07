@@ -7,5 +7,7 @@ op1 : c ?
 	has c op_chars : 1
 	0
 count_op : [~w] ? (op1 (w ' 0)) + (count_op (w ' 1~))
-op_word : [~w] ? (count_op w) = ||w||
+op_word : [~w] ?
+	has (w ' 0) op_chars : (count_op w) = ||w||
+	__
 (op_word `+=`) + ((op_word `a+`) * 10) + ((count_op `x+-y`) * 100)
