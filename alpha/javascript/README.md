@@ -377,6 +377,15 @@ pre-alpha 実装はアーカイブへ退避した（`documents/ja-jp/impl/append
   List 扱いしていたため `` `x` (`y`) `` が construct ではなく push へ落ち、String の
   連結が起きなかった。同じ問題は8-Queensの時にも一度発覚して `isRealListValue` が
   作られていたが、`coproductReduce` の 10.1/10.2 判定だけ古い判定のまま残っていた。
+- `test/selfhost_sn.test.js` — **自己適用の門（毎片の門、利用者 2026-10-07）。** Sign で書いたコンパイラ
+  （`alpha/sign/lower.sn`＋`codegen.sn` とその取り込み先の束、解釈器の上）に自分自身を通し、駆動から届く関数ごとに
+  素の pass4 と同じ命令か（same）・名指しの断りか・違う命令を出したか（differs＝黙った誤答）を出して、呼び先まで
+  same の「閉じた集合」と一緒に golden（`test/selfhost_sn.golden.json`）と比べる。differs は 0 本のまま。断り → same は
+  golden を `--update` で書き直して同じ commit に入れる。same → 断り・differs は golden がそう変わっていない限り落ちる。
+  **段：`npm test` の速い段**（1周約 30 秒。目安の2分を超えたら自分の段へ移し、こことテストの頭を書き直す）。
+  段1が呼び出しのたびに全文を読み直す所は、この門の中だけのメモ（記号表 S3 の代わり）で速くしていて、
+  メモ無しで下ろし直した見本と関数ごとの結果が同じことを毎回見る。ワーカーは `resourceLimits.stackSizeMb` を
+  広げて回す（今の門は既定のスタックでも通る。段1の非末尾の再帰を束ごと回す日の備え）。
 - `test/compile.test.js` — `compile.js`（Pass 1〜3 の単一ドライバ）の動作確認。全ノードへの
   `atomType` 注釈、数値の昇格格子（識別子経由を含む）、算術族の型不一致、List左辺の算術、
   余積族、`&`/`|`、define/lambda/Dict判定、Pass 1b がパイプラインに載っていること。
@@ -428,6 +437,13 @@ npm run build:parser             # sign.pegjs から parser.js を生成（--for
 テストは各自 `sign.pegjs` を peggy で都度ビルドしており（ビルド済み `parser.js` には
 依存しない）グローバルな状態も持たないため、プロセスを分けても取りこぼしは無い。
 **新しいテストは `test/` に `*.test.js` という名前で置けばよく、ランナーへの登録は要らない。**
+
+**段。** `npm test` が速い段で、全ファイルを回す（自己適用の門 `selfhost_sn` もここ）。`SIGN_NO_QEMU=1 npm test` は
+機械の側（clang・ld.lld・qemu）を飛ばし、解釈器と命令の字面だけを見る。qemu を回すファイル（`qemu`・`unit_law`・
+`layout_sn`・`codegen_sn`・`target_info_sn` ほか）は、道具があれば機械の側まで回り重いので、片の検証では
+`SIGN_NO_QEMU=1 npm test` の後に1本ずつ回す。`test/run.js` は各ファイルを `--stack-size=8000` で起動する——この機械の
+node の主の糸は 8 MiB で、それを超える値では深い再帰が RangeError ではなく終了コード 127 でプロセスごと落ちる
+（理由と測った値は run.js の注記）。それより深く積む検査はワーカーの `stackSizeMb` で回す。
 
 ## `grammar.pegjs`の根本修正（正式仕様ファイル自体を修正済み）
 
