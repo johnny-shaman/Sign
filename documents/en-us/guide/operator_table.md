@@ -44,6 +44,21 @@
 
 - Position field marked with `*` indicates specific precedence/associativity requirements.
 
+> [!IMPORTANT]
+> **The "Left Operand is Unit" / "Right Operand is Unit" columns describe the infix forms (operations).**
+> A section or point-free form (`[+]`, `[* 2,]`, `[<]`, …) is a **function**, so if any written argument is `__`
+> the result is `__` by the totality axiom (user ruling 2026-10-05; the exceptions are the point-free forms of the catching `|`: `[|]` and `[| d,]`, below).
+> When no written argument is `__`, a section gives the same value as the infix form (`[[+] 1 2]` is `1 + 2`; a spread argument `xs~` puts its elements in as written arguments,
+> so compare with the infix over the elements); **their values split exactly on `__`**
+> (ja-jp `kan_extensions.md` §3.7.4):
+>
+> - `1 + __` is `1` (an operation: the meadow unit); `[[+] 1 __]` and `[+] 1 __ 3` are `__` (a function: the totality axiom). `[* 2,] 1 __ 3` is `__` as well; so is a name bound to `__`, `$__` (the point), or a `__` that arrives at run time
+> - A `__` written inside a literal container vanishes when the container is built (`[+] [1 __ 3]` is `4`). The function-position rule is unchanged (`(add __) 3` is `3`, `add __ 3` is `__`)
+> - The logical folds (2026-10-06): `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument (`[&] 1 2 3` is `3`, `[&] 1 __ 3` is `__`). `[|]` ("at least one true") alone is an exception: it returns the leftmost argument that is not `__`, and is `__` only when every argument is `__` (`[|] __ 5` is `5`, `[|] 3 5` is `3`). Over a literal container, `[|] [a b c]` is the first, `[&] [a b c]` the last, an empty one `__`
+> - Being a function, a section does not short-circuit (2026-10-06): every written argument is evaluated once, in the written order (`[|] 5 (w p 7)` evaluates `w p 7` too; the infix `5 | (w p 7)` does not evaluate the right side)
+> - A spread of `__` is an empty spread and adds no argument (2026-10-06): `[+] 1 __~ 3` is `4`
+> - A map whose element operation is the catching `|`, `[| d,]`, shares the `[|]` exception (2026-10-07): it catches `__` element by element (`[| 0,] 1 __ 3` is `[1 0 3]`). Every other map follows the axiom (`[& 0,] 1 __ 3` is `__`)
+
 | Precedence | Symbol | Position & Type Combinations | Function | Natural Meaning | Operational Semantics | Left Operand is Unit | Right Operand is Unit |
 | :---------: | :------: | :------: | :------: | ----------- | ------------- | ---------- | ---------- |
 | 1 | `#` | Prefix* | export | Hashtag (Discoverable) | Makes name discoverable internally within project | / | Exports Unit |

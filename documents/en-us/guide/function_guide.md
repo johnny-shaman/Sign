@@ -32,6 +32,38 @@ To treat operators as first-class functions, enclose the operator in parentheses
 [_!] 5
 ```
 
+Point-free forms are **functions**, not operations. If any written argument is `__`, the result is `__` (the totality axiom, user ruling 2026-10-05).
+An infix operation reads `__` as its unit (`1 + __` is `1`), so the values of a point-free form and the infix form split exactly on `__`.
+The exceptions are the point-free forms of the catching `|`: the fold `[|]` ("at least one true") returns the leftmost argument that is not `__`, and is `__` only when every argument is `__` (2026-10-06); the map `[| d,]` catches `__` element by element (2026-10-07). `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument.
+Being a function, a point-free form does not short-circuit: every written argument is evaluated once, in the written order. A spread of `__` is an empty spread and adds no argument (2026-10-06). Any other spread argument (`xs~`) puts its elements in as written arguments.
+A `__` written inside a literal container vanishes when the container is built, so it does not count as a written argument (ja-jp `kan_extensions.md` §3.7.4).
+
+```sign
+` A function: a written __ makes the result __
+[+] 1 __ 3
+
+` Sections too. The infix 1 + __ is 1 (an operation), but this is __
+[[+] 1 __]
+
+` Maps too
+[* 2,] 1 __ 3
+
+` [&] is "all true": a __ makes it __ (otherwise the rightmost)
+[&] 1 __ 3
+
+` [|] is the exception: the leftmost value that is not __ (__ only when all are __)
+[|] __ 5
+
+` [| d,] catches __ element by element ([1 0 3])
+[| 0,] 1 __ 3
+
+` Spreading __ adds no argument (4)
+[+] 1 __~ 3
+
+` A __ inside a container vanishes when the container is built (folds [1 3], so 4)
+[+] [1 __ 3]
+```
+
 ## Definition Using the `?` Operator
 
 The `?` (lambda) operator interprets its left operand as the parameter list and its right operand as the function body.
