@@ -1363,7 +1363,21 @@ function inferAtomType(node, env) {
   if (node.atomType !== undefined) return node.atomType;
   const inferred = computeAtomType(node, env);
   node.atomType = inferred;
+  if (node.pfCall) noteSpreadElementTypes(node.pfCall, env);
   return inferred;
+}
+
+/**
+ * **区間の撒く実引数の要素型を控える**（`[/] 100 xs~` の xs の要素型）。撒いた要素は書いた実引数として並ぶので
+ * （利用者の裁定、kan_extensions.md §3.7.4）、解釈器は要素ごとの葉に書いた形と同じ型を付けて連なりを組み直す
+ * （compile.js の `spreadPlanOf`、解釈器の `evalWrittenSection`）。仮引数の要素型はその場の束縛（ここの `env`）で
+ * しか引けないので、ここで控える。列挙されない欄にする——木の形と `.st` を変えない。
+ */
+function noteSpreadElementTypes(m, env) {
+  for (const a of m.args || []) {
+    if (!isSpreadNode(a)) continue;
+    Object.defineProperty(a, "spreadElementType", { value: containerElementType(a.operand, env) ?? null, enumerable: false, configurable: true, writable: true });
+  }
 }
 
 function computeAtomType(node, env) {

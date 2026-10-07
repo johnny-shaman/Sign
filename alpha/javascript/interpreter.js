@@ -6,7 +6,7 @@ import { OPERATOR_DICT } from "./operator_table.js";
 // 後置 `~` の判定は、ここでは `isStructSpreadLine` という名前で受ける（マージが
 // 「双方に `~`」を条件にしているので、値ではなく**書かれ方**を見る：list_model.md §5.3）。
 // `isSpreadNode` という2つ目の名前も同居していたが、同じ規則の別名で誰も呼んでいない。
-import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine, addressWithoutArrow, charWithoutArrow } from "./layout.js";
+import { isDefineNode, isIdentifierNode, isSlotKeyNode, isExpandNode as isStructSpreadLine, addressWithoutArrow, charWithoutArrow, writtenUnitMode, writtenSpineOf, arithDomain } from "./layout.js";
 // **値の種類を見る述語は runtime_kind.js が唯一の置き場である**（RTTI の裁定 2026-09-27、理由はそこの頭）。
 // `UNIT` と `isUnit` は下の export から出し直す——このファイルから引いている試験はそのまま動く。
 import { UNIT, isUnit, IDENTITY, isIdentityMorphism, isIterator, isNamedSlots } from "./runtime_kind.js";
@@ -209,9 +209,12 @@ function collectApplyChain(node) {
 
 // 実引数ノード1個を評価して値配列にする。後置~（expand）付きなら複数の位置引数へ展開する
 // （pattern_guide.md「関数にListを渡すときは必ず後置~を使う」）。
-function evalArgValues(argNode, env) {
+function evalArgValues(argNode, env, emptyUnitSpread = false) {
   if (argNode.type === "operation" && argNode.position === "postfix" && argNode.name === "expand") {
     const v = evaluate(argNode.operand, env);
+    // **区間・点なしへの `__` の撒きは空の撒きで、実引数を足さない**（利用者の裁定 2026-10-06、呼び先は
+    // `isSectionCallee`）。実行時に呼び先が決まる形（`h : $[+]` の `@h 1 __~ 3`）もここを通る。
+    if (emptyUnitSpread && isUnit(v)) return [];
     if (Array.isArray(v)) return v;
     // **文字列は位置引数へ撒かない。** 後置 `~` は段を1つ下ろすが、String だけは μ が強制なので
     // `s~ = s` で器が残る（2026-09-23 の裁定）。呼び先を見ずに撒いていたときは、`n : s ? ||s||` へ
@@ -807,6 +810,10 @@ function evaluateTail(node, env) {
     return evaluateTail(node.lines[0], env);
   }
   if (node.type === "operation") {
+    // **区間を開いた木は下の末尾の道へ乗せない。** 下の短絡・構築・適用の道はどれも木をそのまま歩くので、書いた
+    // 実引数を書いた順に1回ずつ評価して公理を当てる所（`evalWrittenSection`）を素通りする。末尾の位置は向こうが
+    // 引き受ける——`[&]`・`[|]` の最後の実引数の値がそのまま結果になるときだけ、それを末尾で評価する。
+    if (node.pfCall) return evalWrittenSection(node, env, evaluateTail);
     // 短絡で右へ進んだ先は末尾位置である（規則そのものは `evalShortCircuit`）。
     if (node.name === "or" || node.name === "and") return evalShortCircuit(node, env, evaluateTail);
     // **「前置き ＋ 末尾の呼び出し」は積まずに回せる。**
@@ -830,7 +837,8 @@ function evaluateTail(node, env) {
       const { calleeNode, argNodes } = collectApplyChain(node);
       const callee = evaluate(calleeNode, env);
       const argValues = [];
-      for (const a of argNodes) argValues.push(...evalArgValues(a, env));
+      const emptyUnitSpread = isSectionCallee(callee);
+      for (const a of argNodes) argValues.push(...evalArgValues(a, env, emptyUnitSpread));
       // compose/pointfree/組み込み関数（JS function）は素朴なLambda呼び出しではないため
       // トランポリンの対象外——安全側に倒して通常のapplyClosureへ委譲する。
       if (callee && callee.__lambda__ && !callee.__compose__ && !callee.__pointfree__) {
@@ -840,6 +848,17 @@ function evaluateTail(node, env) {
     }
   }
   return evaluate(node, env);
+}
+
+/**
+ * **呼び先は区間・点なしか**（`[+]`・`[* 2,]`・`[- 1]`、合成の先の段がそれ、合成した `_pf_fold_*`・`_pf_map_*`）。
+ * 区間・点なしへの `__` の撒きは空の撒きである（`evalArgValues`）。普通の関数への撒きは変えない。
+ */
+function isSectionCallee(c) {
+  if (!c || typeof c !== "object") return false;
+  if (c.__compose__) return isSectionCallee(c.__compose__[0]);
+  if (c.__pointfree__) return true;
+  return !!(c.params && c.params.pfGreedy);
 }
 
 // 「複数の実引数を貪欲に消費する」ポイントフリークロージャかどうか（実行時版）。
@@ -898,8 +917,16 @@ function applyClosure(closure, argValues, env = null) {
       const [f, g] = closure.__compose__;
       // 完全性公理はチェーン全体に効く：fの結果がUnitならgを呼ばず即座にUnit。
       // 左(f)を先に適用し、その結果に右(g)を適用する（左→右パイプライン順、上記参照）。
+      //
+      // **ただし後の段の区間の相手は評価する。** 区間は関数で、相手（`[+] [- (t 2)]` の `t 2`）は当てるたびに書いた
+      // 実引数の後で1回評価してから公理を当てる（利用者の裁定 2026-10-05）——書いた合成 `[- (t 2)] ([+] 1 __ 3)` は
+      // 後の段を `__` に当てて相手を評価するので、`$` で運んだ合成も同じにする。区間でない段（ラムダ）は本体を
+      // 評価しないので、何もしない。
       const mid = applyClosure(f, argValues, env);
-      if (isUnit(mid)) return finish(UNIT);
+      if (isUnit(mid)) {
+        evaluateSectionPartners(g);
+        return finish(UNIT);
+      }
       // list_model.md §2.4③: ポイントフリー合成の中間は「1個の実体化されたList値」
       // ではなく次段へ流れるストリーム（①②の Eager/Lazy 境界と同じ原則）。
       // 次段が貪欲なポイントフリー（`[+]`/`[* 2,]`）なら展開して渡す——
@@ -919,11 +946,26 @@ function applyClosure(closure, argValues, env = null) {
       // 演算子表のUnit欄（`!` の右辺Unit → Id射）が支配する。この区別が無いと、同じ否定が
       // 「演算子・ポイントフリー・明示ラムダ」の3通りで別々の答えを返していた。
       //
-      // 一方、貪欲なポイントフリー（`[+]`）は引数スロットではなく**余積のストリーム**を
-      // 食う（tier 10.0）。ストリーム中の `__` は余積の単位元として消えるべきものであり、
-      // 引数スロットへUnitが来たわけではないので公理の対象ではない（`[+] 1 __` は 1）。
-      if (!isGreedyPointfreeClosure(closure) && argValues.some((v) => isUnit(v))) return finish(UNIT);
+      // **貪欲なポイントフリー（`[+]`・`[* 2,]`）も関数である**（利用者の裁定 2026-10-05）。以前は「余積の
+      // ストリームを食うので公理の対象ではない」としてここを素通しにしていた（`[+] 1 __` が 1）。書いた実引数に
+      // `__` が1つでもあれば `__`——例外は捕まえる `|` の2つ（layout.js の `writtenUnitMode`、`writtenUnitRule`）。
+      // ここへ実引数が1つずつ届くのは、実行時に呼び先が決まる形（`h : $[* n,]` の `@h 1 __ 3`）と、区間の呼び出しの
+      // 評価（`evalWrittenSection`）である。器を1つ渡した形（`[* n,] [1 __ 3]`）は、器を組んだ時点で `__` が消えている。
+      // 片側を束縛した区間（`[- (t 2)]`）は前から公理どおりで、相手は評価してから `__` にする。
+      if (argValues.some((v) => isUnit(v))) {
+        const pf = closure.__pointfree__;
+        const r = writtenUnitRule(isGreedyPointfreeClosure(closure) ? writtenUnitMode(pf.name, !!pf.pointfreeMap) : "total", closure, argValues);
+        if (r !== undefined) return finish(r);
+      }
       return finish(applyPointfree(closure.__pointfree__, closure.env, argValues, closure.__pfbound__));
+    }
+    // **合成した貪欲なポイントフリー（`_pf_fold_*`・`_pf_map_*`）も同じ**（印は compile.js の `settleWrittenUnits`）。
+    // `$[+]` を `@h 1 __ 3` で当てると、書いた実引数が器を組まずに1つずつ届く。`[| d,]` を合成した写像は、1つずつ
+    // 届いた `__` を残りの仮引数の並びに残すので、本体の `(s ' 0) | d` が要素ごとに捕まえる。
+    const pfMode = closure.params && closure.params.pfGreedy;
+    if (pfMode) {
+      const r = writtenUnitRule(pfMode, closure, argValues);
+      if (r !== undefined) return finish(r);
     }
     const callEnv = bindParams(closure.params, argValues, closure.env);
     if (callEnv === null) return finish(UNIT);
@@ -2276,6 +2318,171 @@ function foldByAssoc(name, values, combine) {
     : values.reduce((acc, v) => (isUnit(acc) ? UNIT : combine(acc, v)));
 }
 
+/**
+ * **区間の相手を、効果のためだけに評価する**（書いた実引数の `__` が公理で結果を決めたとき）。相手（`[< (t 2),]`・
+ * `[- (t 2)]` の `t 2`）は当てるたびに書いた実引数の後で1回評価するもの（`applyPointfree` の `boundOf`、前からの
+ * 順）で、公理が値を決めても評価は落とさない。合成は段の順に全部の段の相手。`!__` で穴を開けた閉包は束縛側を
+ * 評価し終えているので、その側は何もしない。取り出し（`[' k,]`）の相手は鍵で、字面の鍵（欄の名前・添字）は値として
+ * 評価しない（欄の名前を束縛として引くと「未定義識別子」の診断が出る）——括った式の鍵（`[' (t 1),]`）だけを評価する。
+ */
+function evaluateSectionPartners(closure) {
+  if (!closure || !closure.__lambda__) return;
+  if (closure.__compose__) {
+    for (const stage of closure.__compose__) evaluateSectionPartners(stage);
+    return;
+  }
+  const pf = closure.__pointfree__;
+  if (!pf) return;
+  for (const side of ["left", "right"]) {
+    if (pf[side] === null || pf[side] === undefined) continue;
+    if (pf.name === "get_prop" && pf[side].type === "atom") continue;
+    if (closure.__pfbound__ && closure.__pfbound__[side] !== undefined) continue;
+    evaluate(pf[side], closure.env);
+  }
+}
+
+/**
+ * **区間の呼び出しで、書いた実引数の `__` が結果を決めるならその値**（決めなければ undefined）。表は layout.js の
+ * `writtenUnitMode`：`"total"` は相手を評価してから `__`、`"anyTrue"`（`[|]`）は一番左の `__` でない実引数そのもの
+ * （全部が `__` なら `__`）——器を組んで畳み直すと、残った1つが器なら要素を畳んでしまう（`[|] __ [1 2]` は
+ * `[1 2]` であって 1 ではない）。`"catch"`（`[| d,]`）は決めない——写像が要素ごとに捕まえる。
+ */
+function writtenUnitRule(mode, closure, argValues) {
+  if (!argValues.some((v) => isUnit(v))) return undefined;
+  if (mode === "total") {
+    evaluateSectionPartners(closure);
+    return UNIT;
+  }
+  if (mode === "anyTrue") return argValues.find((v) => !isUnit(v)) ?? UNIT;
+  return undefined;
+}
+
+// ---- 区間・貪欲な点なしの呼び出し：書いた実引数を書いた順に1回ずつ評価してから公理を当てる ----
+//
+// **区間・貪欲な点なしは関数である**（利用者の裁定 2026-10-05。例外は捕まえる `|` の2つ、layout.js の
+// `writtenUnitMode`）。compile.js（と pass2 の頭の区間）は呼び出しを中置の木へ開き、根に書いた実引数の印
+// （`pfCall`）を付ける。開いた木をそのまま評価すると、`__` は草原の単位元として吸われ（`1 + __` は 1）、`|`・`&` は
+// 短絡して後ろの実引数を飛ばし、比較の写像（`(x < 3) & x`）は実引数を2回評価する。だからここで:
+//
+// 1. 書いた実引数を、書いた順に1回ずつ評価する（撒く実引数は撒いた要素を並べる。`__` の撒きは何も足さない）。
+//    名前を付けた点なしの呼び出しは、呼び先を先に評価する（前からの順）。
+// 2. 公理を当てる（`writtenUnitRule`）。呼び出し（`g 1 __ 3`）は呼び先の閉包へ1つずつ渡して閉包に当てさせる
+//    ——呼び先が合成（`k : h`、`h : [|] [* 2,]`）なら先の段が書いた実引数を受け、後の段はその値を受ける。
+//    開いた木（`[+] 1 __ 3`・`[* 2,] 1 __ 3`）の相手は字面だけなので、`"total"` はそのまま `__`。
+// 3. それ以外は、開いた木の実引数を評価し終えた値へ差し替えて計算する。差し替えた木は写しで、印を持たない。
+//    `"catch"`（`[| 0,]` を開いた `(x | 0)` の並び）は要素ごとに捕まえる。撒く実引数を持つ頭の区間は、撒いた
+//    要素を並べた連なりを組み直して計算する（`[+] 1 xs~ 3` は `[+] 1 1 2 3`、layout.js の `writtenSpineOf`）。
+//    **組み直した葉と節は、要素を書き並べた形と同じ型を持つ**（`typedSpineOf`）——型は compile.js の
+//    `spreadPlanOf` が決め、決まらない形はコンパイル時に名指しで断ってある。積 `[,]` は積そのものの撒きのまま。
+//
+// **末尾の位置**（`evaluateTail` から）：`[&]`・`[|]` の頭の区間は、最後の実引数より前を全部評価し終えて、最後の
+// 実引数の値がそのまま結果になると分かったら（`[&]` は前に `__` が無い、`[|]` は前が全部 `__`）、最後の実引数を
+// 末尾で評価する。書いた順に1回ずつ評価することは変わらない——`[&] n (r (n - 1))` の再帰がフレームを積まない。
+const WRITTEN_VALUE = "__written_value";
+const writtenValueNode = (value, of) => ({ type: "atom", kind: WRITTEN_VALUE, value, atomType: of && of.atomType });
+
+/** 撒いた値の要素（`evalArgValues` の撒き方と同じ）。`__` の撒きは空。 */
+function spreadElementsOf(v) {
+  if (isUnit(v)) return [];
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string" || (isIterator(v) && v.spread && v.text)) return [v];
+  if (isIterator(v)) return asList(v);
+  return [v];
+}
+
+/** 木の写しを作り、`subst` にある節を差し替える（差し替えた節を `hits` に数える）。差し替えが無い枝は写さずに共有する。 */
+function substituteNodes(node, subst, hits) {
+  if (!node || typeof node !== "object") return node;
+  if (subst.has(node)) {
+    hits.add(node);
+    return subst.get(node);
+  }
+  let copy = null;
+  const take = () => (copy = copy || { ...node });
+  for (const k of ["left", "middle", "right", "operand"]) {
+    if (!node[k]) continue;
+    const s = substituteNodes(node[k], subst, hits);
+    if (s !== node[k]) take()[k] = s;
+  }
+  if (Array.isArray(node.lines)) {
+    const ls = node.lines.map((l) => substituteNodes(l, subst, hits));
+    if (ls.some((l, i) => l !== node.lines[i])) take().lines = ls;
+  }
+  return copy || node;
+}
+
+/**
+ * **撒いた要素を書き並べた連なりを、書いた形と同じ型で組む。** 葉の型は compile.js の `spreadPlanOf` が実引数ごとに
+ * 決めたもの（撒いた要素は要素型、並べた実引数は自分の型）、節の型は算術の域の表（layout.js の `arithDomain`——
+ * pass3 が書いた形に付けるのと同じ表）。論理（`&` `|` `;`）の節は型を読まない。
+ */
+function typedSpineOf(op, name, values, types) {
+  const spine = writtenSpineOf(op, name, values.map((value, i) => ({ type: "atom", kind: WRITTEN_VALUE, value, atomType: types[i] })));
+  if (!spine) throw new Error(`interpreter: 区間 [${op}] の撒いた被演算子を組み直せません（内部の誤り）`);
+  const typeOf = (n) => {
+    if (n.type === "atom" || !ARITH_OPS[n.name]) return n.atomType;
+    const t = arithDomain(n.name, typeOf(n.left), typeOf(n.right));
+    if (!t) throw new Error(`interpreter: 区間 [${op}] の撒いた被演算子の型が表にありません（内部の誤り）`);
+    n.atomType = t;
+    if (t === "String") n.elementType = "Char";
+    return t;
+  };
+  typeOf(spine);
+  return spine;
+}
+
+function evalWrittenSection(node, env, tailEval = null) {
+  const m = node.pfCall;
+  const mode = m.mode || writtenUnitMode(m.name, m.form === "map");
+  const plan = m.spreadPlan;
+  const subst = new Map();
+  let callee;
+  if (m.form === "apply") {
+    callee = evaluate(m.callee, env);
+    subst.set(m.callee, writtenValueNode(callee, m.callee));
+  }
+  const flat = [];
+  const types = [];
+  let spread = false;
+  // 末尾の位置で、最後の実引数の値がそのまま結果になりうる形（上の注記）。
+  const tailable = !!tailEval && m.form === "spine" && !m.outer && (m.name === "and" || m.name === "or") && !m.args.some(isStructSpreadLine);
+  for (let i = 0; i < m.args.length; i++) {
+    const a = m.args[i];
+    if (isStructSpreadLine(a)) {
+      spread = true;
+      const v = evaluate(a.operand, env);
+      subst.set(a.operand, writtenValueNode(v, a.operand));
+      const els = spreadElementsOf(v);
+      flat.push(...els);
+      for (let k = 0; k < els.length; k++) types.push(plan && plan.types ? plan.types[i] : null);
+      continue;
+    }
+    if (tailable && i === m.args.length - 1 && (m.name === "and" ? !flat.some((v) => isUnit(v)) : flat.every((v) => isUnit(v)))) {
+      return tailEval(a, env);
+    }
+    const v = evaluate(a, env);
+    subst.set(a, writtenValueNode(v, a));
+    flat.push(v);
+    types.push(a.atomType);
+  }
+  const sawUnit = flat.some((v) => isUnit(v));
+  if (sawUnit && m.form === "apply") return applyClosure(callee, flat, env);
+  if (sawUnit && mode !== "catch") return writtenUnitRule(mode, null, flat);
+  if (spread && m.form === "spine" && !(plan && plan.kind === "tree")) {
+    if (!plan || plan.kind !== "rebuild") throw new Error(`interpreter: 区間 [${m.op}] の撒く実引数の読み方が決まっていません（内部の誤り）`);
+    if (flat.length === 0) return UNIT;
+    // 1つなら、その1つ（残る1つが器でないことは `spreadPlanOf` が確かめてある）。2つから先は書き並べたのと同じ連なり。
+    if (flat.length === 1) return flat[0];
+    return evaluate(typedSpineOf(m.op, m.name, flat, types), env);
+  }
+  // **書いた実引数は全部、開いた木の中で差し替わっていなければならない。** 印が木から外れた古い節を指していると
+  // （前段が節を写しに差し替えた形）、印の側で1回、木の側でもう1回評価して効果が2回起きる——黙った誤答なので名指しで止める。
+  const hits = new Set();
+  const copy = substituteNodes(node, subst, hits);
+  if (copy === node || hits.size !== subst.size) throw new Error("interpreter: 区間の書いた実引数が開いた木に見つかりません（内部の誤り）");
+  return evaluate(copy, env);
+}
+
 function applyPointfree(node, closureEnv, argValues, pfbound) {
   // 束縛側が既に評価済みなら、それを使う（`!__` で開けた穴の場合——上の注記）。
   const boundOf = (side) =>
@@ -2370,7 +2577,11 @@ function applyPointfree(node, closureEnv, argValues, pfbound) {
     // このUnit除去だけで「選択写像」（select、偽だった要素の除外）が自然に得られる
     // （list_cheat_sheet.md「選択写像」、余積のUnit除去則、type_system.mdの輸入失敗例と同型）。
     const bound = rightBound ? boundOf("right") : undefined;
-    const results = argValues.map((v) => (isUnit(v) ? UNIT : combine(v, bound)));
+    // `[| d,]` は `__` の要素も演算へ通して捕まえる（`__ | d` は d、layout.js の `writtenUnitMode`）。実引数が `__`
+    // 1つだけなら器として受けた空の器で、写す要素が無い（合成した `_pf_map_*` の `[~s]` と同じ）。
+    const catches = writtenUnitMode(node.name, true) === "catch";
+    const elems = catches && argValues.length === 1 && isUnit(argValues[0]) ? [] : argValues;
+    const results = elems.map((v) => (isUnit(v) && !catches ? UNIT : combine(v, bound)));
     const kept = results.filter((r) => !isUnit(r));
     // 文字列を走って結果が全部文字列なら、余積で1つの文字列に繋ぐ（`String` の μ は強制、`mapSource` と同じ）。
     return walksText && kept.every((r) => typeof r === "string") ? kept.join("") : kept;
@@ -2632,6 +2843,8 @@ function evaluate(node, env) {
 
   if (node.type === "atom") {
     if (node.kind === "identifier") return envGet(env, node.value);
+    // 区間の書いた実引数を評価し終えた値（`evalWrittenSection` が開いた木へ差し込む）。
+    if (node.kind === WRITTEN_VALUE) return node.value;
     return evalLiteral(node);
   }
 
@@ -2786,6 +2999,8 @@ function evaluate(node, env) {
   }
 
   if (node.type === "operation") {
+    // 区間・貪欲な点なしの呼び出しを開いた木（印は compile.js・pass2 の `pfCall`）。
+    if (node.pfCall) return evalWrittenSection(node, env);
     // ポイントフリー記述（`[+]`/`[+ 1]`等、pass2.jsが作るpartialな中置演算ノード）は
     // 値として評価される場面では即座に演算しようとせず、クロージャ値として返す
     // （下のARITH_OPS/COMPARE_OPS分岐に落ちるとnode.left===nullをUnit扱いして
@@ -2828,8 +3043,9 @@ function evaluate(node, env) {
         // 使ったときに、それぞれの引数リストに分配して渡される」）。これが無いと
         // 撒いた器の要素が位置の仮引数へ届かない。
         const argValues = [];
+        const emptyUnitSpread = isSectionCallee(callee);
         for (const a of argNodes) {
-          argValues.push(...evalArgValues(a, env));
+          argValues.push(...evalArgValues(a, env, emptyUnitSpread));
         }
         return applyClosure(callee, argValues, env);
       }

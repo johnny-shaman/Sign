@@ -38,7 +38,7 @@
 import { reduceToMachineType, widthsOf, UNIT_NICHE_ASM, charSizeOf, charLimitOf, DEFAULT_CHARSET, SIGNEDNESS, literalDigits, literalParts } from "./target_info.js";
 import { envLookup, paramTypeOf } from "./pass1.js";
 import { isBareComment } from "./pass3.js";
-import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, productSlotNodes, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName, addressWithoutArrow, charWithoutArrow } from "./layout.js";
+import { passingOf, measure, layoutOfStruct, elementShapeOfList, itemShapeOfListAt, commonSlotShape, flattenProduct, productSlotNodes, isExpandNode, mergeBaseIdentifier, isIdentifierNode, isDefineNode, isSlotKeyNode as isSlotKeyAtom, bareName as slotName, addressWithoutArrow, charWithoutArrow, isQuietNode, spellWrittenArg } from "./layout.js";
 import { CURSOR_SUFFIXES } from "./stream_desugar.js";
 import { asmOf } from "./operator_table.js";
 
@@ -1369,6 +1369,12 @@ function genExpr(node, env, em, scope, tail = false) {
 			`'${n.writeThroughValue.fn}' の仮引数 '${n.writeThroughValue.name}' は番地です` +
 				`（${n.writeThroughValue.type} を渡しています）。場所を渡すなら '${n.writeThroughValue.fn} $x' です`
 		);
+
+	// **区間・貪欲な点なしを開いた木は、開いた中置が裁定どおりの値を出す形だけ出す**（`writtenSectionRefusal`）。
+	if (n.pfCall) {
+		const why = writtenSectionRefusal(n.pfCall, env, scope);
+		if (why) return em.fail(n, why);
+	}
 
 	// **match_case の並び**（関数本体）。各行は `条件 : 結果`、最後の1行だけ条件無しの
 	// フォールバックでありうる。条件が `__` でなければその結果を返す（function_guide.md）。
@@ -5981,6 +5987,82 @@ function cannotBeUnit(node, env, scope, critical = false) {
 // レジスタ1本で運ばれる型。器（`List` / `String` / `Struct` / `Iterator` / `Implicit`）は
 // 入っていない——そちらは `' 0` が本当に要素を引く操作であり、恒等射ではない。
 const SCALAR_ATOM_TYPES = new Set(["Int", "Char", "Address", "Float"]);
+
+/**
+ * **区間・貪欲な点なしの呼び出しを、開いた中置のまま出してよいか。** よければ null、だめなら断りの文面。
+ *
+ * 区間・貪欲な点なしは関数である（利用者の裁定 2026-10-05〜07、layout.js の `writtenUnitMode`）：書いた実引数に
+ * `__` が1つでもあれば `__`（例外は `[|]` の一番左と、`[| d,]` の要素ごとの捕まえ）、短絡せず、書いた実引数を
+ * 書いた順に1回ずつ評価する。compile.js は呼び出しを中置の木へ開いて根に印（`pfCall`）を付け、字面の `__` は
+ * その場で畳んである（`settleWrittenUnits`）。ここに残るのは実行時まで分からない形で、**開いた中置が同じ値を出す
+ * ときだけ出す**:
+ *
+ * - 公理どおり（`"total"`）：書いた実引数がどれも `__` になり得ない（`cannotBeUnit`——入口の門番を通った仮引数・
+ *   字面——か、compile.js が字面へ束縛したトップの名前と読んだもの）。それなら公理は働かず、中置は各実引数を
+ *   書いた順に1回ずつ評価する。`[&]` は中置の `&` が「`__` があれば `__`、無ければ一番右」なので、短絡で飛ばし
+ *   うる2つ目から後ろが静か（layout.js の `isQuietNode`）なら出してよい。
+ * - `[|]`（`"anyTrue"`）：中置の `|` が一番左の `__` でない値を選ぶ。飛ばしうる2つ目から後ろが静かなら出す。
+ *   名前を付けた `g : [|]` の呼び出しは器を組んでから畳む——器を組む所で `__` が消えるので、値はそのまま正しい。
+ * - `[| d,]`（`"catch"`）：開いた写像（`(x | d)` を並べる）は各実引数を1回ずつ評価して捕まえるので出す。器を
+ *   組んでから写す呼び出し（名前を付けた `g : [| 0,]`）は、器を組む所で `__` が先に消えるので、公理どおりの形と
+ *   同じ条件で出す。
+ * - 撒く実引数（`xs~`）を持つ形は出さない（`__` の撒きは compile.js が先に抜いてある）。
+ * - 後の段が先の段の開いた並びに乗った形（印の `outer`）は、上の条件に加えて書いた実引数が静かなときだけ出す。
+ *   先の段が選択写像（印の `overSelect`）なら出さない——落とした要素が開いた並びに `__` の席として残る。
+ *
+ * 公理の道（`i < 0`）でも `outer` を見るのは守りである：今そこへ来る実引数は `__` になり得ない字面・名前・`$名前`・
+ * それらの算術と、スカラーの `' 0`・`@$仮引数` の読みだけで（器の字面の実引数は pass2 が `unshift` で繋ぐので開かない）、
+ * どれも効果が無い。`cannotBeUnit` が広がった日に、飛ばす・2回読む形が黙って出ないようにしてある。
+ *
+ * それ以外を中置へ開くと、実行時の `__` が草原の単位元として吸われるか、短絡で効果が飛ぶ——**解釈器と値が黙って
+ * 割れる**ので、名指しで断る。機械に区間を直接出させる（実引数を1回だけ評価して枡に置き、`__` を見てから計算
+ * する）のは後の片である。
+ */
+function writtenSectionRefusal(m, env, scope) {
+	const spell = spellWrittenArg;
+	// **撒く実引数（`xs~`）があると実引数の数が実行時に決まる。** 解釈器は撒いた要素を実引数として並べて畳む
+	// （`evalWrittenSection`）が、機械にはその道がまだ無い——頭の区間を開いた中置は撒いた器を1項として演算し
+	// （`[+] 1 xs~ 3` が前は 3）、器を組んで畳む道（`g : [+]` の `g 1 xs~ 3`）は関数の中で撒いた仮引数を正しく
+	// 出せない（実測：`f : [~xs] ? g 1 xs~ 3` / `f [1 2]` が解釈器 7、機械 `__`）。黙って割れるので断る。
+	// `__` の撒き（`__~`）は compile.js が先に抜いてある。
+	const spread = m.args.find((a) => isExpandNode(a));
+	if (spread) return `撒く実引数を持つ区間・点なしは、機械ではまだ出せません（実引数 \`${spell(spread)}\` を撒くと実引数の数が実行時に決まり、器を組んで畳む道を機械はまだ正しく出せない）`;
+	// **後の段が選択写像の開いた並びに乗った形**（`[&] ([< 3,] 1 5 2)`・`[* 2,] ([< 3,] 1 5 2)`、印の `overSelect` は
+	// compile.js の `settleWrittenLeaves`）。選択写像が落とした要素は、開いた並びの中では `__` の席として残り、後の段の
+	// 中置がそれを `__` の被演算子として読む——器を組んでから渡したとき（`xs : [< 3,] 1 5 2` / `[&] xs` は 2）と値が割れる。
+	// 落とした位置を後の段がどう読むかは別の片で入れる（利用者の裁定 2026-10-07。解釈器の今の値は、畳み込みの段ではそれと
+	// 合い、写像の段と比較の連なりでは合わない——`[* 2,] ([< 3,] 1 5 2)` は `[2 2 4]`、裁定では `[2 4]`）。それまで機械は
+	// 名指しで断る。
+	if (m.overSelect) return `区間・点なしの合成で、後の段が選択写像（比較の写像 \`[< 3,]\` など）の開いた並びに乗った形は、機械ではまだ出せません（選択写像が落とした要素は開いた並びの中で \`__\` の席として残り、後の段がそれを \`__\` の実引数として読む——器を組んでから渡したときと値が割れる。選択写像の値を名前に置いてから渡してください）`;
+	// **後の段が先の段の開いた並びに乗った形**（合成 `[| 0,] [|] (t 1) (t 2)`、括った `[|] ([| 0,] (t 1) (t 2))`、印の
+	// `outer` は compile.js の `settleWrittenLeaves`）。後の段の中置は先の段の実引数を短絡（`|`・`&`）で飛ばすか、比較の
+	// 写像（`(x < 3) & x`）で2回読みうる——解釈器は書いた順に1回ずつ評価するので、効果の回数が黙って割れる
+	// （実測：前は解釈器 2、機械 1）。静かな実引数だけなら、飛ばしても2回読んでも観測できない。見るのは出してよい所
+	// （下の `emit`）——実行時の `__` が来うる実引数の断りの方が先である（値が割れる方が重い）。
+	const loud = m.outer ? m.args.find((a) => !isQuietNode(a)) : null;
+	const emit = () => (!loud ? null : `区間・点なしの合成で、後の段が先の段の実引数を飛ばすか2回読みうる形は、効果のありうる実引数があると機械ではまだ出せません（実引数 \`${spell(loud)}\`——書いた実引数は全部、書いた順に1回ずつ評価する。後の段の中置は短絡（\`|\`・\`&\`）で飛ばすか、比較の写像で2回読む）`);
+	const maybeUnit = (a, i) => !(m.argClass && m.argClass[i] === "total") && !cannotBeUnit(a, env, scope);
+	const skippable = m.args.find((a, i) => i > 0 && !isQuietNode(a));
+	const lead = `区間・点なしの実引数に実行時の \`__\` が来うる形は、機械ではまだ出せません`;
+	if (m.mode === "anyTrue") {
+		if (m.form === "apply" || !skippable) return null;
+		return `${lead}（\`[|]\` は短絡しない——書いた実引数は全部、書いた順に1回ずつ評価する。中置の \`|\` へ開くと実引数 \`${spell(skippable)}\` が飛ばされる）`;
+	}
+	if (m.mode === "catch" && m.form === "map") return emit();
+	const i = m.args.findIndex(maybeUnit);
+	if (i < 0) return emit();
+	if (m.mode === "total" && m.form === "spine" && m.op === "&" && !skippable) return null;
+	const why = m.mode === "catch"
+		? "`[| d,]` は要素ごとに `__` を捕まえるが、器を組んでから写す道では `__` が先に消える"
+		: "区間・点なしは関数なので、書いた実引数に `__` が1つでもあれば `__`（完全性公理）。中置へ開くと `__` が草原の単位元として吸われ、解釈器と値が割れる";
+	const unit = !!(m.argClass && m.argClass[i] === "unit");
+	// 公理どおりの形で字面の `__`（compile.js が `__` と読んだもの）が残っているのは、ほかの実引数か呼び先の相手を
+	// 評価すると観測できる（効果か、束縛の無い名前の診断）のでコンパイル時に畳めなかった形である——評価してから
+	// `__` にする道（後の片）がまだ無い。
+	if (unit && m.mode === "total")
+		return `${lead}（実引数 \`${spell(m.args[i])}\` は \`__\` なので結果は \`__\` だが、ほかの実引数か呼び先の相手に評価すると観測できる式（呼び出し・\`@\`・\`#\`・\`'\`・束縛の無い名前）があり、それを評価してから \`__\` にする形はまだ出せない。${why}）`;
+	return `${lead}（実引数 \`${spell(m.args[i])}\` ${unit ? "は `__` である" : "が `__` でないとコンパイル時に言えない"}。${why}）`;
+}
 
 // **その番地はコンパイル時に決まるか。** 決まるなら値（BigInt）、決まらないなら null。
 //

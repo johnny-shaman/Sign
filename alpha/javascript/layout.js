@@ -33,6 +33,7 @@
 
 import { widthsOf, sizeOf, charSizeOf, DEFAULT_CHARSET, reduceToMachineType, literalDigits } from "./target_info.js";
 import { envLookup } from "./pass1.js";
+import { OPERATOR_DICT } from "./operator_table.js";
 
 /**
  * **ノードの形を見るだけの述語は、ここが唯一の置き場である。**
@@ -1321,6 +1322,89 @@ function arithRow(name, leftType, rightType, reread) {
   return undefined;
 }
 
+/**
+ * **区間・貪欲な点なしの、書いた実引数の `__` の読み方**（利用者の裁定）。引数は Pass 2 が付けた演算子の名前
+ * （`|` は `or`）と、写像（`[* 2,]`）か畳み込み・区間（`[+]`）か。
+ *
+ * - `"total"`：区間・貪欲な点なしは関数なので、書いた実引数に `__` が1つでもあれば結果は `__`（完全性公理、
+ *   2026-10-05）。中置は演算なので草原の単位元のまま（`1 + __` は 1）——区間と中置は `__` でだけ割れる。
+ *   `[&]`（全部が真）もこれで、`__` が無ければ一番右を返す（2026-10-06）。
+ * - `"anyTrue"`：畳み込み `[|]` だけは公理の例外で「少なくとも1つが真」——一番左の `__` でない実引数を返し、
+ *   全部が `__` のときだけ `__`（2026-10-06）。
+ * - `"catch"`：要素の演算が捕まえる `|` の写像（`[| d,]`）も `[|]` の例外を分け持ち、要素ごとに `__` を捕まえる
+ *   （`[| 0,] 1 __ 3` は `[1 0 3]`、2026-10-07）。ほかの写像（`[& d,]`・`[* 2,]` …）は公理のまま。
+ *
+ * どれも短絡しない——書いた実引数は全部、書いた順に1回ずつ評価する。
+ *
+ * **表は1つ、読む側は3つ**：compile.js（印を付ける所）、解釈器（実行時に呼び先が決まる閉包）、pass4（中置へ
+ * 開いてよいか）が同じこの関数を引く。写しを置くと、裁定が変わった日に片方の道だけが古い読みで答える。
+ */
+function writtenUnitMode(name, isMap) {
+  if (name !== "or") return "total";
+  return isMap ? "catch" : "anyTrue";
+}
+
+/**
+ * **評価しても何も起きない式か**（静か）。呼び出し・前置 `@`（MMIO の読み）・`#`（書き込み）・`'`（番地の
+ * 欄を読むと MMIO の読みでありうる）を含まない式だけ。字面・名前・`$名前`・算術・比較・論理と、それらの括り。
+ *
+ * 区間・点なしは短絡しないので、中置へ開いて飛ばされうる実引数（`[|] 3 x` の x）は静かでなければならない
+ * ——静かなら飛ばしても観測できない。字面の `__` で区間を `__` へ畳むときも、他の実引数と呼び先の相手が静かで
+ * なければ畳めない（評価を消すことになる）。
+ */
+const QUIET_OPS = new Set([
+  "product", "construct", "unshift", "push", "concat",
+  "add", "sub", "mul", "div", "mod", "pow", "negate", "not", "bit_not", "factorial",
+  "less", "less_equal", "more", "more_equal", "assign_equal", "not_equal", "equal", "xnot_equal",
+  "chain_compare", "and", "or", "xor", "bit_and", "bit_or", "bit_xor", "bit_shift_left", "bit_shift_right",
+  "expand", "address",
+]);
+function isQuietNode(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.type === "atom") return true;
+  if (node.type === "block") return node.kind !== "indent" && Array.isArray(node.lines) && node.lines.every(isQuietNode);
+  if (node.type !== "operation" || node.partial || !QUIET_OPS.has(node.name)) return false;
+  return ["left", "middle", "right", "operand"].every((k) => !node[k] || isQuietNode(node[k]));
+}
+
+/**
+ * **区間の被演算子の並びから、中置の連なりを組む**——pass2 の `foldHeadSections` が頭の区間を畳む形と同じ
+ * （向きは表の `assoc`）。被演算子が2つ未満なら null。比較の3項（連鎖比較）はここへ来ない——`__` を撒いた被演算子を
+ * 抜けば2項以下で、ほかの撒く被演算子を持つ比較の区間は compile.js が名指しで断る。
+ *
+ * 組み直すのは2か所である：compile.js（`__` を撒いた被演算子を抜いた後、10-06）と解釈器（撒いた被演算子の要素を
+ * 実行時に並べた後）。写しを置くと、片方だけ向きの読みが古くなる。
+ */
+/**
+ * **断りの文面に書く実引数の綴り**（pass4 の区間の断り・compile.js の撒く実引数の断り）。名前は `<…>` を外し、括りは
+ * `[…]`、絶対値は `|…|`、要素数は `||…||` に戻す。綴れない形（仮引数の並び・複数行の字下げ）だけ `…`。
+ */
+function spellWrittenArg(n, depth = 0) {
+  if (!n || typeof n !== "object" || depth > 8) return "…";
+  const s = (x) => spellWrittenArg(x, depth + 1);
+  if (n.type === "atom") return n.kind === "unit" ? "__" : String(n.value).replace(/^<(.+)>$/, "$1");
+  if (n.type === "block") {
+    const lines = Array.isArray(n.lines) ? n.lines : [];
+    if (n.kind === "abs") return `|${lines.map(s).join(" ")}|`;
+    if (n.kind === "norm") return `||${lines.map(s).join(" ")}||`;
+    return n.kind === "paren" ? `[${lines.map(s).join(" ")}]` : "…";
+  }
+  if (n.type !== "operation") return "…";
+  if (n.position === "prefix") return `${n.op}${s(n.operand)}`;
+  if (n.position === "postfix") return `${s(n.operand)}${n.op}`;
+  if (n.name === "apply" || n.name === "construct") return `${s(n.left)} ${s(n.right)}`;
+  if (n.name === "chain_compare") return `${s(n.left)} ${n.op} ${s(n.middle)} ${n.op} ${s(n.right)}`;
+  return `${s(n.left)} ${n.op} ${s(n.right)}`;
+}
+
+function writtenSpineOf(op, name, operands) {
+  if (operands.length < 2) return null;
+  const mk = (left, right) => ({ type: "operation", op, name, position: "infix", left, right });
+  const e = OPERATOR_DICT[op];
+  const right = (Array.isArray(e) ? e : e ? [e] : []).some((x) => x && x.position === "infix" && x.assoc === "right");
+  return right ? operands.reduceRight((acc, x) => mk(x, acc)) : operands.reduce((acc, x) => mk(acc, x));
+}
+
 export {
   measure,
   layoutOfStruct,
@@ -1354,6 +1438,11 @@ export {
   arithRow,
   NUMERIC_TYPES,
   NON_SCALAR_PLACES,
+  // **区間・点なしの書いた実引数の `__` の読み方と、静かな式。** compile.js・解釈器・pass4 が同じこの2つを引く。
+  writtenUnitMode,
+  isQuietNode,
+  writtenSpineOf,
+  spellWrittenArg,
   // **問いの窓口も門のために出す。** `layout.sn` の門は JS の答えをその場で出して突き合わせる
   // （期待値を書き置くと片方だけ直る）。スロット1つ分と詰め方は外からは `layoutOfStruct` 越しに
   // しか引けず、それだと構文木が要る——型の名前と数だけで訊ける入口がこの2つである。

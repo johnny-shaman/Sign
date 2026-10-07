@@ -1617,12 +1617,36 @@ function foldHeadSections(items, env) {
       if (NON_TRANSITIVE_CHAIN_OPS.has(sec.op)) throw nonTransitiveChain(sec.op);
       if (operands.length > 3) throw chainTooLong(sec.op);
       const [left, middle, rightmost] = operands;
-      items.splice(i, end - i, { type: "operation", op: sec.op, name: "chain_compare", compareName: sec.name, position: "infix", left, middle, right: rightmost });
+      items.splice(i, end - i, markWrittenOperands({ type: "operation", op: sec.op, name: "chain_compare", compareName: sec.name, position: "infix", left, middle, right: rightmost }, sec, operands));
       continue;
     }
     const node = right ? operands.reduceRight((acc, x) => mk(x, acc)) : operands.reduce((acc, x) => mk(acc, x));
-    items.splice(i, end - i, node);
+    items.splice(i, end - i, markWrittenOperands(node, sec, operands));
   }
+}
+
+// **区間は関数なので、書いた被演算子に `__` があれば `__` である**（完全性公理、利用者の裁定 2026-10-05）。
+// 中置は演算なので草原の単位元のまま（`1 + __` は 1）——`[[+] 1 __]` と `1 + __` は `__` でだけ割れる。
+//
+// 畳んだ節は中置と同じ木で、どの節が書いた被演算子かは木に残らない（`[+] (a + b) c` と `[+] a b c` の
+// 左は同じ形の節である）。そこで根に「書いた被演算子と畳み方」を添える。読むのは compile.js（字面の
+// `__` をその場で畳む）・解釈器（被演算子を書いた順に1回ずつ評価してから公理を当てる）・pass4（中置へ
+// 開いてよいかを見る）。**木そのものは変えない**——列挙されない印にするのは、木の形（`.ms`・parser.sn
+// の木との突き合わせ・試験の木の比較）を変えないためである。
+//
+// **取り出しの区間（`[']`・`[@]`）には付けない。** 器の後ろ（`[@]` は前）の被演算子は鍵——欄の名前・添字・
+// 残りの添字 `N~`・中身で引く `k~`——で、値として評価する実引数ではない（`['] s foo` の foo は束縛を引かない）。
+// 中置の取り出しは器か鍵が `__` なら既に `__` を返す（`xs ' __`・`__ ' 1`・`xs ' (z 0)`）ので、印が無くても
+// 裁定どおりである。
+function markWrittenOperands(node, sec, operands) {
+  if (sec.name === "get_prop" || sec.name === "get_at") return node;
+  Object.defineProperty(node, "pfCall", {
+    value: { form: "spine", args: operands, op: sec.op, name: sec.name },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return node;
 }
 
 // ---- `[:]` と `[?]` は、生のトークン列の段で中置へ脱糖する ----
@@ -2038,8 +2062,12 @@ function desugarIndexRest(node) {
   // `@` は右結合なので（`reduceOnce`）、`a @ b @ c` は `a @ (b @ c)` である。内側から
   // 均せば `a @ (c ' b)` → `(c ' b) ' a` となり、**器の側が自然に内側へ積まれる**
   // ——連鎖を畳み直す必要は無い。結合の向きが正しければ、入れ替えは1段の話で済む。
+  //
+  // **入れ替えはその節の上で行う（写しを作らない）。** 頭の区間の印（`markWrittenOperands` の `pfCall.args`）は書いた
+  // 被演算子の節そのものを指している——写しに差し替えると印が木から外れた古い `get_at` を指したまま残り、解釈器が
+  // それを評価して「未対応の演算 'get_at'」で落ちていた（`[+] 1 foo @ s 3`）。
   if (node.type === "operation" && node.name === "get_at" && node.position === "infix" && node.left && node.right) {
-    node = { ...node, op: "'", name: "get_prop", left: node.right, right: node.left };
+    Object.assign(node, { op: "'", name: "get_prop", left: node.right, right: node.left });
   }
   for (const k of ["left", "right", "operand", "middle"]) {
     if (node[k]) node[k] = desugarIndexRest(node[k]);
@@ -2110,4 +2138,5 @@ function desugarKey(r) {
 
 // `isMarkedPrefix` は compile.js の字句の読み手（`$` の実体化・器の貼り付け）も引く——前置の印の見分け方は1か所で
 // 決める。写しを置くと、ここを直した日に向こうだけが古い読みで字句を切る（`\_` で起きた形）。
-export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections, isMarkedPrefix };
+// `CHAIN_COMPARE_OPS` も同じ——compile.js が、撒く被演算子を持つ比較の区間を断るときに引く（連鎖になる演算子の集合）。
+export { reduceAll, getCategory, resolveDensity, desugarIndexRest, desugarSections, isMarkedPrefix, CHAIN_COMPARE_OPS };

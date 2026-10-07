@@ -25,7 +25,7 @@
 import { preprocess } from "./lexer.js";
 import { parse } from "./parser.js";
 import { buildEnv, buildEnvScope, bindEnv, envLookupScope, EXPORT_MARKERS } from "./pass1.js";
-import { reduceAll, desugarIndexRest, getCategory, desugarSections, isMarkedPrefix } from "./pass2.js";
+import { reduceAll, desugarIndexRest, getCategory, desugarSections, isMarkedPrefix, CHAIN_COMPARE_OPS } from "./pass2.js";
 import { OperationError } from "./errors.js";
 import { OPERATOR_DICT } from "./operator_table.js";
 import { specializeGenericParams } from "./pass1b.js";
@@ -33,7 +33,9 @@ import { annotateAll, checkLayerConstraints, checkCharsetConstraints } from "./p
 // ノードの形を見るだけの述語は layout.js が唯一の置き場である（理由はそこの
 // `isDefineNode` のコメント）。`isArmNode`／`isIdentNode` はこのファイルでの呼び名で、
 // 規則は同じ——写しを持たず、別名で受ける。
-import { isSlotKeyNode, unparen, isExpandNode, isDefineNode, isDefineNode as isArmNode, isIdentifierNode as isIdentNode } from "./layout.js";
+import { isSlotKeyNode, unparen, isExpandNode, isDefineNode, isDefineNode as isArmNode, isIdentifierNode as isIdentNode, writtenUnitMode, isQuietNode, writtenSpineOf, spellWrittenArg } from "./layout.js";
+// 字面の綴り（プリフィックス付きの数・字）の読み方は target_info.js が唯一の置き場である（pass4 の `literalBits` も同じ）。
+import { literalParts, literalDigits } from "./target_info.js";
 import { findStreamFunctions, generatePullers, groupStreamFunctions, CURSOR_SUFFIXES } from "./stream_desugar.js";
 // **成果物（`.st`）からも合流できる。** 読み手が何を返したかで決まり、import 行の綴りは
 // 変わらない——どの成果物で答えるかはドライバの仕事である（`readImport` の戻り値）。
@@ -1587,6 +1589,10 @@ function compile(source, options = {}) {
     }
   }
 
+  // **区間・貪欲な点なしの書いた実引数の `__` は、前段の門番が断り終えてから決める**（`settleWrittenUnits`）。
+  // 字面の `__` で区間を `__` へ畳むと、その区間が出すはずだった名指しの断り（廃止した `===`、番地でない左辺への
+  // `#` …）が消える——だから Pass 3 と層・字の門番の後、最後に1回。
+  settleWrittenUnits(nodes);
   return { nodes, env, specializations, diagnostics };
 }
 
@@ -1780,9 +1786,14 @@ function expandGreedyFold(node) {
   if (!leaves || leaves.length < 2) return null; // 1つだけの形は畳む相手が無く、器かもしれない
   // **向きは表が言う**（`isRightAssocOp`）。`[^] 2 3 2` は `2 ^ (3 ^ 2)` ＝ 512 である。
   const mk = (left, right) => ({ type: "operation", name: inner.name, op: inner.op, position: "infix", left, right });
-  return isRightAssocOp(inner.op)
-    ? leaves.reduceRight((acc, x) => mk(x, acc))
-    : leaves.reduce((acc, x) => mk(acc, x));
+  const fold = (xs) => (isRightAssocOp(inner.op) ? xs.reduceRight((acc, x) => mk(x, acc)) : xs.reduce((acc, x) => mk(acc, x)));
+  // **器の字面か、書き並べた実引数か**で読み方が違う（下の「書いた実引数の `__`」）。器の字面の中の `__` は
+  // 器を組んだ時点で消える。書き並べた実引数は関数の実引数で、開いた根に印を付ける。
+  const settled = settleWrittenLeaves(node, leaves, { form: "spine", op: inner.op, name: inner.name, mode: writtenUnitMode(inner.name, false) });
+  if (settled.done !== undefined) return settled.done;
+  if (settled.kept.length === 0) return unitAtomNode();
+  if (settled.kept.length === 1) return settled.kept[0]; // 1つを畳めばその1つ
+  return settled.mark ? markWritten(fold(settled.kept), settled.mark) : fold(settled.kept);
 }
 
 /**
@@ -1838,7 +1849,11 @@ function expandGreedyMap(node) {
       ? { type: "operation", name: "and", op: "&", position: "infix", left: hit, right: x }
       : hit;
   };
-  return leaves.map(step).reduce((acc, x) => ({
+  const settled = settleWrittenLeaves(node, leaves, { form: "map", op: m.op, name: m.name, mode: writtenUnitMode(m.name, true) });
+  if (settled.done !== undefined) return settled.done;
+  if (settled.kept.length === 0) return unitAtomNode();
+  if (settled.kept.length === 1) return step(settled.kept[0]); // 1要素の器は要素（`[x] ≅ x`）
+  const out = settled.kept.map(step).reduce((acc, x) => ({
     type: "operation",
     name: "construct",
     op: " ",
@@ -1846,6 +1861,7 @@ function expandGreedyMap(node) {
     left: acc,
     right: x,
   }));
+  return settled.mark ? markWritten(out, settled.mark) : out;
 }
 
 /**
@@ -1882,6 +1898,535 @@ const composeRhsOf = (n) => {
   return v && v.type === "operation" && v.name === "compose" && v.position === "infix" ? v : null;
 };
 
+// ---- 書いた実引数の `__`：区間・貪欲な点なしは関数である ----
+//
+// **区間と貪欲なポイントフリー（`[+]`・`[* 2,]`・`[<]` …）は関数である**（利用者の裁定 2026-10-05）。書き並べた
+// 実引数に `__` が1つでもあれば結果は `__`（完全性公理）。中置は演算なので草原の単位元のまま（`1 + __` は 1）
+// ——区間と中置は `__` でだけ割れる。例外は捕まえる `|` の2つ（layout.js の `writtenUnitMode`）：畳み込み `[|]` は
+// 一番左の `__` でない実引数（10-06）、写像 `[| d,]` は要素ごとに捕まえる（10-07）。どれも短絡しない。`__` を撒いた
+// 形は空の撒きで、実引数を足さない（`[+] 1 __~ 3` は 4、10-06）。器の字面の中に書いた `__` は、器を組んだ時点で
+// 消える（`[+] [1 __ 3]` は 4）。関数の位置の規則は変えない（`(add __) 3` は 3、`add __ 3` は `__`）。
+//
+// 字面を展開する道（pass2 の `foldHeadSections`、ここの `expandGreedyFold`・`expandGreedyMap`）は書いた実引数を
+// 中置の連なりへ開くので、そのままでは `__` が草原の単位元として吸われる。**木は開いたまま**にして、開いた根に
+// 「書いた実引数」の印（`pfCall`、列挙されない）を付ける。読むのは3か所である:
+//
+// 1. ここ（`settleWrittenUnits`、両エンジン）：字面の `__`（綴り違いと、それへ束縛した名前）が書かれていて、他の
+//    実引数と呼び先の相手が静かなら、その場で `__` へ畳む。前段の名指しの断り（廃止した `===`、番地でない左辺への
+//    `#` …）を消さないように、畳むのは Pass 3 と層・字の門番の後である。
+// 2. 解釈器（`evalWrittenSection`）：実引数を書いた順に1回ずつ評価し、公理（と例外）を当ててから、開いた木を値で
+//    計算する。
+// 3. pass4（`writtenSectionRefusal`）：開いた中置が裁定どおりの値を、実引数を書いた順に1回ずつ評価して出す形だけ
+//    出す。それ以外（実行時に `__` が来うる実引数、中置の短絡で飛ばされる効果）は名指しで断る。
+//
+// **関数の境を足さない。** 呼び出しごとの関数で包んで普通の呼び出しの公理を借りる作りは、関数の境を1枚挟むたびに
+// 式の形で見る門（`$` の番地・生の番地・`!__` の恒等射・撒き・`$f` の特化の行）から中身が隠れ、穴が奥へ逃げて
+// 収束しなかった（2026-10-07、利用者「全部おすすめの通り」）。撒く実引数を持つ区間も、器を組んで合成した畳み込み
+// （`_pf_fold_*`）へ回さない——解釈器がその場で撒いた要素を並べて畳み、機械は名指しで断る。
+//
+// **取り出しの区間（`[']`・`[@]`）には印を付けない**（pass2 の `markWrittenOperands`）。器でない側の被演算子は鍵で、
+// 値として評価する実引数ではない。中置の取り出しは器か鍵が `__` なら既に `__` を返す。
+//
+// **合成の後の段は、先の段の値を1つ受けるだけである。** 先の段を開いた並び（`[* 2,] 1 __ 3` の `(1 * 2) (__ * 2) …`）
+// を後の段の書いた実引数と読んではいけない——読むと先の段の印を飛ばして、要素ごとに草原の単位元が `__` を吸う。
+
+const unitAtomNode = () => ({ type: "atom", kind: "unit", value: "__" });
+const applyNode = (left, right) => ({ type: "operation", name: "apply", op: " ", position: "infix", left, right });
+const constructChainOf = (xs) => xs.reduce((left, right) => ({ type: "operation", name: "construct", op: " ", position: "infix", left, right }));
+
+/** 書いた実引数の印を付ける（列挙されない——木の形・`.ms`・試験の木の比較を変えない）。 */
+function markWritten(node, info) {
+  Object.defineProperty(node, "pfCall", { value: info, enumerable: false, configurable: true, writable: true });
+  return node;
+}
+
+// 書いた実引数を区切る余積の節（並置）。括りは区切りではなく、括り1つが実引数1つである。
+const WRITTEN_LINKS = new Set(["construct", "unshift", "push", "concat"]);
+const isWrittenLink = (n) => !!(n && n.type === "operation" && n.position === "infix" && WRITTEN_LINKS.has(n.name));
+
+/** 書き並べた実引数（並置の葉）。並置でなければ null（値1つ・括り1つは、書いた実引数1つ）。 */
+function writtenLeavesOf(arg) {
+  if (!isWrittenLink(arg)) return null;
+  const out = [];
+  const walk = (n) => {
+    if (isWrittenLink(n)) { walk(n.left); walk(n.right); return; }
+    out.push(n);
+  };
+  walk(arg);
+  return out;
+}
+
+/** 器の字面（`[…]`・`(…)` の1行）か。`|…|`・`||…||` は1つの値で、器の字面ではない。 */
+const isContainerLiteral = (n) => !!(n && n.type === "block" && n.kind === "paren" && Array.isArray(n.lines) && n.lines.length === 1);
+
+/**
+ * 数の字面のビットが niche か（GPR 1語の最上位ビットだけが立った語、value_representation.md §3.5）。
+ * **読み方は pass4 の `literalBits` と同じにする**——プリフィックスは `literalParts` が剥がし、2^64 以上の番地は
+ * `__`、読めない綴りは浮動小数（正当な値）。読み方が割れると、`04x8000…` の答えが2つになる。
+ */
+function isNicheLiteral(n) {
+  try {
+    const lit = literalParts(n.value);
+    const v = lit ? BigInt((lit.radix === 2 ? "0b" : "0x") + lit.digits) : BigInt(n.value);
+    if (n.kind === "address" && v >> 64n !== 0n) return true;
+    return BigInt.asUintN(64, v) === 1n << 63n;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * **字面の `__`。** 綴りが違っても同じ——括った `(__)`、中身が全部 `__` の器（`[]`・`[__ __]`）、U+0000 の字
+ * （`0u0000`、niche であって文字ではない）、niche のビットの数と番地（`-9223372036854775808`・`0x8000000000000000`、
+ * 2^64 以上の番地）。pass4 の `isUnitAtom`・`cannotBeUnit` が `__` と読む字面と同じ集合である。`$__` も同じ——零対象の
+ * 番地は点で、`__` そのもの（type_system.md §2、裁定 2026-09-30）。
+ */
+function isUnitLiteralNode(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.type === "block") {
+    if (node.kind !== "paren" || !Array.isArray(node.lines)) return false;
+    if (node.lines.length === 0) return true;
+    if (node.lines.length !== 1) return false; // 複数行の括りは構造体（行が欄）
+    const line = node.lines[0];
+    const leaves = writtenLeavesOf(line) || (line && line.type === "operation" && line.name === "product" ? productLeavesOf(line) : [line]);
+    return leaves.every(isUnitLiteralNode);
+  }
+  if (node.type === "operation" && node.position === "prefix" && node.name === "address") {
+    return !!(node.operand && node.operand.type === "atom" && node.operand.kind === "unit");
+  }
+  if (node.type !== "atom") return false;
+  if (node.kind === "unit") return true;
+  if (node.kind === "unicode") return parseInt(literalDigits(node.value), 16) === 0;
+  if (node.kind === "number" || node.kind === "address" || node.kind === "register") return isNicheLiteral(node);
+  return false;
+}
+
+/** 積（`,`）の並びの葉。 */
+function productLeavesOf(n) {
+  const out = [];
+  const walk = (x) => {
+    if (x && x.type === "operation" && x.position === "infix" && x.name === "product") { walk(x.left); walk(x.right); return; }
+    out.push(x);
+  };
+  walk(n);
+  return out;
+}
+
+/** `__` を撒いた形（`__~`）。空の撒きで、実引数を足さない（利用者の裁定 2026-10-06）。 */
+const isUnitSpread = (n) => isExpandNode(n) && isUnitLiteralNode(n.operand);
+
+/**
+ * **展開する相手の葉を、器の字面か書き並べた実引数かで読み分ける**（`expandGreedyFold`・`expandGreedyMap`）。
+ *
+ * - 器の字面（`[+] [1 __ 3]`）：字面の `__` は器を組んだ時点で消えるので、先に抜く。`{ kept }`。
+ * - 書き並べた実引数（`[* 2,] 1 __ 3`、合成の先の段が開いた並び）：開いた根に付ける印を返す。`{ kept, mark }`。
+ *   - 合成の先の段（`[* 2,] [+] …` の写像、括った `[+] ([* 2,] …)` も）が既に印を持つなら、それを引き継ぐ——書いた
+ *     実引数を受けたのは先の段で、後の段はその値を1つ受けるだけである。引き継いだ印には `outer` を添える。
+ *   - `__` を撒いた実引数は抜く（空の撒き）。抜いて1つなら、その1つを渡す呼び出し（1つの実引数は器として走る）。
+ *   - **撒く実引数が残るなら開かない**（`{ done: null }`）——実引数の数が実行時に決まるので、器を組んでから走る
+ *     道（前からの合成した `_pf_fold_*`・`_pf_map_*`）に任せる。
+ * - 書き並べた取り出し（`[']`・`[@]`）は印を付けない（鍵は実引数ではない。上の注記）。先の段の印は引き継ぐ。
+ * - そのまま返すもの（`done`）があれば、呼ぶ側はそれを返す。
+ */
+function settleWrittenLeaves(node, leaves, info) {
+  // 合成の先の段が開いた並びは、撒く実引数を持たない（撒く実引数があれば先の段は開かない）。**括った形も同じ**
+  // （`[+] ([* 2,] 1 __ 3)`）——括りの1行が開いた区間の呼び出しなら、それは器の字面ではなく内側の呼び出しの値で
+  // ある。器の字面と読むと内側の印を落とし、開いた並びの `__ * 2` が草原の単位元として吸われていた（10 になった）。
+  // 引き継いだ印には「後の段が乗った」（`outer`）と書き添える——後の段の中置は先の段の実引数を短絡（`|`・`&`）で
+  // 飛ばすか、比較の写像（`(x < 3) & x`）で2回読みうるので、pass4 はそれを見て出すかを決める。
+  //
+  // **下の段が選択写像（比較の写像 `[< 3,]`）なら `overSelect` も添える。** 選択写像が落とした要素は、開いた並びの中では
+  // `__` の席として残る——後の段の中置はそれを `__` の被演算子として読む（`[&] ([< 3,] 1 5 2)` が `__`、
+  // `[+] ([< 3,] 1 5 2)` が 3、`[* 2,] ([< 3,] 1 5 2)` が `[2 2 4]`。器を組んでから渡せば 2・3・`[2 4]`）。落とした位置を
+  // 後の段がどう読むかは別の片で入れる（利用者の裁定 2026-10-07：写像・器・ほかの畳み込みは落とし、`[&]` だけが見て、
+  // `[|]` は飛ばす。今の値は畳み込みの段では合い、写像の段と比較の連なりでは合わない——`[<] ([< 9,] 1 10 2)` が `__`、
+  // 裁定では `[<] 1 2`）。それまで pass4 がこの印を見て名指しで断る。引き継いだ印の名前は先の段のものなので、段ごとに
+  // 「この段が選択写像か」（`selects`）を印に書き、乗った段はすぐ下の段のそれと、さらに下の `overSelect` を見る
+  // （`[&] ([< 9,] ([* 2,] …))` は真ん中の段が選択写像）。
+  const selects = info.form === "map" && COMPARE_MAP_OPS.has(info.name);
+  const inner = solo(node.right);
+  const inherited = inner && inner.pfCall;
+  if (inherited) {
+    const overSelect = !!inherited.overSelect || !!inherited.selects;
+    return { kept: leaves, mark: { ...inherited, outer: true, overSelect, selects } };
+  }
+  if (isContainerLiteral(node.right)) return { kept: leaves.filter((x) => !isUnitLiteralNode(x) && !isUnitSpread(x)), mark: null };
+  if (isGetName(info.name)) return { kept: leaves, mark: null };
+  const kept = leaves.filter((x) => !isUnitSpread(x));
+  if (kept.some(isExpandNode)) return { done: kept.length === leaves.length ? null : applyNode(node.left, constructChainOf(kept)) };
+  if (kept.length === 1) return { done: applyNode(node.left, kept[0]) };
+  return { kept, mark: { ...info, args: kept, selects } };
+}
+
+/** 取り出しの演算子の名前か（`'` と `@`）。 */
+const isGetName = (name) => name === "get_prop" || name === "get_at";
+
+/**
+ * **頭の区間（pass2 の `foldHeadSections`）の撒く被演算子を片付ける。** 変えなければ null。
+ *
+ * - `__` を撒いた被演算子（`[+] 1 __~ 3`）は空の撒きなので抜いて、残りで連なりを組み直す（layout.js の
+ *   `writtenSpineOf`、pass2 と同じ形）。抜いて1つなら、その1つを渡す呼び出し（`[+] xs __~` は `[+] xs`——1つの
+ *   実引数は器として走る）。全部抜けたら `__`。
+ * - **比較の区間は、ほかの撒く被演算子を取れない**——項の数が実行時に決まるので、連鎖比較が3項まで（comparison.md
+ *   §4、4項は pass2 が名指しで断る）かを確かめられない。前は中置の連鎖へ並びを1項として渡して黙って `__` だった。
+ * - ほかの撒く被演算子は木のまま残す。型が付いてから読み方を決め（`spreadPlanOf`）、解釈器が撒いた要素を並べて畳み
+ *   （`evalWrittenSection`）、機械は名指しで断る。
+ */
+function settleSpineSpreads(node) {
+  const m = node && node.pfCall;
+  if (!m || m.form !== "spine" || !m.args.some(isExpandNode)) return null;
+  const kept = m.args.filter((a) => !isUnitSpread(a));
+  const spread = kept.find(isExpandNode);
+  if (spread && CHAIN_COMPARE_OPS.has(m.op)) throw compareSpreadRefusal(m.op);
+  if (kept.length === m.args.length) return null;
+  if (kept.length === 0) return unitAtomNode();
+  // 残る1つが撒く実引数なら、印は `markSoleSpreadFolds` が付ける（`[/] __~ xs~` は `[/] xs~` と同じ読み）。
+  if (kept.length === 1) return applyNode({ type: "operation", op: m.op, name: m.name, position: "infix", partial: true, left: null, right: null }, kept[0]);
+  return markWritten(writtenSpineOf(m.op, m.name, kept), { ...m, args: kept });
+}
+
+/** 比較の区間は撒く被演算子を取れない（`settleSpineSpreads`・`markSoleSpreadFolds`）。 */
+function compareSpreadRefusal(op) {
+  return new SyntaxError(
+    `比較の区間 \`[${op}]\` は、撒く被演算子を取れません（撒くと項の数が実行時に決まり、連鎖比較が3項までかを` +
+      `確かめられない）。項を書き並べるか、比べる値を名前に置いてください`
+  );
+}
+
+/**
+ * **撒く実引数が1つだけ残った頭の区間も、撒いた要素を書いた実引数として並べる**（`[/] xs~`、`__` の撒きを抜いて1つ
+ * 残った `[/] __~ xs~`）。印が無いと、合成した畳み込み（`_pf_fold_*`）が撒いた要素を実引数として受け取り、Pass 3 は
+ * その仮引数の型を呼び出しから引けない（撒いた要素は仮引数の並びに当たらない）ので、型の無いまま計算していた
+ * ——`xs : [7 2]` の `[/] xs~` が 3.5（`[/] 7 2` は 3）、溢れる `[+] xs~` が 64 bit の外の数だった。
+ *
+ * 頭の区間の連なり（pass2 の `markWrittenOperands`）と同じ印を付け、読み方は撒く実引数が2つ以上のときと同じ所が
+ * 決める：型を付けて組み直す（`spreadPlanOf`・解釈器の `evalWrittenSection`）か、組み直せない形を名指しで断る。機械は
+ * 撒く実引数を持つ形として断る。比較の区間は連なりと同じく断る。取り出しの区間（`[']`・`[@]`）は印を持たない（鍵は
+ * 実引数ではない、`markWrittenOperands`）。名前を付けた点なし（`g : [/]` の `g xs~`）・実行時に呼び先が決まる形・
+ * 写像（`[/ 2,] xs~`）はまだここを通らない。合成の展開が作った呼び出しにも付けるので、展開し終えてから歩く。
+ */
+function markSoleSpreadFolds(nodes) {
+  eachNode(nodes, (n) => {
+    if (n.pfCall || n.type !== "operation" || n.name !== "apply" || n.position !== "infix") return;
+    if (!isGreedyFold(n.left) || !isExpandNode(n.right) || isUnitSpread(n.right)) return;
+    const sec = solo(n.left);
+    if (isGetName(sec.name)) return;
+    if (CHAIN_COMPARE_OPS.has(sec.op)) throw compareSpreadRefusal(sec.op);
+    markWritten(n, { form: "spine", args: [n.right], op: sec.op, name: sec.name });
+  });
+}
+
+/** 木を全部歩く（連鎖比較の `middle` と、仮引数の既定値・分解の入れ子まで）。観測だけ。 */
+function eachNode(nodes, visit) {
+  const seen = new Set();
+  const entries = (es) => { for (const e of es || []) { step(e.default); entries(e.pattern); } };
+  const step = (n) => {
+    if (!n || typeof n !== "object" || seen.has(n)) return;
+    seen.add(n);
+    visit(n);
+    for (const k of ["left", "middle", "right", "operand"]) step(n[k]);
+    if (Array.isArray(n.lines)) n.lines.forEach(step);
+    entries(n.entries);
+  };
+  nodes.forEach(step);
+}
+
+/** 頭の区間の撒く被演算子を、木の全部で片付ける（`settleSpineSpreads`。連鎖比較の `middle` の中も）。 */
+function settleSpineSpreadsIn(nodes) {
+  const fix = (n) => {
+    if (!n || typeof n !== "object") return n;
+    for (const k of ["left", "middle", "right", "operand"]) if (n[k]) n[k] = fix(n[k]);
+    if (Array.isArray(n.lines)) n.lines = n.lines.map(fix);
+    for (const e of n.entries || []) if (e.default) e.default = fix(e.default);
+    return settleSpineSpreads(n) || n;
+  };
+  for (let i = 0; i < nodes.length; i++) nodes[i] = fix(nodes[i]);
+}
+
+// 撒いた要素を書いた実引数として並べ直してよい演算子。算術は要素ごとの型から結果の型が表（layout.js の
+// `arithDomain`）で決まり、論理（`&` `|` `;`）は型を読まない。
+const SPREAD_REBUILD_OPS = new Set(["add", "sub", "mul", "div", "mod", "pow", "and", "or", "xor"]);
+// 撒いた要素・並べた実引数として受ける型。器（List・Struct）と型の分からないものは受けない。
+const SPREAD_SCALAR_TYPES = new Set(["Int", "Float", "Address", "Char", "Raw"]);
+
+/**
+ * **頭の区間の撒く実引数をどう読むか**（型が付いた後に決める）。撒く実引数が無ければ null。
+ *
+ * 撒く実引数（`xs~`）は撒いた要素を書いた実引数として並べる——`[+] 1 xs~ 3` は `[+] 1 1 2 3`（xs が `[1 2]`）。
+ * 要素の数は実行時に決まるので、解釈器は連なりを組み直す（`evalWrittenSection`）。**組み直した葉と節には、要素を
+ * 書き並べた形と同じ型を付ける**——解釈器の算術は型で読み方を変える（`Int` の除算は切り捨て、溢れは回るか `__`、
+ * 1文字の文字列と文字）。型を落として組み直すと `[/] 7 xs~` が 3.5 になっていた。だからここで型を決め、決まらない形は
+ * 名指しで断る:
+ *
+ * - 積 `[,]`：積そのものの撒き（`0 , xs~` は xs の要素を並べる）がある。開いた中置のまま評価する（`"tree"`）。
+ * - 算術・論理：撒く実引数の型が List なら要素型（pass3 が控えた `spreadElementType`）、文字列・スカラーなら撒いても
+ *   1つの値（`s~ = s`、文字列の μ は強制）、`__` なら空の撒き。並べた実引数は自分の型。どれもスカラーか文字列で
+ *   なければ断る（`"rebuild"`、型は実引数ごと）。
+ * - **器（文字列）が1つだけ残りうる形は断る**——残った1つは器として走る（`[+] xs` は xs を畳む）が、そこで要る
+ *   器の要素の型は持っていない。撒いても数の変わらない実引数が2つ以上あれば残るのは2つ以上である。
+ * - それ以外の演算子（ビット演算・等価 …）は断る——書いた形と同じ型を付ける道がまだ無い。
+ *
+ * `__` と読める撒く実引数（`x : __` の `x~`）は空の撒きで、型を要らない。
+ */
+function spreadPlanOf(m, shadow, ctx) {
+  if (m.form !== "spine" || !m.args.some(isExpandNode)) return null;
+  if (m.name === "product") return { kind: "tree" };
+  const refuse = (a, why) =>
+    new OperationError(`区間 \`[${m.op}]\` の撒く実引数 \`${spellWrittenArg(a)}\` は、まだ受けられません（${why}）。要素を書き並べるか、撒く値を区間の外で畳んでください`, {
+      spec: "kan_extensions.md §3.7.4",
+      reason: "section-spread",
+    });
+  const firstSpread = m.args.find(isExpandNode);
+  const typeIs = (t) => (t ? `型が ${t}` : "型がコンパイル時に決まらない");
+  if (!SPREAD_REBUILD_OPS.has(m.name)) throw refuse(firstSpread, `撒いた要素は書いた実引数として並ぶが、\`${m.op}\` の連なりを書いた形と同じ型で組み直す道がまだ無い`);
+  const types = [];
+  let fixed = 0;
+  let text = null;
+  for (const a of m.args) {
+    if (!isExpandNode(a)) {
+      const t = a.atomType;
+      if (!SPREAD_SCALAR_TYPES.has(t) && t !== "String" && t !== "Unit") throw refuse(firstSpread, `並べた実引数 \`${spellWrittenArg(a)}\` が${t ? ` ${t} 型` : "コンパイル時に型の決まらない値"}で、撒いた要素と並べて組み直す型が決まらない`);
+      types.push(t);
+      fixed++;
+      if (t === "String") text = text || a;
+      continue;
+    }
+    const t = a.atomType;
+    if (t === "Unit" || writtenClassOf(a.operand, shadow, ctx) === "unit") {
+      types.push("Unit");
+      continue;
+    }
+    if (t === "String" || SPREAD_SCALAR_TYPES.has(t)) {
+      types.push(t);
+      fixed++;
+      if (t === "String") text = text || a;
+      continue;
+    }
+    const e = t === "List" ? a.spreadElementType : null;
+    if (!SPREAD_SCALAR_TYPES.has(e) && e !== "String") throw refuse(a, `撒いた要素は書いた実引数として並ぶので要素の型が要るが、${t === "List" ? `要素の${typeIs(e)}` : `撒く値の${typeIs(t)}`}`);
+    types.push(e);
+    if (e === "String") text = text || a;
+  }
+  if (text && fixed < 2) throw refuse(firstSpread, `撒く数しだいで文字列 \`${spellWrittenArg(text)}\` が1つだけ残り、器として走りうるが、その要素の型を持っていない`);
+  return { kind: "rebuild", types };
+}
+
+/**
+ * 合成した畳み込み・写像の名前（`_pf_fold_2b`・`_pf_map_2a_32`）を読む。そうでなければ null。
+ * 名前は `foldNameFor`・`mapNameFor` が演算子の符号位置を16進で並べて作る。
+ */
+function synthesizedGreedyOf(name) {
+  const m = /^<?_pf_(fold|map)_([0-9a-f]+)(?:_[0-9a-f]+)?>?$/.exec(String(name));
+  if (!m || (m[1] === "fold" && /_go>?$/.test(String(name)))) return null;
+  const hex = m[2];
+  // 符号位置ごとの16進は桁数が揃っていない（`|` は 7c）ので、演算子表にある綴りを当てて戻す。
+  const op = Object.keys(OPERATOR_DICT).find((o) => [...o].map((c) => c.charCodeAt(0).toString(16)).join("") === hex);
+  const entry = op ? infixEntryOf(op) : null;
+  return entry ? { map: m[1] === "map", op, name: entry.name } : null;
+}
+
+/**
+ * **書いた実引数を受ける貪欲なポイントフリーの字面**（`[+]`・`[* 2,]`・`[* n,]`）。そうでなければ null。
+ * 名前（`g : [+]`・差し替えた後の `g : <_pf_fold_2b>`・その別名・名前を付けた合成の別名 `k : h`）は辿り着く字面で
+ * 見る。合成は先に当たる段が書いた実引数を受ける（`(f g) x` は `g (f x)`）。局所の名前は見ない。
+ * `{ map, op, name, partners }`——partners は呼び先の相手（`[< (t 2),]` の `t 2`、合成なら全部の段の相手）の節。
+ */
+function greedyCalleeOf(callee, shadow, defs, depth = 0) {
+  const s = solo(callee);
+  if (!s || typeof s !== "object" || depth > 16) return null;
+  if (isGreedyFold(s)) return { map: false, op: s.op, name: s.name, partners: [] };
+  if (s.type === "operation" && s.partial && s.pointfreeMap && s.position === "infix" && !s.left && s.right) {
+    return { map: true, op: s.op, name: s.name, partners: [s.right] };
+  }
+  if (s.type === "operation" && s.name === "compose" && s.position === "infix") {
+    const first = greedyCalleeOf(s.left, shadow, defs, depth + 1);
+    return first ? { ...first, partners: stagePartnersOf(s, shadow, defs) } : null;
+  }
+  if (!isIdentNode(s) || shadow.has(s.value)) return null;
+  const synth = synthesizedGreedyOf(s.value);
+  if (synth) return { ...synth, partners: [] };
+  const d = defs.get(s.value);
+  return d ? greedyCalleeOf(d, shadow, defs, depth + 1) : null;
+}
+
+/** 合成の段の相手（点なしの束縛した側）を全部。名前は辿る。 */
+function stagePartnersOf(x, shadow, defs, depth = 0) {
+  const s = solo(x);
+  if (!s || typeof s !== "object" || depth > 16) return [];
+  if (s.type === "operation" && s.partial) return [s.left, s.right].filter(Boolean);
+  if (s.type === "operation" && s.name === "compose" && s.position === "infix") {
+    return [...stagePartnersOf(s.left, shadow, defs, depth + 1), ...stagePartnersOf(s.right, shadow, defs, depth + 1)];
+  }
+  if (isIdentNode(s) && !shadow.has(s.value) && defs.has(s.value)) return stagePartnersOf(defs.get(s.value), shadow, defs, depth + 1);
+  return [];
+}
+
+/** `__` になり得ない字面か（数・番地は niche でなければ、字は U+0000 でなければ、文字列は空でなければ）。 */
+function isTotalLiteralAtom(n) {
+  if (!n || n.type !== "atom" || isUnitLiteralNode(n)) return false;
+  if (n.kind === "number" || n.kind === "address" || n.kind === "register" || n.kind === "char" || n.kind === "unicode") return true;
+  return n.kind === "string" && String(n.value).length > 2;
+}
+
+/**
+ * **書いた実引数を、コンパイル時に読める範囲で分ける**：`"unit"`（`__`）、`"total"`（`__` になり得ない）、null
+ * （実行時まで分からない）。字面、`$名前`、番地を取られないトップの名前で字面へ束縛したもの（`p : __`・
+ * `p : 0x8000000000000000`・別名 `q : p`）、それらだけの1行の器。局所の名前（仮引数・本体の中の定義）は見ない。
+ */
+function writtenClassOf(node, shadow, ctx) {
+  if (!node || typeof node !== "object") return null;
+  if (isUnitLiteralNode(node)) return "unit";
+  if (isIdentNode(node)) {
+    if (shadow.has(node.value)) return shadow.get(node.value);
+    return ctx.topUnit.has(node.value) ? "unit" : ctx.topTotal.has(node.value) ? "total" : null;
+  }
+  if (node.type === "atom") return isTotalLiteralAtom(node) ? "total" : null;
+  if (node.type === "operation" && node.position === "prefix" && node.name === "address" && isIdentNode(node.operand)) return "total";
+  // `!__` は恒等射で、`__` ではない（`[+] !__ 1` を断るのは、中置と同じ `!__` の門番である）。
+  if (node.type === "operation" && node.position === "prefix" && node.name === "not" && node.operand && node.operand.type === "atom" && node.operand.kind === "unit") return "total";
+  // **`||…||` と `|…|` は1つの値で、器の字面ではない**（`isContainerLiteral` が括りの種類を見る理由）。要素数は中身が
+  // 読める値（字面・字面へ束縛した名前・それらの並び）なら数で、`__` を数えても 0（`||__||`）。絶対値は数・番地の字面なら
+  // 数（器の絶対値は `__`、だから字面の数に限る）。
+  if (node.type === "block" && (node.kind === "norm" || node.kind === "abs") && Array.isArray(node.lines) && node.lines.length === 1) {
+    const inner = node.lines[0];
+    if (node.kind === "abs") return inner && inner.type === "atom" && (inner.kind === "number" || inner.kind === "address") && isTotalLiteralAtom(inner) ? "total" : null;
+    const parts = writtenLeavesOf(inner) || (inner && inner.type === "operation" && inner.name === "product" ? productLeavesOf(inner) : [inner]);
+    return parts.every((x) => writtenClassOf(x, shadow, ctx) !== null) ? "total" : null;
+  }
+  if (!isContainerLiteral(node)) return null;
+  const line = node.lines[0];
+  const leaves = writtenLeavesOf(line) || (line && line.type === "operation" && line.name === "product" ? productLeavesOf(line) : [line]);
+  const cs = leaves.map((x) => writtenClassOf(x, shadow, ctx));
+  if (cs.some((c) => c === "total")) return "total";
+  return cs.every((c) => c === "unit") ? "unit" : null;
+}
+
+/**
+ * 関数が束縛する名前（仮引数・分解の名前・本体の中の定義）と、その名前の読み（`writtenClassOf` の分け方）。そこでは
+ * 同じ名前のトップの束縛は見えない。読めるのは、既定値が `__` になり得ない字面の裸の仮引数だけ（`b : 5` の b は、
+ * `__` を受けても 5 で埋まる）——ほかは実行時まで分からない（入口の門番を通った仮引数は pass4 の `cannotBeUnit` が
+ * 知っている）。同じ名前を2か所で束縛していたら読まない。
+ */
+function bindersOfLambda(lam) {
+  const out = new Map();
+  const bind = (name, cls) => out.set(name, out.has(name) && out.get(name) !== cls ? null : cls);
+  const addPattern = (p, top) => {
+    for (const e of (p && p.entries) || []) {
+      if (e.name) bind(e.name, top && !e.rest && !e.pattern && e.default && isTotalLiteralAtom(e.default) ? "total" : null);
+      if (e.pattern) addPattern({ entries: e.pattern }, false);
+    }
+  };
+  const pn = lam.left;
+  if (pn && pn.type === "params") addPattern(pn, true);
+  else if (isIdentNode(pn)) bind(pn.value, null);
+  eachNode([lam.right], (n) => {
+    if (isDefineNode(n) && isIdentNode(n.left)) bind(n.left.value, null);
+    if (n.type === "operation" && n.name === "lambda") {
+      const inner = n.left;
+      if (inner && inner.type === "params") addPattern(inner, false);
+      else if (isIdentNode(inner)) bind(inner.value, null);
+    }
+  });
+  return out;
+}
+
+/**
+ * **書いた実引数の `__` を、コンパイル時に決まる所で決める**（両エンジン）。`compile` の最後——Pass 3 と層・字の
+ * 門番が前段の断りを出し終えた後——に1回走る。
+ *
+ * 1. 名前を付けた貪欲な点なしの呼び出し（`g : [+]` の `g 1 __ 3`）と、開けなかった写像（`[* n,] 1 __ 3`）に、
+ *    書いた実引数の印を付ける。呼び先が局所の名前なら付けない。
+ * 2. 印ごとに、書いた実引数を分ける（`writtenClassOf`、pass4 が読む）。
+ * 3. 公理どおりの印で、`__` と読める実引数が書かれていて、他の実引数と呼び先の相手が静か（layout.js の
+ *    `isQuietNode`）なら、その呼び出しを `__` へ畳む——他の実引数を評価しないことは観測できない。静かでなければ
+ *    畳まない（解釈器が書いた順に評価してから公理を当て、機械は断る）。**畳むのはその節の中身ごと**（`foldToUnit`）
+ *    ——Pass 3 が束縛へ書き戻した値ノード（`binding.valueNode`）も同じ節を指しているので、写しを置くと pass4 が
+ *    束縛から引いた側だけ開いた中置のまま残る。
+ * 4. 合成した畳み込み・写像（`_pf_fold_*`・`_pf_map_*`）の仮引数に読み方の印（`pfGreedy`）を付ける——実行時に
+ *    呼び先が決まる形（`h : $[+]` の `@h 1 __ 3`）は、解釈器がそこで公理を当てる。
+ */
+function settleWrittenUnits(nodes) {
+  const defs = new Map();
+  for (const n of nodes) if (isDefineNode(n) && isIdentNode(n.left) && n.right) defs.set(n.left.value, n.right);
+  // **番地を取られた名前は書き換わりうるので、字面へ束縛していても読まない。** `$` の被演算子の中に居る名前は全部
+  // ——`$x` だけでなく `$(x)`・`$[x]`（器を通して x を書き換える）・`$(x ' 0)` も、連鎖比較の真ん中
+  // （`0 < (($x) # 5) < 9`）に書いた形も。見落とすと書き換えた後の値を字面の `__` と読んで、正しい値を `__` に畳む。
+  const addressed = new Set();
+  eachNode(nodes, (n) => {
+    if (n.type !== "operation" || n.position !== "prefix" || n.name !== "address") return;
+    eachNode([n.operand], (x) => { if (isIdentNode(x)) addressed.add(x.value); });
+  });
+  const ctx = { topUnit: new Set(), topTotal: new Set() };
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [name, rhs] of defs) {
+      if (addressed.has(name) || ctx.topUnit.has(name) || ctx.topTotal.has(name)) continue;
+      const c = writtenClassOf(rhs, new Map(), ctx);
+      if (c === "unit") ctx.topUnit.add(name);
+      else if (c === "total") ctx.topTotal.add(name);
+      else continue;
+      changed = true;
+    }
+  }
+  const settle = (n, shadow) => {
+    if (!n || typeof n !== "object") return n;
+    if (n.type === "operation" && n.name === "lambda") shadow = new Map([...shadow, ...bindersOfLambda(n)]);
+    // 括りの中の定義（構造体の欄 `p : 4`）も、その括りの中ではトップの同じ名前を覆う。
+    if (n.type === "block" && Array.isArray(n.lines) && n.lines.some((l) => isDefineNode(l) && isIdentNode(l.left))) {
+      shadow = new Map([...shadow, ...n.lines.filter((l) => isDefineNode(l) && isIdentNode(l.left)).map((l) => [l.left.value, null])]);
+    }
+    for (const k of ["left", "middle", "right", "operand"]) if (n[k]) n[k] = settle(n[k], shadow);
+    if (Array.isArray(n.lines)) n.lines = n.lines.map((l) => settle(l, shadow));
+    for (const e of n.entries || []) if (e.default) e.default = settle(e.default, shadow);
+    // 先の段を開いた並び（右辺が印を持つ）は、この呼び出しの書いた実引数ではなく値1つである（上の注記）。
+    if (!n.pfCall && n.type === "operation" && n.name === "apply" && n.position === "infix" && !(n.right && n.right.pfCall)) {
+      const args = writtenLeavesOf(n.right);
+      const lit = args && greedyCalleeOf(n.left, shadow, defs);
+      if (lit) markWritten(n, { form: "apply", args, callee: n.left, op: lit.op, name: lit.name, partners: lit.partners, mode: writtenUnitMode(lit.name, lit.map) });
+    }
+    const m = n.pfCall;
+    if (!m) return n;
+    if (!m.mode) m.mode = writtenUnitMode(m.name, m.form === "map");
+    m.argClass = m.args.map((a) => (isExpandNode(a) ? null : writtenClassOf(a, shadow, ctx)));
+    const unitAt = m.argClass.indexOf("unit");
+    // 撒く実引数の読み方（`spreadPlanOf`）。書いた `__` があれば値は規則（公理か `[|]` の例外）が決め、組み直さない。
+    if (m.form === "spine") m.spreadPlan = unitAt >= 0 ? { kind: "rule" } : spreadPlanOf(m, shadow, ctx);
+    if (m.mode !== "total" || unitAt < 0) return n;
+    // **束縛の無い名前も評価すれば観測できる**——解釈器は「未定義識別子」の診断を出して `__` にする。畳めばその診断が
+    // 消える（`[+] 1 __ undefinedname` が前は診断つき、畳むと何も言わなかった）ので、静かとは読まない。
+    const silent = (x) => isQuietNode(x) && everyNameBound(x, shadow, defs);
+    const quiet = m.args.every((a, i) => i === unitAt || silent(a)) && (m.partners || []).every(silent);
+    return quiet ? foldToUnit(n) : n;
+  };
+  for (let i = 0; i < nodes.length; i++) nodes[i] = settle(nodes[i], new Map());
+  for (const n of nodes) {
+    if (!isDefineNode(n) || !isIdentNode(n.left) || !n.right || n.right.name !== "lambda" || !n.right.left) continue;
+    const synth = synthesizedGreedyOf(n.left.value);
+    if (synth) Object.defineProperty(n.right.left, "pfGreedy", { value: writtenUnitMode(synth.name, synth.map), enumerable: false, configurable: true });
+  }
+}
+
+/**
+ * 式の中の名前が全部、束縛を持つか（局所の名前か、トップの定義）。静かな式（layout.js の `isQuietNode`）の名前は
+ * どれも値を引く名前である（欄の名前を鍵にする `'` は静かでない）。
+ */
+function everyNameBound(node, shadow, defs) {
+  let ok = true;
+  eachNode([node], (x) => {
+    if (isIdentNode(x) && !shadow.has(x.value) && !defs.has(x.value)) ok = false;
+  });
+  return ok;
+}
+
+/** 節をその場で `__` の字面にする（同じ節を指す束縛の値ノードも `__` を見る）。印も外す。 */
+function foldToUnit(n) {
+  for (const k of Object.getOwnPropertyNames(n)) {
+    const d = Object.getOwnPropertyDescriptor(n, k);
+    if (d && d.configurable) delete n[k];
+  }
+  return Object.assign(n, unitAtomNode(), { atomType: "Unit" });
+}
+
 /**
  * 木の中の展開できる畳み込み・写像・合成を、その場で終わらせる。
  *
@@ -1896,6 +2441,8 @@ function expandGreedyFoldsIn(nodes) {
     const v = composeRhsOf(n);
     if (v && isIdentNode(n.left)) named.set(n.left.value, v);
   }
+  // 頭の区間の撒く被演算子は、開く前に片付ける（`settleSpineSpreads`）。
+  settleSpineSpreadsIn(nodes);
   const one = (n) => expandGreedyFold(n) || expandGreedyMap(n) || expandCompose(n, named) || null;
   for (let pass = 0; pass < 16; pass++) {
     let changed = false;
@@ -1910,6 +2457,8 @@ function expandGreedyFoldsIn(nodes) {
     });
     if (!changed) break;
   }
+  // 撒く実引数が1つだけ残った頭の区間に印を付ける（`markSoleSpreadFolds`）。
+  markSoleSpreadFolds(nodes);
   // **展開しきった合成の定義は、もう誰も見ない。** `h : f g` の呼び出しは全部
   // `g (f x)` へ開いてあるので、定義そのものは死んでいる——残すと Pass 4 が
   // 「まだ出せない式です（compose）」で止まる。
