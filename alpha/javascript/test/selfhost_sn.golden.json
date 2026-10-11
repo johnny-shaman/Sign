@@ -5,19 +5,19 @@
 	"counts": {
 		"reachable": 247,
 		"pass4-emits": {
-			"functions": 117,
-			"same": 28,
-			"refused": 89,
-			"closed": 25
+			"functions": 127,
+			"same": 29,
+			"refused": 98,
+			"closed": 26
 		},
 		"pass4-blocks": {
-			"functions": 130,
+			"functions": 120,
 			"same": 0,
-			"refused": 130
+			"refused": 120
 		},
-		"same": 28,
-		"refused": 219,
-		"closed": 25,
+		"same": 29,
+		"refused": 218,
+		"closed": 26,
 		"differs": 0,
 		"unrefused": 0,
 		"sign-only": 0,
@@ -25,8 +25,8 @@
 	},
 	"reasons": {
 		"type": {
-			"pass4-emits": 46,
-			"pass4-blocks": 93
+			"pass4-emits": 53,
+			"pass4-blocks": 83
 		},
 		"head": {
 			"pass4-emits": 15,
@@ -37,8 +37,8 @@
 			"pass4-blocks": 9
 		},
 		"leaf": {
-			"pass4-emits": 6,
-			"pass4-blocks": 3
+			"pass4-emits": 8,
+			"pass4-blocks": 2
 		},
 		"op &": {
 			"pass4-emits": 6,
@@ -58,7 +58,7 @@
 		},
 		"op ~": {
 			"pass4-emits": 1,
-			"pass4-blocks": 1
+			"pass4-blocks": 2
 		},
 		"pattern": {
 			"pass4-emits": 1,
@@ -79,6 +79,7 @@
 		"lw_lfend",
 		"lw_hv",
 		"lw_hex",
+		"lw_hassp",
 		"g_pow",
 		"g_bit",
 		"g_max",
@@ -103,10 +104,7 @@
 		"lw_ty",
 		"lw_stoks",
 		"lw_rowe",
-		"lw_optv",
-		"lw_optck",
 		"lw_sig2",
-		"lw_sig3",
 		"lw_x",
 		"lw_as",
 		"lw_one",
@@ -124,25 +122,21 @@
 		"lw_jk",
 		"lw_jc",
 		"lw_arity_st",
-		"lw_args",
 		"lw_arg",
 		"lw_bad",
 		"lw_call",
 		"lw_cj",
 		"lw_leaf",
-		"lw_post",
 		"lw_str",
 		"lw_norm",
 		"lw_pf",
 		"lw_p",
 		"lw_cst",
 		"lw_cst_st",
+		"lw_ucst",
 		"lw_pure",
-		"lw_blk",
 		"lw_mt",
-		"lw_lines",
 		"lw_lj",
-		"lw_line",
 		"lw_wv",
 		"lw_arm",
 		"lw_val",
@@ -153,14 +147,11 @@
 		"lw_rq",
 		"lw_pname",
 		"lw_pok",
-		"lw_hassp",
 		"lw_zip",
 		"lw_fst",
 		"lw_mst",
 		"lw_isimp",
 		"lw_nm",
-		"lw_fns",
-		"lw_main",
 		"lw_prog",
 		"g_slot",
 		"g_ld",
@@ -360,9 +351,9 @@
 		"lw_fn2": "! type lw_fn2",
 		"lw_rq": "! type lw_rq",
 		"lw_wd": "! type lw_wd",
-		"lw_pname": "! type lw_pname",
-		"lw_pok": "! type lw_pok",
-		"lw_hassp": "! type lw_hassp",
+		"lw_pname": "! op ~",
+		"lw_pok": "! !((w  '  0)  =  \\[)",
+		"lw_hassp": "same",
 		"lw_pbad": "! type lw_pbad",
 		"lw_zip": "! type lw_zip",
 		"lw_fst": "! type lw_fst",

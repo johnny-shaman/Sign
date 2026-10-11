@@ -301,7 +301,10 @@ function noteElementType(b, observed, overwrite = false) {
   let want = seen[0];
   for (const t of seen.slice(1)) {
     const j = liftScalarToBox(want, t);
-    if (!j) return false; // 畳めない食い違いは決めない（原理4）
+    if (!j) {
+      if (conflictedElements) conflictedElements.add(b);
+      return false; // 畳めない食い違いは決めない（原理4）
+    }
     want = j;
   }
   if (!b.elementType) { b.elementType = want; return true; }
@@ -1823,9 +1826,25 @@ function computeAtomType(node, env) {
       if (callee.returnsParamAt && callee.returnsParamAt.length) {
         const { args } = applyChainOf(node);
         for (const i of callee.returnsParamAt) {
+          // **作り直しの相から先（`strictReturnedArgJoin`）は、合流しない呼び出しの要素型を決めない。** 構造体の実引数は
+          // 要素の並びではなく（`elementTypeOf` は構造体そのものを返し、呼び先の型が並びなら「構造体の並び」になる）、
+          // 呼び先の要素型と合流しない実引数（`NO_JOIN`）は、どちらの枝が返るかが実行時にしか分からない。どちらも
+          // 呼び先の要素型を残すと、別の呼び出しの要素型を名乗る——1〜3相目はそこに過渡値の印が残っていて断りに
+          // 倒れていた（`f p 1` の `' 1`、HEAD は呼び先の返値の要素型に残った `Unit` で `get_prop` を断っていた）。
+          if (strictReturnedArgJoin && args[i]) {
+            const at = inferAtomType(args[i], env);
+            if (at && String(at).split(" | ").includes("Struct")) {
+              delete node.elementType;
+              break;
+            }
+          }
           const el = args[i] ? elementTypeOf(args[i], env) : null;
           if (!el || FAMILY_MEMBERS[el]) continue;
           const j = node.elementType && node.elementType !== el ? joinElementTypes(node.elementType, el) : el;
+          if (strictReturnedArgJoin && j === NO_JOIN) {
+            delete node.elementType;
+            break;
+          }
           if (j && j !== NO_JOIN) node.elementType = j;
         }
       }
@@ -2867,15 +2886,19 @@ function* liveDefines(nodes) {
 function observeArgTypes(sites, index, env) {
   const els = new Set();
   const cts = new Set();
+  // 要素型の読めていない呼び出しの実引数（`pendingCallElement`）が1つでもあれば、要素型は決めない（器の型は今までどおり）。
+  let pending = false;
   for (const args of sites) {
     if (args.length <= index) continue;
     const sc = args.scope || env;
     const a = args[index];
+    if (pendingCallElement(a, sc)) pending = true;
     const el = containerElementType(a, sc) || elementTypeOf(a, sc);
     if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) els.add(el);
     const ct = inferAtomType(a, sc);
     if (ct && ct !== "Unit" && !FAMILY_MEMBERS[ct]) cts.add(ct);
   }
+  if (pending) return { els: new Set(), cts, el: null, ct: cts.size === 1 ? [...cts][0] : null };
   return { els, cts, el: els.size === 1 ? [...els][0] : null, ct: cts.size === 1 ? [...cts][0] : null };
 }
 
@@ -3092,7 +3115,12 @@ function collectCallsiteParamTypes(nodes, env) {
         }
       }
       // 食い違うなら決まらないのが正しい（複数の型で呼ばれている）＝`observeArgTypes`。
-      const { el, ct } = observeArgTypes(bsites, 0, env);
+      const { el, ct, els } = observeArgTypes(bsites, 0, env);
+      if (conflictedElements && els.size > 1)
+        for (const e of entries) {
+          const cb = e.rest && e.name ? envLookup(bscope, e.name) : null;
+          if (cb) conflictedElements.add(cb);
+        }
       for (const e of entries) {
         if (!e.name || e.pattern) continue;
         const b = envLookup(bscope, e.name);
@@ -3122,6 +3150,8 @@ function collectCallsiteParamTypes(nodes, env) {
     // 器が何段も引数として渡り歩く場合（盤が `first_row` → `place` → `try_col` →
     // `conflict` と流れる）は、各段で要素型を運ばないと連鎖が切れる。
     const elementObs = entries.map(() => new Set());
+    // 位置ごとに、要素型の読めていない呼び出しの実引数があるか（`pendingCallElement`）。あればその位置の要素型は決めない。
+    const elementPending = entries.map(() => false);
     // **`[~ts]` は「ここは器だ」と書いてある。** 分割代入の rest 名は器そのものを受ける
     // 位置なので、器の型も観測して書き戻す必要がある——ここまで要素型しか書いていな
     // かったため、`f : a [~ts] ? …` の `ts` が要素型だけ持って**器の型は null** という
@@ -3137,6 +3167,7 @@ function collectCallsiteParamTypes(nodes, env) {
     for (const args of sites) {
       entries.forEach((e, i) => {
         if (i >= args.length) return;
+        if (pendingCallElement(args[i], args.scope || env)) elementPending[i] = true;
         const el = containerElementType(args[i], args.scope || env) || elementTypeOf(args[i], args.scope || env);
         if (el && el !== "Unit" && !FAMILY_MEMBERS[el]) elementObs[i].add(el);
         const ct = inferAtomType(args[i], args.scope || env);
@@ -3209,6 +3240,7 @@ function collectCallsiteParamTypes(nodes, env) {
         // 器そのものを受ける位置（rest・ブラケット全体）には要素型を載せる。
         // 次の段の呼び出しサイトはここを読むので、これが連鎖を繋ぐ。**サイトが食い違って
         // いても join が答えを持っている**ので、ここは一致を待たない（`noteElementType`）。
+        if (elementPending[i]) return;
         for (const name of [e.name, ...(e.pattern || []).filter((q) => q.rest).map((q) => q.name)]) {
           if (!name) continue;
           if (noteElementType(envLookup(patScope, name), elementObs[i], true)) changed = true;
@@ -3244,6 +3276,8 @@ function collectCallsiteParamTypes(nodes, env) {
     // **器だと分かっただけでは引けない。何バイトずつ並んでいるかが要る。** 型と同じく
     // 要素型も呼ぶ側が知っているので、一緒に運ぶ。
     const elemObs = names.map(() => new Set());
+    // この口は器の要素型（`containerElementType`）だけを観測するので、待つかどうかも同じ物差しで見る。
+    const elemPending = names.map(() => false);
     for (const args of sites) {
       names.forEach((name, i) => {
         if (!name || i >= args.length) return;
@@ -3261,6 +3295,7 @@ function collectCallsiteParamTypes(nodes, env) {
         // 決まっていないものは観測ではない——ここも再帰で効く。`sum c (i + 1) …` は
         // 自分の `c` を渡すので、まだ決まっていないうちは証拠に数えない。1周目で
         // 呼び出しサイトの `[1 ~ 10]` から決まり、2周目で自己呼び出しも一致する。
+        if (pendingCallElement(args[i], args.scope || env, true)) elemPending[i] = true;
         const el = containerElementType(args[i], args.scope || env);
         if (el && !FAMILY_MEMBERS[el]) elemObs[i].add(el);
         const rp = reprOfNode(args[i], args.scope || env);
@@ -3337,7 +3372,7 @@ function collectCallsiteParamTypes(nodes, env) {
           }
         }
         // 要素型はサイトの join で採る（`Char` と `String` は「広い方に揃える」）。
-        if (noteElementType(b2, elemObs[i])) changed = true;
+        if (!elemPending[i] && noteElementType(b2, elemObs[i])) changed = true;
       });
     }
     // **持ち上げた直和のスカラー側が、要素の型である。**
@@ -4414,6 +4449,131 @@ function clearTypeAnnotations(node) {
   for (const c of childrenOf(node)) clearTypeAnnotations(c);
 }
 
+// **型の不動点の回し方**（`annotateAll` の作り直しの相）。`joint` は返値と仮引数を一緒に、`returns` は仮引数の型を
+// 止めて返値の型と事実（要素型・指す先・実体の種類）を、`facts` は仮引数の型と返値の型を止めて返値の事実だけを、
+// `params` は返値の型と事実を止めて仮引数の型を回す。
+let typeFixMode = "joint";
+// 返値の事実を「読めたときだけ書く」のではなく、この周の本体の注釈へ合わせる（`collectReturns`）。作り直しの相だけ立つ。
+let mirrorReturnFacts = false;
+// 呼び出しの要素型の合流を狭くする（`computeAtomType` の apply）。作り直しの相から、最後に注釈を付け直すまで立つ。
+let strictReturnedArgJoin = false;
+// 要素型の読めていない呼び出しの実引数がある周には、仮引数の要素型を決めない（`pendingCallElement`）。
+let waitOnPendingCalls = false;
+let pendingCallRoot = null;
+// 最後に回した不動点の周回の記録（`runFixpoint`）。3相目が止まって終わったかを作り直しの相が見る。
+let lastFixpointRun = null;
+// 作り直しの相の `params` の間だけ集合になる：知っているサイトの要素型が食い違って決まらなかった仮引数の束縛。
+let conflictedElements = null;
+
+function argContainsCall(x) {
+  if (!x || typeof x !== "object") return false;
+  if (x.type === "operation" && (x.name === "apply" || x.name === "partial_apply")) return true;
+  for (const k of ["left", "right", "operand"]) if (x[k] && argContainsCall(x[k])) return true;
+  if (Array.isArray(x.lines)) for (const l of x.lines) if (argContainsCall(l)) return true;
+  return false;
+}
+
+// 実引数がトップレベルでない名前（仮引数・局所の名前）に触れているか。触れていれば、その要素型は呼ぶ側の仮引数が
+// 決まるのを待っている（輪・自分を呼ぶ形）ので、今までどおり「まだ分からない」として飛ばす。
+function argMentionsLocal(x, sc) {
+  if (!x || typeof x !== "object") return false;
+  if (isIdentifierNode(x)) {
+    const b = envLookup(sc, x.value);
+    return !!b && !!pendingCallRoot && pendingCallRoot.bindings.get(x.value) !== b;
+  }
+  for (const k of ["left", "right", "operand"]) if (x[k] && argMentionsLocal(x[k], sc)) return true;
+  if (Array.isArray(x.lines)) for (const l of x.lines) if (argMentionsLocal(l, sc)) return true;
+  return false;
+}
+
+/**
+ * **要素型の読めていない呼び出しの実引数**（仮引数の要素型を決めるのを待たせる、作り直しの相の `params` から先）。
+ *
+ * 呼び出しサイトの合流（`observeArgTypes`・混在形の並び・名前の並び）は、要素型の読めない実引数を「証拠なし」として
+ * 飛ばし、残りのサイトだけで仮引数の要素型を決めていた。飛ばしたサイトが別の器を渡すなら、それは黙った誤答の
+ * 入口である——HEAD では、そのサイトにたまたま過渡値の要素型（`Struct` など）が残っていて食い違いになり、断りに
+ * 倒れていた。作り直しの相は返値の事実を底から作り直すので、過渡値の印は消える。だから、トップレベルの名前だけで
+ * できた呼び出しの実引数（返値の事実から要素型を引くもの）の要素型が読めないなら、そのサイトは食い違いとして運ぶ。
+ * 仮引数・局所の名前に触れる実引数は輪の途中なので今までどおり飛ばす。`containerOnly` は器の要素型だけを観測する口
+ * （名前の並び）のため。
+ */
+function pendingCallElement(a, sc, containerOnly = false) {
+  if (!waitOnPendingCalls || !a) return false;
+  if (!argContainsCall(a) || argMentionsLocal(a, sc)) return false;
+  const e = containerOnly ? containerElementType(a, sc) : containerElementType(a, sc) || elementTypeOf(a, sc);
+  return !e || e === "Unit" || !!FAMILY_MEMBERS[e];
+}
+
+/**
+ * **型の状態を写す**（`restoreTypeState` と対）。`roots` から辿れるノード・スコープ・束縛（素のオブジェクト・配列・Map・Set）の
+ * 欄を浅く写す。凍ったものとクラスの実体は辿らない。
+ *
+ * 作り直しの相は、どれかの回が止まらずに終わったら（2周期・上限）、相の前の状態へ戻す——止まらない回の最後の値は、
+ * 上限の偶奇で決まる位相の片方で根拠が無い（`runFixpoint` の注）。
+ */
+function snapshotTypeState(roots) {
+  const saved = [];
+  const seen = new Set();
+  const stack = [...roots];
+  const plain = (o) => {
+    const p = Object.getPrototypeOf(o);
+    return p === Object.prototype || p === Array.prototype || p === null || o instanceof Map || o instanceof Set;
+  };
+  while (stack.length > 0) {
+    const o = stack.pop();
+    if (!o || typeof o !== "object" || seen.has(o)) continue;
+    seen.add(o);
+    if (!plain(o) || Object.isFrozen(o)) continue;
+    if (o instanceof Map) {
+      const entries = [...o.entries()];
+      saved.push({ o, entries });
+      for (const [k, v] of entries) stack.push(k, v);
+    } else if (o instanceof Set) {
+      const items = [...o];
+      saved.push({ o, items });
+      for (const v of items) stack.push(v);
+    } else {
+      const fields = {};
+      for (const k of Object.keys(o)) {
+        fields[k] = o[k];
+        stack.push(o[k]);
+      }
+      saved.push({ o, fields, length: Array.isArray(o) ? o.length : -1 });
+    }
+  }
+  return saved;
+}
+
+/** `snapshotTypeState` で写した欄へ戻す（足された欄は消す）。 */
+function restoreTypeState(saved) {
+  for (const s of saved) {
+    const o = s.o;
+    if (s.entries) {
+      o.clear();
+      for (const [k, v] of s.entries) o.set(k, v);
+    } else if (s.items) {
+      o.clear();
+      for (const v of s.items) o.add(v);
+    } else {
+      for (const k of Object.keys(o)) if (!Object.prototype.hasOwnProperty.call(s.fields, k)) delete o[k];
+      Object.assign(o, s.fields);
+      if (s.length >= 0) o.length = s.length;
+    }
+  }
+}
+
+// 返値の欄を、この周の本体の注釈の値へ合わせる（無ければ欄ごと消す）。変えたら true。`collectReturns` の注。
+function mirrorReturnFact(binding, field, value) {
+  if (value) {
+    if (binding[field] === value) return false;
+    binding[field] = value;
+    return true;
+  }
+  if (!(field in binding)) return false;
+  delete binding[field];
+  return true;
+}
+
 // トップレベルの `名前 : ラムダ` から返値型を集めて識別子テーブルへ書き戻す。
 // 変化があったら true（不動点の判定に使う）。
 function collectReturns(nodes, env) {
@@ -4445,17 +4605,34 @@ function collectReturns(nodes, env) {
     binding.returnsNode = rhs.right;
     // 一度でも本体から型が読めたら、もう種ではない。
     binding.returnsSeeded = false;
-    if (rhs.right.elementType) binding.returnsElementType = rhs.right.elementType;
+    // **作り直しの相（`mirrorReturnFacts`）では、返値の事実をこの周の本体の注釈へ合わせる**（無ければ消す）。1〜3相目は
+    // 「読めたときだけ書く」で、ある周に読めた値は後の周の本体がもう言わなくなっても残る——過渡値のラッチである
+    // （`annotateAll` の作り直しの相の注）。写した値が動いた周は不動点ではない（`changed`）。
+    if (mirrorReturnFacts) {
+      if (mirrorReturnFact(binding, "returnsElementType", rhs.right.elementType)) changed = true;
+    } else if (rhs.right.elementType) binding.returnsElementType = rhs.right.elementType;
     // **仮引数をそのまま返す枝は、要素型を呼び出しサイトから受け取る。** 定義側は器の
     // 中身を知らない——知っているのは実引数である。
     const rp = returnedParamPositions(rhs);
     if (rp.length) binding.returnsParamAt = rp;
     // **指す先も返値と一緒に運ぶ。** `cons : h t ? $(h , t)` を呼んだ側が `@` で読むとき、
     // 何が出るかを決めているのは `cons` の中の `$` である。ここで運ばないと連鎖が切れる。
-    if (rhs.right.pointee) binding.returnsPointee = rhs.right.pointee;
-    if (rhs.right.pointeeElement) binding.returnsPointeeElement = rhs.right.pointeeElement;
-    if (rhs.right.pointeeNode) binding.returnsPointeeNode = rhs.right.pointeeNode;
-    if (rhs.right.repr) binding.returnsRepr = rhs.right.repr;
+    //
+    // **指す先は `@` が読むのと同じ口（`pointeeOfNode`）で読む。** 本体の注釈だけを見ていたので、本体が別の関数の
+    // 呼び出し（`g : [~t] ? f t`、f は `$s` を返す）だと指す先が落ち、`@(g …)` が `Raw`（機器の番地）として読まれた
+    // ——`(@(g [4 5 6])) ' 1` が解釈 5 ／実機 `__`、診断ゼロ。`f` を直に呼べば名指しで断る形である。
+    const pt = pointeeOfNode(rhs.right, rhs.scope || env);
+    if (mirrorReturnFacts) {
+      if (mirrorReturnFact(binding, "returnsPointee", pt && pt.type)) changed = true;
+      if (mirrorReturnFact(binding, "returnsPointeeElement", pt && pt.element)) changed = true;
+      if (mirrorReturnFact(binding, "returnsPointeeNode", pt && pt.node)) changed = true;
+      if (!(rhs.cursorEntry || rhs.cursorReturns) && mirrorReturnFact(binding, "returnsRepr", rhs.right.repr)) changed = true;
+    } else {
+      if (pt && pt.type) binding.returnsPointee = pt.type;
+      if (pt && pt.element) binding.returnsPointeeElement = pt.element;
+      if (pt && pt.node) binding.returnsPointeeNode = pt.node;
+      if (rhs.right.repr) binding.returnsRepr = rhs.right.repr;
+    }
     // **カーソルの入口は「どう置かれているか」を宣言している。** 糖衣が作る
     // `sep : s ? (sep_arm s) , 0 , s` の本体は積に見えるが、置かれているのは
     // `{arm, k, 入力}` の3つ組であって要素の並びではない（stream_desugar.js）。
@@ -4466,7 +4643,8 @@ function collectReturns(nodes, env) {
       // どの群のカーソルかも運ぶ。引く命令はここから跳び先を決める。
       binding.returnsCursorGroup = rhs.cursorGroup || null;
     }
-    if (binding.returns !== ret) {
+    // 返値の事実を作り直す相（`typeFixMode` が `facts`）では、返値の型は動かさない（`annotateAll` の作り直しの相の注）。
+    if (typeFixMode !== "facts" && binding.returns !== ret) {
       binding.returns = ret;
       changed = true;
     }
@@ -4570,6 +4748,11 @@ function bareIdent(n) {
  */
 // `fixpointStats` を渡すと、不動点を1回回すごとに `{ rounds, limit, cycled }` を積む（上限まで回っていないか・2周期で止まっていないかを検査が見る）。
 function annotateAll(nodes, env, diagnostics, fixpointStats) {
+  // **前の compile の旗を持ち込まない。** 作り直しの相から先で compile が投げると（構造体のマージの型の衝突など、
+  // list_model §5.3）、下の終わりで戻す前に抜けて `strictReturnedArgJoin` が立ったまま残り、同じプロセスの次の
+  // compile が1〜3相目を狭い合流で回していた——HEAD なら名指しで断る lexer.sn の `tokens` を返す輪が、解釈 3 ／
+  // 実機 1 の黙った誤答になる（試験一式では起きず、試験の実行器や解釈器の CUI のような長く生きるプロセスで届く）。
+  strictReturnedArgJoin = false;
   for (const node of liveDefines(nodes)) {
     const rhs = node.right;
     if (!rhs || rhs.type !== "operation" || rhs.name !== "lambda") continue;
@@ -4601,6 +4784,7 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
     const binding = envLookup(env, node.left.value);
     if (binding) binding.addressOf = rhs.operand.value;
   }
+  pendingCallRoot = env;
   // 上限は「定義の数 + 2」。各周回で少なくとも1つは束を上がるので、それ以上は回らない。
   const limit = nodes.length + 2;
   //
@@ -4614,25 +4798,26 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
   //
   // 1相目で仮引数の型を確定させ、返値を底へ戻して2相目を回す。2相目は最初から
   // 正しい仮引数の型で始まるので、基底ケースが決めた型がそのまま残る。
-  const runFixpoint = () => {
+  const runFixpoint = (lim = limit) => {
   let previousState = null;
   let twoRoundsAgo = null;
   let rounds = 0;
   let cycled = false;
-  for (let i = 0; i < limit; i++) {
+  for (let i = 0; i < lim; i++) {
     rounds = i + 1;
     for (const node of nodes) clearTypeAnnotations(node);
     for (const node of nodes) annotateTypes(node, env, null);
     // 返値型と仮引数型は互いに依存する（呼び先の要求が実引数の型を決め、その型が返値を
     // 決める）ので、同じ周回で両方を集める。どちらかが動いている限り回す。
-    const a = collectReturns(nodes, env);
-    const b = collectParamTypes(nodes, env);
+    // 作り直しの相は、作り直す側だけを回す（`typeFixMode`）：`params` は返値の型と事実を止め、`returns`・`facts` は仮引数の型を止める。
+    const a = typeFixMode === "params" ? false : collectReturns(nodes, env);
+    const b = typeFixMode === "returns" || typeFixMode === "facts" ? false : collectParamTypes(nodes, env);
     // 呼び出しサイトからの具体化も同じ不動点で回す——狭まった型が本体へ伝わり、
     // その本体が別の関数を呼んでいれば、そこでも狭まる。
-    const c = collectCallsiteParamTypes(nodes, env);
+    const c = typeFixMode === "returns" || typeFixMode === "facts" ? false : collectCallsiteParamTypes(nodes, env);
     // カーソルの pullers は呼び出しサイトを持たない（引く命令が Pass 4 で跳ぶだけ）。
     // 型を決めているのはカーソルの側なので、同じ不動点で種を撒く。
-    const d = seedCursorPullers(nodes, env);
+    const d = typeFixMode === "returns" || typeFixMode === "facts" ? false : seedCursorPullers(nodes, env);
     if (!a && !b && !c && !d) break;
     // **旗ではなく、周の終わりの状態で止める。** 旗は「この周で書き換えた」であって「前の周と
     // 違う」ではない。`collectParamTypes` と `collectCallsiteParamTypes` は同じ束縛の欄を
@@ -4651,11 +4836,12 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
     // 偶奇で決まる——無関係な行を1行足すと型が変わる。コーパスでは起きていないことを門が見る
     // （`sign_programs.test.js`）。起きたら、同じ欄を2か所で書き換え合っている所を探して直すこと。
     if (state === twoRoundsAgo) cycled = true;
-    if (state === twoRoundsAgo && (limit - 1 - i) % 2 === 0) break;
+    if (state === twoRoundsAgo && (lim - 1 - i) % 2 === 0) break;
     twoRoundsAgo = previousState;
     previousState = state;
   }
-  if (fixpointStats) fixpointStats.push({ rounds, limit, cycled });
+  if (fixpointStats) fixpointStats.push({ rounds, limit: lim, cycled });
+  lastFixpointRun = { rounds, limit: lim, cycled };
   };
   // **その前に、証拠だけで一度回す。** 字面の相手から来る `Int` は既定値なので
   // （`inferParamTypesFromUsage`）、呼び出しサイトの証拠が出揃ってから埋める。
@@ -4708,13 +4894,92 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
     for (let s = node.scope; s && s.bindings && !scopes.has(s); s = s.parent) scopes.add(s);
     for (const c of childrenOf(node)) bottomOutElementTypes(c, seen, scopes);
   };
-  {
+  // 戻す前の値を返す（作り直しの相が、サイトの食い違う仮引数へ戻すのに使う）。
+  const bottomOutAllElementTypes = () => {
     const seen = new Set();
     const scopes = new Set();
     for (const node of nodes) bottomOutElementTypes(node, seen, scopes);
-    for (const s of scopes) for (const b of s.bindings.values()) delete b.elementType;
-  }
+    const before = new Map();
+    for (const s of scopes)
+      for (const b of s.bindings.values()) {
+        if (b.elementType !== undefined) before.set(b, b.elementType);
+        delete b.elementType;
+      }
+    return before;
+  };
+  bottomOutAllElementTypes();
   runFixpoint();
+  // **作り直しの相：過渡値から残った返値の事実と仮引数の要素型を、底から作り直す。**
+  //
+  // 3相目は返値の型と仮引数の要素型を底へ戻して回すが、返値の事実（要素型・指す先・実体の種類）は戻さない。
+  // `collectReturns` はそこを「読めたときだけ書く」ので、1相目の途中の値（`tokens` の返値がまだ `Struct` の周の値）が
+  // 輪の返値の事実に残り、輪がそれを互いに言い返して固める。HEAD（d317c0ca）では、`rt : [~ts] [~s] n ?` が `ts` を
+  // そのまま返し `row` と呼び合う輪で `(row s 1) ' 2` が解釈 99 ／実機 0（診断ゼロ）、lower.sn の `lw_row` → `lw_rowe`
+  // → `lw_rowt` は返値の要素型が `Struct` で、そこから仮引数（`lw_allok` の `ts`、`lw_sig3` の `pt`）へ `Struct` が入っていた。
+  //
+  // 作り直しは3つ。どれも片側を止めて、もう片側を底から回す——止めた側は直前の不動点の値なので、過渡値が入る口が無い：
+  // 1. **返値**：仮引数の型を止め、返値の事実を底から、本体の今の注釈を写して回す。直前の不動点が止まって終わったなら
+  //    返値の型も底から作り直す（`returns`）。輪の返値の型も事実と同じ形で過渡値を言い返す（lower.sn の `lw_row` が
+  //    `Container`、そこから引いた `lw_optv` が `Struct`）。2周期・上限で終わったなら型は止める（`facts`）——そこで型を
+  //    動かすと、2つの位相のどちらかが選ばれて pass4 の判断が変わる（実測で、`ts ' 0~` を返す輪の名指しの断りが、上界を
+  //    見積もりにした出し方へ変わり、短い器が黙って返った）。
+  // 2. **仮引数の要素型**：返値の型と事実を止め、底から回す（`params`）。要素型の読めない呼び出しの実引数があるサイトは
+  //    食い違いとして運ぶ（`pendingCallElement`）——証拠の無いサイトを飛ばして残りで決めると、過渡値の印が消えた後の
+  //    合流が黙った誤答になる（HEAD では `f (g p)` の `g p` に過渡値の `Struct` が残っていて、食い違いで断りに倒れていた）。
+  // 3. **揃える**：直前の不動点が止まって終わったなら一緒に回し（`joint`）、そうでなければ返値の事実だけをもう一度写す。
+  //
+  // 作り直しの相から先は、呼び出しの要素型の合流も狭くする（`strictReturnedArgJoin`、最後に注釈を付け直すまで）。
+  const cleanUpTransients = () => {
+    const settled = !!lastFixpointRun && lastFixpointRun.rounds < lastFixpointRun.limit && !lastFixpointRun.cycled;
+    const ranSettled = () => !!lastFixpointRun && lastFixpointRun.rounds < lastFixpointRun.limit && !lastFixpointRun.cycled;
+    // どれかの回が止まらずに終わったら（2周期・上限）、相の前の状態へ戻す。上限は3相目より広く取る——返値の事実と仮引数の
+    // 要素型をそれぞれ底から作り直すので、輪や鎖では3相目より深く回る（3本の輪で定義の数 + 2 に届いた）。
+    const cleanLimit = 3 * nodes.length + 2;
+    const saved = snapshotTypeState([nodes, env]);
+    mirrorReturnFacts = true;
+    try {
+      typeFixMode = settled ? "returns" : "facts";
+      for (const node of liveDefines(nodes)) {
+        const b2 = envLookup(env, node.left.value);
+        if (!b2) continue;
+        if (settled && b2.returns !== undefined) {
+          b2.returns = "Unit";
+          b2.returnsSeeded = true;
+        }
+        delete b2.returnsElementType;
+        delete b2.returnsPointee;
+        delete b2.returnsPointeeElement;
+        delete b2.returnsPointeeNode;
+        // カーソルの入口の実体の種類は宣言が決める（`collectReturns`）。
+        if (!(node.right && (node.right.cursorEntry || node.right.cursorReturns))) delete b2.returnsRepr;
+      }
+      runFixpoint(cleanLimit);
+      if (!ranSettled()) return restoreTypeState(saved);
+      typeFixMode = "params";
+      const before = bottomOutAllElementTypes();
+      waitOnPendingCalls = true;
+      conflictedElements = new Set();
+      runFixpoint(cleanLimit);
+      if (!ranSettled()) return restoreTypeState(saved);
+      // **知っているサイトが食い違って決まらなかった仮引数は、3相目の値へ戻す。** 作り直すのは、サイトが揃う仮引数
+      // （過渡値の返値の事実から来ていた `Struct` が、作り直した事実で揃う）と、読めない呼び出しのサイトがある仮引数
+      // （決めない）である。違う器で呼ばれる仮引数には1つの要素型が無く、3相目の値は pass4 の呼ぶ側の門（要素の幅）が
+      // サイトごとに照らす相手になっている——空にすると門が黙り、HEAD の名指しの断りが黙った誤答になった
+      // （`f : [~s] ? $s` を `[1 2 3]` と、中継 `g` 越しの文字列の切片で呼ぶ形が、`(@(g …)) ' 1` で解釈 121 ／実機 `__`）。
+      for (const b of conflictedElements) if (b.elementType === undefined && before.has(b)) b.elementType = before.get(b);
+      conflictedElements = null;
+      typeFixMode = settled ? "joint" : "facts";
+      runFixpoint(cleanLimit);
+      if (!ranSettled()) return restoreTypeState(saved);
+    } finally {
+      typeFixMode = "joint";
+      mirrorReturnFacts = false;
+      waitOnPendingCalls = false;
+      conflictedElements = null;
+    }
+  };
+  strictReturnedArgJoin = true;
+  cleanUpTransients();
 
   // **完全性公理が働かない仮引数を名指しする。**
   //
@@ -4766,6 +5031,7 @@ function annotateAll(nodes, env, diagnostics, fixpointStats) {
   if (diagnostics) collectPolymorphicIndex(nodes, diagnostics);
   if (diagnostics) collectWriteToNonAddress(nodes, env, diagnostics);
   if (diagnostics) collectWriteThroughValue(nodes, env, diagnostics);
+  strictReturnedArgJoin = false;
   return nodes;
 }
 

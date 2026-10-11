@@ -3047,5 +3047,72 @@ agree("歩幅つきを数え上げる", SUM + "sum [0 ~+ 3] 0 0");
 	agree("添字：文字の隔たりは位置の添字", "f : [~s] a b ? s ' (a - b)\nf `abc` 0u0062 0u0061");
 }
 
+// ---- 返値の事実のラッチ（2026-10-10） ----
+//
+// 仮引数 `ts` をそのまま返す `rt` と、`rt` を呼ぶ `row` の輪。1相目の途中の `Struct` が返値の要素型に残り（束縛は
+// 「読めたときだけ書く」で、3相目も戻さなかった）、輪がそれを互いに言い返して固めていた——実機は `List(Char)` の
+// 並びを `Struct` として引き、診断ゼロで解釈 99 ／実機 0 だった。pass3 は3相目の後に、返値の事実と仮引数の要素型を
+// 底から作り直す（`annotateAll` の作り直しの相）。型は test/return_fact_latch.test.js が見る。ここは実機の答え。
+{
+	const REC = "mk : [~s] ?\n\t!s : __\n\t(s ' 0) , (mk (s ' 1~))~\n";
+	const LIT3 = "mk : [~s] ? `ab` , `cde` , s\n";
+	const TWO = "row : [~s] n ? rt (mk s) s n\nrt : ts [~s] n ?\n\tn = 0 : ts\n\trow s (n - 1)\n";
+	const THREE = "row : [~s] n ? mid s n\nmid : [~s] n ? rt (mk s) s n\nrt : ts [~s] n ?\n\tn = 0 : ts\n\trow s (n - 1)\n";
+	const COND = "row : [~s] n ? rt (mk s) s n\nrt : ts [~s] n ?\n\t||ts|| > n : ts\n\trow s (n - 1)\n";
+	agree("輪：仮引数をそのまま返す（添字）", REC + TWO + "top : [~s] ? (row s 1) ' 2\ntop `abcd`");
+	agree("輪：仮引数をそのまま返す（入れ子の添字）", REC + TWO + "top : [~s] ? ((row s 1) ' 1) ' 0\ntop `xy`");
+	agree("輪：仮引数をそのまま返す（長さ）", REC + TWO + "top : [~s] ? ||row s 1||\ntop `abcd`");
+	agree("3本の輪：仮引数をそのまま返す（入れ子の添字）", REC + THREE + "top : [~s] ? ((row s 1) ' 1) ' 0\ntop `abcd`");
+	agree("条件で抜ける輪：仮引数をそのまま返す（添字）", REC + COND + "top : [~s] ? (row s 1) ' 2\ntop `abcd`");
+	// 輪の外から rt を直に呼ぶサイト（長さの揃わない入れ子の並び）がもう1つある形。HEAD は解釈 121 ／実機は並びを
+	// Struct として引いた別の数。
+	agree("輪：rt を入れ子の並びで直に呼ぶサイトもある（入れ子の添字）", REC + TWO + "z : rt [[1 2] , [3 4 5]] `ab` 0\ntop : [~s] ? ((row s 1) ' 1) ' 0\ntop `xy`");
+	// HEAD は輪の型が `Struct` のまま 8 byte 刻みで写して、スタックを踏み抜いていた（STKOVFLT）。
+	agree("輪：ab , cde , s を返す（上界の内側）", LIT3 + TWO + "top : [~s] ? ||row s 1||\ntop `abcd`");
+	// 上界は見積もり（輪の相手が食っていることを根拠にした、pass4 が information で名指しする）。`xy` では外れる
+	// ——外れたら書く直前の照合で `__` になり、踏み抜かない（上の `withinBound` の法）。HEAD は STKOVFLT。
+	// 溢れを罠にするのは別の片（小さい修正の 14）。
+	withinBound("輪：ab , cde , s を返す（見積もりを外す）", LIT3 + TWO + "top : [~s] ? ||row s 1||\ntop `xy`", 3);
+	// 括り（`[~ts]`）で返す輪と、切り出し（`ts ' 0~`）を返す輪は、今までどおり名指しで断る。後者は3相目の型が2周期で
+	// 止まる形で、作り直しの相が返値の型を動かすと pass4 が上界を見積もりにして出し、`xy` で解釈 3 ／実機 0 になった。
+	checkNamed("輪：括りの ts を返す形は断る", REC + "row : [~s] n ? rt (mk s) s n\nrt : [~ts] [~s] n ?\n\tn = 0 : ts\n\trow s (n - 1)\ntop : [~s] ? (row s 1) ' 2\ntop `abcd`", "ascii", "第1引数の場所が足りません");
+	checkNamed("輪：ab , cde , s の切り出しを返す形は断る", LIT3 + "row : [~s] n ? rt (mk s) s n\nrt : [~ts] [~s] n ?\n\tn = 0 : ts ' 0~\n\trow s (n - 1)\ntop : [~s] ? ||row s 1||\ntop `xy`", "ascii", "第1引数の場所が足りません");
+	checkNamed("輪：s , s の切り出しを返す形は断る", "mk : [~s] ? s , s\nrow : [~s] n ? rt (mk s) s n\nrt : [~ts] [~s] n ?\n\tn = 0 : ts ' 0~\n\trow s (n - 1)\ntop : [~s] ? (row s 1) ' 2\ntop `abcd`", "ascii", "第1引数の場所が足りません");
+	agree("切り出しを返す 5 段の鎖", "f : s ? s ' 1~\ng : t ? f t\nh : t ? g t\nkk : t ? h t\nm : t ? kk t\nx : m [1 2 3]\n(m [1 2 3]) ' 1");
+}
+// 過渡値の印が消えた後も、呼び出しの合流が別のサイトの要素型を名乗らないこと。HEAD は呼び先の返値の要素型に残った
+// 過渡値（`Struct`・`Unit`）が食い違いになって断りに倒れていた形で、作り直した要素型だけで合流すると黙った誤答になる。
+{
+	const P = "p :\n\tfoo : 10\n\tbar : 20\n\tbaz : 30\n";
+	// 構造体の実引数をそのまま返す呼び出しは、要素型を決めない（構造体は要素の並びではない）。
+	checkNamed("構造体を渡す呼び出し（別名のサイトがある輪）は断る", P + "mk : [~s] ? s\nf : [~s] n ?\n\tn = 0 : s\n\tr2 s (n - 1)\nr2 : [~s] n ? f (mk s) n\ng : f\nx : g [1 2 3 4] 1\n(f p 1) ' 1", "ascii", "get_prop");
+	checkNamed("恒等の中継で構造体を渡す呼び出しは断る", P + "f : s ? s ' 1\nid : t ? t\nx : f [1 2 3]\nf (id p)", "ascii", "get_prop");
+	// 自分を呼ぶ輪へ構造体を渡す呼び出し（HEAD は解釈 20 ／実機 `__`）と、長さの揃わない入れ子の並びを渡す呼び出し
+	// （HEAD は解釈 4 ／実機 0）。
+	checkNamed("構造体を渡す自己呼び出しの輪は断る", P + "f : [~s] n ?\n\tn = 0 : s\n\tf s (n - 1)\nx : f [1 2 3 4] 1\n(f p 1) ' 1", "ascii", "get_prop");
+	checkNamed("長さの揃わない入れ子の並びを渡す呼び出しは断る", "f : [~s] n ?\n\tn = 0 : s\n\tf (s ' 0~) (n - 1)\nx : f [1 2 3 4] 1\n||(f [[1 2] , [3 4 5] , [6 7 8 9] , [0]] 1) ' 2||", "ascii", "get_prop");
+	// 2つの位置を返す関数へ食い違う器を渡す呼び出し。HEAD は返す位置の順で先に来た `List(Int)` を採り、構造体の欄を
+	// 並びとして引いた（解釈 20 ／実機 `__`）。
+	checkNamed("2つの位置を返す呼び出しは断る", P + "f : [~s] [~t] n ?\n\tn = 0 : s\n\tt\nx : f [1 2 3] p 0\n(f p [1 2 3] 0) ' 1", "ascii", "get_prop");
+	// 待つのはトップレベルの名前だけでできた呼び出しの実引数。中継の仮引数に触れる呼び出し（輪の途中）は今までどおり
+	// 飛ばすので、ここは決まって出せる。
+	agree("中継の仮引数に触れる呼び出しの実引数は待たない", "f : s ? s ' 1\nap : h v ? @h v\ni2 : [~t] ? t\ng : [~q] ? f (ap $i2 q)\nx : f [1 2 3]\ng [4 5 6]");
+	// 要素型の読めない呼び出しの実引数があるサイトから、仮引数の要素型を決めない。
+	checkNamed("指す先経由で構造体を返す呼び出しを渡すサイトは断る", P + "f : s ? s ' 1\nap : h v ? @h v\ni2 : [~t] ? t\ng : [~t] ? ap $i2 t\nx : f ([1 2 3])\nf (g p)", "ascii", "get_prop");
+	// 族の切片を渡すサイト。HEAD は f の s を List(Int) と決め、文字列の3バイトを Int として読んだ（解釈 97 ／実機 6513249）。
+	checkNamed("族の切片を渡すサイトは断る", "f : [~s] ? s ' 0\nfa : [~w] ? w ' (0 ~ 1)\nx : f [1 2]\nz : fa \\x\nf (fa `abc`)", "ascii", "get_prop");
+	// 返値の指す先は呼び出しの本体からも運ぶ。HEAD は `g` の返値の指す先を落とし、`@(g …)` を Raw（機器の番地）として
+	// 読んだ（解釈 5 ／実機 `__`、診断ゼロ）。
+	checkNamed("$s を返す f を中継する g の指す先を引く形は断る", "f : [~s] ? $s\ng : [~t] ? f t\nx : f [1 2 3]\n(@(g [4 5 6])) ' 1", "ascii", "get_prop");
+	// 違う器で呼ばれる仮引数は、作り直しの相で決まらなくても3相目の値を持ち続ける——pass4 の呼ぶ側の門（要素の幅）が
+	// サイトごとに照らす相手である。空にすると門が黙り、`(@(g …)) ' 1` が解釈 121 ／実機 `__`、`(f (sl …)) 1` が解釈 1 ／実機 4
+	// になった。
+	checkNamed("$s を返す f を List(Int) と切片で呼ぶ形は断る", "sl : [~w] ? w ' (1 ~ 3)\nf : [~s] ? $s\ng : [~t] ? f t\nx : f [1 2 3]\n(@(g (sl `wxyz`))) ' 1", "ascii", "要素の幅が合いません");
+	checkNamed("List(Int) と切片で呼ぶ f の長さ＋n は断る", "sl : [~w] ? w ' (1 ~ 3)\nf : [~s] n ? ||s|| + n\nx : f [1 2 3] 1\n(f (sl `wxyz`)) 1", "ascii", "要素の幅が合いません");
+	// 作り直しの相のどれかの回が止まらずに終わったら（2周期・上限）、相の前の型へ戻す。`f` の `s` の型が String と Container の
+	// 2周期で、作り直しの回が別の位相で止まると門が黙り、`(ap $f [1 2 3]) ' 1` が解釈 2 ／実機 0 になった。
+	checkNamed("$f 越しに List(Int) で呼ぶ String の f は断る", "id : t ? t\nf : [~s] ? id s\nap : h v ? @h v\nx : f `abcd`\n(ap $f [1 2 3]) ' 1", "ascii", "要素の幅が合いません");
+}
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
