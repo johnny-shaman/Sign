@@ -1223,8 +1223,8 @@ apply : g x ? g x
 | `@` | Address → 参照先の圏を継承 | Atom(Address) → 参照先が `Lambda` なら呼び出し、`Atom` ならメモリ読み出し |
 
 ```sign
-apply_five : f ?
 ` @f で Address を Lambda として呼び出す
+apply_five : f ?
 	(@f) 5.0
 
 high_order_result : apply_five ($(add 10.0))
@@ -2665,12 +2665,12 @@ HM は型変数を導入して制約ソルビングを行うが、Sign は演算
 `match_case` は `&`/`|` チェーンにデシュガーされる。各 arm の型は演算子連鎖から自明に決まり、`|` チェーン全体の型はそれらの**直和（coproduct）**になる。
 
 ```sign
-classify : x ?
 ` arm 1: String
-	x < 0 : `negative`
 ` arm 2: Int（Unit と同型の 0）
-	x = 0 : 0
 ` arm 3: String（デフォルト）
+classify : x ?
+	x < 0 : `negative`
+	x = 0 : 0
 	`positive`
 ```
 
@@ -2730,8 +2730,8 @@ Sign における「成功/失敗」のパターンは、データ付き variant
 
 ```sign
 ` ✅ Sign の Result パターン（Ok/Err は不要）
-#parse : src ?
 ` 成功: src を返す、失敗: __ に収束
+#parse : src ?
 	valid src & src | __
 
 ` 呼び出し元

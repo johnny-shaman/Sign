@@ -584,12 +584,10 @@ result : safe_divide 10 2
 
 ```sign
 `自然変換としてのUnit
-natural_transform : f list ?
-
 `   空の場合の処理
-	f __ list
-
 `   通常の処理
+natural_transform : f list ?
+	f __ list
 	f list
 
 example : natural_transform [* 2,] (1, 2, 3)

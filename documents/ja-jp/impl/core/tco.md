@@ -21,10 +21,10 @@ Sign では `?` 演算子の右辺（本体）全体が評価対象であり、
 
 ```sign
 ` f の呼び出しが末尾位置にある
+`   acc が末尾（再帰でない → TCO不要）
+`    loop が末尾位置 → TCO対象
 loop : n acc ?
-` ← acc が末尾（再帰でない → TCO不要）
 	n = 0 & acc |
-` ← loop が末尾位置 → TCO対象
 	 loop (n - 1) (acc + n)
 ```
 
@@ -32,8 +32,8 @@ loop : n acc ?
 
 ```sign
 ` 呼び出しの結果をさらに演算に使う → 末尾位置でない
+`   f n の結果に +1 している → f n は末尾位置でない
 bad : n ?
-` ← f n の結果に +1 している → f n は末尾位置でない
 	(f n) + 1
 ```
 
@@ -52,23 +52,23 @@ cond が Unit       → else を評価して返す
 
 ```sign
 ` &/| の各節が末尾位置
+`   neg が末尾（リテラル、TCO不要）
+`    zero が末尾（リテラル、TCO不要）
+`    pos が末尾（リテラル、TCO不要）
 classify : n ?
-` neg が末尾（リテラル、TCO不要）
 	n < 0  & neg  |
-` zero が末尾（リテラル、TCO不要）
 	 n = 0 & zero |
-` pos が末尾（リテラル、TCO不要）
 	 pos
 ```
 
 ```sign
 ` 再帰呼び出しが各節の末尾にある
+`   基底ケース
+`    偶数 → TCO
+`    奇数 → TCO
 collatz : n steps ?
-` 基底ケース
 	n = 1     & steps            |
-` 偶数 → TCO
 	 n % 2 = 0 & collatz (n / 2)  (steps + 1) |
-` 奇数 → TCO
 	             collatz (n * 3 + 1) (steps + 1)
 ```
 

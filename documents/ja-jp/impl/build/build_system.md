@@ -114,26 +114,26 @@ BIOS/UEFIレベルの開発では、`option.ms` と `.sn` コードが役割を�
 ` boot.sn — layer: 0 のフェーズ（RAMがまだない）
 ` Int/UInt のみ使用可能。Float/SIMDはコンパイルエラー
 
-ddr_init :
 ` メモリコントローラ設定
-	0xFED10000 # 0x12345678
 ` タイミングパラメータ
+ddr_init :
+	0xFED10000 # 0x12345678
 	0xFED10004 # 0x87654321
 
-fpu_init :
 ` CR0.EMをクリア、CR0.MPをセット（アドレス操作のみ）
+fpu_init :
 	0xCR0 # (@ 0xCR0 & 0xFFFFFFFB | 0x00000002)
 
-simd_init :
 ` CR4.OSFXSR、CR4.OSXMMEXCPTをセット
+simd_init :
 	0xCR4 # (@ 0xCR4 | 0x00000600)
 
-_start :
 ` → layer 1（alloca有効）相当
-	ddr_init
 ` → layer 2（Float有効）相当
-	fpu_init
 ` → layer 3（SIMD有効）相当
+_start :
+	ddr_init
+	fpu_init
 	simd_init
 ` 以降は全型が使用可能
 ```

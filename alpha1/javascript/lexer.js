@@ -183,7 +183,7 @@ function bracketDelta(content) {
 // 括りの仮引数のブロック（`[` … `]`）も同じ字下げで書き、`?` は閉じの次の行に置く。形は1つだけで、外れた形は
 // 名指しで断る。
 //
-// `?` で始まる行は続きの行なので、置いた深さでどの行に付くかが決まる（下の markBlock）。深い TAB は揃えで
+// `?` で始まる行は定義の行で前の行へつなぐので、置いた深さでどの行に付くかが決まる（下の markBlock）。深い TAB は揃えで
 // 今の行に付き、浅ければ閉じた段の先の行に付く。だから門は**書いた行**（続きの行でも括弧の中の行でもない行）の
 // 深さで見る。`?` の行の深さを q とすると、付いてよいのは次の2つが揃うときだけである:
 //
@@ -295,7 +295,7 @@ function refuseBlockAfterValue(logical, content, q) {
 // **いちばん外の定義の終わりには空行を1行置く**（利用者 2026-10-17）。関数のブロック・構造体のブロックが終わり、
 // しかも定義も終わる所である。ブロックの途中で深さが変わる所（入れ子のブロックの終わり、ブロックの中の定義の
 // 終わり）は深さで分かるので要らない。1行で書き終えた定義（ブロックが無い）にも要らない。仮引数のブロックの後に
-// `?` の行が続く所は、定義がまだ終わっていないので置かない（`?` の行は続きの行）。ファイルの終わりは、空行が
+// `?` の行が続く所は、定義がまだ終わっていないので置かない（`?` の行は定義の行）。ファイルの終わりは、空行が
 // 無くても定義の終わりである。行頭のコメントの行は空行に数えない。
 //
 // 定義かどうかは、いちばん外の行（続きの行をつないだもの）に括りの外の `:` があるかで見る。絶対値・ノルムの囲み
@@ -376,10 +376,12 @@ function markBlock(input, commentLines = new Set()) {
   // 二重に差し込まれてパースが壊れる。他の多くの言語のオフサイドルールと同様、
   // ブラケットの中では改行・インデントの意味を一時的に無効化することでこれを防ぐ。
   let bracketDepth = 0;
-  // **続きの行**（preprocessor.md §0）。TAB を除いた行頭が空白か中置演算子なら、その行は前の行の続きであり、
+  // **続きの行**（preprocessor.md §0）。TAB を除いた行頭が空白なら、その行は前の行の続きであり、
   // 前の改行は処理の区切りではない。空白は余積（あるいは中置演算子の前の空白）で、その左辺は前の行にある——
   // だから `1 +` の次の ` 1` は `1 + 1` である。空白は字下げにならない（字下げは TAB だけ）。括弧の中でも
-  // 同じで、括弧の中か外かで続きの読みを変えない。
+  // 同じで、括弧の中か外かで続きの読みを変えない。空白の無い行は、演算子で始まっても続きにならない（利用者
+  // 2026-11-01。前は中置演算子で始まる行も続きだった）。`?` で始まる行だけは定義の行として前の行へつなぐ。
+  // いちばん外の空行とコメントの行は越えない（下の sawBlank・sawComment）。
   //
   // かつては行頭の空白を「空白インデント」として断り、`\` + 改行の後だけ許していた（`prevEndsWithEscape`、
   // その後は常に断った）。括弧の中では逆に黙って削っていたので、`(1` の次の ` + 1` は `[1, (+ 1)]` になった。
@@ -391,6 +393,8 @@ function markBlock(input, commentLines = new Set()) {
   const written = [];
   // 前の書いた行からこの行までに空行があったか（refuseMissingBlankLine）。
   let sawBlank = false;
+  // 前の書いた行からこの行までにコメントの行があったか（式の途中にコメントは置けない）。
+  let sawComment = false;
   // 今の行（続きの行をつないだもの）の中身。字下げのブロックが開くとき、その上の行がこれである（refuseBlockAfterValue）。
   let logical = '';
   // いちばん外（TAB 0 個）の文：その行（続きの行をつないだもの）、字下げのブロックを開いたか、定義か。
@@ -401,6 +405,7 @@ function markBlock(input, commentLines = new Set()) {
 
     // 行頭のコメントの行（classifyNewlines が読み捨てた行）。空行には数えない。
     if (commentLines.has(i)) {
+      sawComment = true;
       continue;
     }
 
@@ -420,13 +425,7 @@ function markBlock(input, commentLines = new Set()) {
 
     // 継続行の判定。**行頭をそのまま見る**——かつてはここで `content.trim()` していたが、行頭の空白は
     // 余積演算子であって剥がしてよいものではない（preprocess.sn 側の lstrip と同じ穴だった）。
-    //
-    // **行頭の `|` / `||` が「続き」なのは、空白が続くときだけである。** 密着していれば
-    // それは囲みの開き（絶対値・ノルム）であって中置演算子ではない——`||xs||` を続きと
-    // 読むと、インデントブロックの境界がずれる（枝が1つ header へ吸い込まれていた）。
-    // `.` は演算子表に無いので、行頭に来ても継続行にはなりえない（かつては文法の
-    // 文字クラスが `'-=` をレンジとして読み、`.` を演算子として受理していた名残）。
-    const isContinuation = content.startsWith(' ') || /^[?+*\/,=<>;%&^]/.test(content) || /^!=(?:=)?/.test(content) || /^\|\|? /.test(content) || /^~(?: |[+*\/\^-])/.test(content);
+    let isContinuation = content.startsWith(' ') || content.startsWith('?');
 
     // 行頭の空白の左に続ける行が無い。空白は字下げではないので、ファイルの先頭の空白は断る。
     if (content.startsWith(' ') && lastContentLineIdx === -1) {
@@ -451,11 +450,22 @@ function markBlock(input, commentLines = new Set()) {
       // 後ろの `:` を定義と見るため）。
       if (!top.hadBlock) top.logical += ' ' + content.replace(/^ +/, '');
       sawBlank = false;
+      sawComment = false;
       bracketDepth += bracketDelta(content);
       continue;
     }
 
     const currentIndent = leadingWs.length; // タブの数をインデントレベルとする
+
+    // **式の途中にコメントは置けない**（利用者 2026-11-01）。説明が要るなら、式の上に同じ形のコメントを書く。
+    if (isContinuation && sawComment) {
+      throw new SyntaxError(`コメントの行の後なので、前の行へ続けられません（説明は式の上に書きます）: ${JSON.stringify(line)}`);
+    }
+    // **いちばん外の空行は越えない**（問28、利用者の答え 2026-11-01）。ブロックの中の空行は読み捨てる。
+    if (isContinuation && sawBlank && (currentIndent === 0 || depth === 0)) {
+      if (content.startsWith(' ')) throw new SyntaxError(`行頭の空白は前の行の続きですが、空行の後なので続ける行がありません: ${JSON.stringify(line)}`);
+      isContinuation = false;
+    }
 
     // いちばん外の文の始まり。前の文が字下げのブロックを開いた定義なら、その終わりには空行が要る。
     if (!isContinuation && currentIndent === 0) {
@@ -491,6 +501,13 @@ function markBlock(input, commentLines = new Set()) {
         lastContentLineIdx = result.length - 1;
       }
     } else if (currentIndent > depth) {
+      // ブロックは前の行へ続く物なので、続きの行と同じくコメントの行といちばん外の空行を越えない。
+      if (lastContentLineIdx !== -1 && sawComment) {
+        throw new SyntaxError(`コメントの行の後なので、前の行の下にブロックを開けません（説明は式の上に書きます）: ${JSON.stringify(line)}`);
+      }
+      if (lastContentLineIdx !== -1 && sawBlank && depth === 0) {
+        throw new SyntaxError(`空行の後なので、前の行の下にブロックを開けません: ${JSON.stringify(line)}`);
+      }
       // 字下げのブロックは中置の演算子の右にだけ開ける（refuseBlockAfterValue）。
       if (lastContentLineIdx !== -1 && !endsWithInfixOperator(logical)) refuseBlockAfterValue(logical, content, currentIndent);
       if (depth === 0) {
@@ -516,6 +533,7 @@ function markBlock(input, commentLines = new Set()) {
 
     logical = isContinuation ? logical + ' ' + content.replace(/^ +/, '') : content;
     sawBlank = false;
+    sawComment = false;
     bracketDepth += bracketDelta(content);
   }
 

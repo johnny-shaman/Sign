@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { preprocess } from "../lexer.js";
+import { resolve, show } from "../resolve.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const parser = peggy.generate(fs.readFileSync(path.join(__dirname, "..", "sign.pegjs"), "utf8"));
@@ -58,6 +59,48 @@ const treeCases = [
 	["行末の `-` は中置（`1 - {2}`）", L("n : 1 -", "\t2"), ["<n>", ":", "1", "-", [`"INDENT_"`, [["2"]], `"_DEDENT"`]]],
 ];
 
+// 続きの印は改行か TAB の後の空白だけ（利用者 2026-11-01）。いちばん外の空行（問28）とコメントの行は越えない。
+// 期待は解決器まで通した木か、断りの理由。構文エラーは "SyntaxError"。
+const CUT = "infix-missing-operand";
+const continuation = [
+	["0列目の空白は続き", L("width : 640", " + 16"), "(: width (+ 640 16))"],
+	["0列目の演算子は続きでない", L("width : 640", "+ 16"), CUT],
+	["行末の演算子の次の行も、空白が無ければ続きでない", L("1 +", "1"), CUT],
+	["閉じ括りの次の空白は続き", L("[", " 1 + 1", "]", " * 2"), "(* [1 + 1] 2)"],
+	["閉じ括りの次の演算子は続きでない", L("[", " 1 + 1", "]", "* 2"), CUT],
+	["TAB の後の空白は続き", L("f : x ?", "\tx", "\t + 1", "", "f 1"), "(apply f 1)"],
+	["TAB の後の演算子は続きでない", L("f : x ?", "\tx", "\t+ 1", "", "f 1"), CUT],
+	["`,` で始まる行も続きでない", L("x : 1 , 2", ", 3"), CUT],
+	["括りの中の空白は続き", L("a : [", "\t1", "\t + 2", "]"), "(: a [1 + 2])"],
+	["いちばん外の空行の後の演算子", L("width : 640", "", "+ 16"), CUT],
+	["いちばん外の空行の後の空白", L("width : 640", "", " + 16"), "SyntaxError"],
+	["いちばん外の空行の後の TAB と空白", L("qq : 1", "", "\t + 2"), "SyntaxError"],
+	["いちばん外の空行の後の TAB と演算子", L("qq : 1", "", "\t+ 2"), "SyntaxError"],
+	["いちばん外の空行の後の `?` の行", L("f : x", "", "\t? x", "", "f 1"), "SyntaxError"],
+	["いちばん外の空行の後の0列目の `?` の行", L("f : x", "", "? x", "", "f 1"), CUT],
+	["`?` の右の空行の後のブロック", L("f : x ?", "", "\tx + 1", "", "f 1"), "SyntaxError"],
+	["行末の演算子の右の空行の後のブロック", L("n : 1 +", "", "\t2", "", "n"), "SyntaxError"],
+	["`:` の右の空行の後のブロック", L("p :", "", "\tx : 1", "", "p"), "SyntaxError"],
+	["`?` の右のコメントの行の後のブロック", L("f : x ?", "` 本体", "\tx + 1", "", "f 1"), "SyntaxError"],
+	["行末の演算子の右のコメントの行の後のブロック", L("n : 1 +", "` 足す", "\t2", "", "n"), "SyntaxError"],
+	["ブロックの中の `:` の右のコメントの行の後のブロック", L("f : x ?", "\ty :", "` 中身", "\t\t1", "\ty", "", "f 1"), "SyntaxError"],
+	["文字の改行の後の演算子はこの規則の外", L("x : 1 \\", ", 2"), "(: x (, (construct 1 \\\n) 2))"],
+	["括りの中の演算子の行は2行の括り（値は未決）", L("y : (1", "+ 2) * 3"), "(: y (* [1 ⏎ + 2] 3))"],
+	["ブロックの後の空行の後の空白", L("f : x ?", "\tx", "", " * 2"), "SyntaxError"],
+	["ブロックの中の空行は越える", L("f : x ?", "\tx", "", "\t + 1", "", "f 1"), "(apply f 1)"],
+	["括りの中の空行は越える", L("a : [", "\t1", "", "\t + 2", "]"), "(: a [1 + 2])"],
+	["仮引数のブロックの中の空行は越える", L("f :", "\t\tx", "", "\t? x", "", "f 1"), "(apply f 1)"],
+	["コメントの行の後の空白", L("width : 640", "` 幅", " + 16"), "SyntaxError"],
+	["行末の演算子とコメントの行の後の空白", L("1 +", "` 足す", " 1"), "SyntaxError"],
+	["コメントの行の後の `?` の行", L("f : x", "` 本体", "\t? x", "", "f 1"), "SyntaxError"],
+	["仮引数のブロックとコメントの行の後の `?` の行", L("f :", "\t\tx", "` 本体", "\t? x", "", "f 1"), "SyntaxError"],
+	["空行とコメントの行の後の空白", L("qq : 1", "", "` 足す", " 2"), "SyntaxError"],
+	["文の間のコメントの行は通る", L("f : x ?", "\tx", "` 次の行", "\tx + 1", "", "f 1"), "(apply f 1)"],
+	["式の上のコメントの行は通る", L("` 幅に余白を足す", "width : 640", " + 16"), "(: width (+ 640 16))"],
+	["`?` の行は定義の行", L("f : x", "\t? x", "", "f 1"), "(apply f 1)"],
+	["文字の改行の後の空白は続き", L("hello : `hello` \\", " `world`"), "(: hello (construct `hello` \\\n `world`))"],
+];
+
 let passed = 0;
 let total = 0;
 const ok = (name) => { console.log(`OK   ${name}`); passed++; };
@@ -82,6 +125,19 @@ for (const [name, src, reason] of refuses) {
 		if (e.reason === reason) ok(name);
 		else fail(name, `理由が違う: ${e.reason || e.name}: ${e.message}`);
 	}
+}
+
+for (const [name, src, want] of continuation) {
+	total++;
+	let got;
+	try {
+		const r = resolve(src + "\n");
+		got = show(r.trees.at(-1));
+	} catch (e) {
+		got = e.reason || e.name;
+	}
+	if (got === want) ok(`続きの行 ${name}`);
+	else fail(`続きの行 ${name}`, `got: ${got}\n     want: ${want}`);
 }
 
 for (const [name, src, want] of treeCases) {
