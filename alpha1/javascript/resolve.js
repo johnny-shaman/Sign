@@ -88,7 +88,7 @@
  * 門（G1〜G22（G14 は 2026-10-21、G17 と G1 は 2026-10-22、G12 は 2026-10-23、G8 と G9 は 2026-10-24、G4 は 2026-10-27 に廃止。G19 は 2026-10-24 の R51（2026-10-25 に決定）、G20 は同じ日の R53。2026-10-25 に R54〜R57 で G20 の当たる形を直し、同じ日の R58〜R61 で G19・G20 の当たる形を直した。G21 は 2026-10-26 の R62、G22 は同じ日の R67）、P2 の門）で名指しで断る。決まっていない形を黙ってどれかの読みに倒すと、後で利用者の
  * 答えが出たときに、その形が黙った誤答として残るからである。断った形は、答えが出たら試験の「断られる」側から「通る」側へ移す。
  *
- * 入り口は `resolve(source)` の1つで、`{ trees, diagnostics }` を返す。trees は1行に1つの木、diagnostics は
+ * 入り口は `resolve(source)` の1つで、`{ trees, diagnostics, rows, lineOf }` を返す（rows は書いた行の木、lineOf は行の木から元のソースの行を引く関数で、値の段 interpret.js が読む）。trees は1行に1つの木、diagnostics は
  * 止めない診断（information の undefined-name・pointfree-not-folded・bracket-excess・erased-unit-shadow・bare-function-return と、warning の leftover-lambda・dollar-non-function。各要素は元のソースの行 line を持つ、R127。重さは DIAG_SEVERITY の1か所）。門に当たったら OperationError を投げる（reason は §6.2 の名前、
  * spec は `…§6.2 G2(a)` のように門の番号まで、`gate` に門の番号）。
  *
@@ -9155,7 +9155,7 @@ function holeMismatch(h, ts, n, ctx) {
 /**
  * ソースを前段に通し、余積を解いた木を返す。
  * @param {string} source
- * @returns {{ trees: object[], diagnostics: object[] }}
+ * @returns {{ trees: object[], diagnostics: object[], rows: object[], lineOf: (row: object) => (number|undefined) }}
  */
 export function resolve(source) {
   let lines;
@@ -9403,7 +9403,9 @@ export function resolve(source) {
     insts.sort((a, b) => (a.shapeText < b.shapeText ? -1 : a.shapeText > b.shapeText ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     node.pattern.insts = insts;
   }
-  return { trees, diagnostics };
+  // 値の段（interpret.js）へ、書いた行の木（parseRow の行）と、行の木（括りと字下げのブロックの中の行も）から元のソースの行を引く関数も渡す。値は書いた項の並びを
+  // 左から畳んで決める（R118）ので、木の予想ではなく行を読む。知らせは `_` の生まれた行を持つ。
+  return { trees, diagnostics, rows: lines, lineOf: (row) => rowTreeLine.get(row) };
 }
 
 // ---------------------------------------------------------------------------
