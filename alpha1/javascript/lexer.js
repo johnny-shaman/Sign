@@ -77,10 +77,13 @@ export function classifyNewlines(input) {
 // classifyNewlines の本体。読み捨てた行頭のコメントの行の番号（CR で切った処理行の何番目か）も返す。markBlock は
 // それを見て、コメントの行を空行に数えない（refuseMissingBlankLine）。印を文字列の中に置くと、ソースに同じ文字が
 // あったときに見分けが付かないので、行の番号で外に渡す。
+// sourceLines は処理行の番号 → 元のソースの行（1 から）。`\` + 改行は処理行を切らずに元の行だけを進める（断りに行を持たせる、R127）。
 function classifyNewlinesWithComments(input) {
   const n = input.length;
   const commentLines = new Set();
   let lineNo = 0;
+  let sourceLine = 1;
+  const sourceLines = [1];
   const newlineWidth = (k) => (input[k] === '\r' ? (input[k + 1] === '\n' ? 2 : 1) : input[k] === '\n' ? 1 : 0);
   let out = '';
   let i = 0;
@@ -99,6 +102,7 @@ function classifyNewlinesWithComments(input) {
     if (w) {
       out += '\r';
       lineNo++;
+      sourceLines[lineNo] = ++sourceLine;
       i += w;
       lineStart = true;
       continue;
@@ -109,6 +113,7 @@ function classifyNewlinesWithComments(input) {
       if (w2) {
         out += '\\\n';
         i += 1 + w2;
+        sourceLine++;
         while (input[i] === '\t') i++;
       } else {
         out += input.slice(i, i + 2);
@@ -122,7 +127,9 @@ function classifyNewlinesWithComments(input) {
       if (input[k] === ch) k++;
       else if (ch === '`') {
         const lineEnd = input.slice(i).search(/[\r\n]/);
-        throw new SyntaxError(`文字列が行の終わりまでに閉じていません（文字列は行をまたげません）: ${JSON.stringify(input.slice(i, lineEnd < 0 ? n : i + lineEnd))}`);
+        const e = new SyntaxError(`文字列が行の終わりまでに閉じていません（文字列は行をまたげません）: ${JSON.stringify(input.slice(i, lineEnd < 0 ? n : i + lineEnd))}`);
+        e.line = sourceLine;
+        throw e;
       }
       out += input.slice(i, k);
       i = k;
@@ -133,7 +140,7 @@ function classifyNewlinesWithComments(input) {
     out += ch;
     i++;
   }
-  return { text: out, commentLines };
+  return { text: out, commentLines, sourceLines };
 }
 
 // 行頭のバッククォートがコメントの始まりか（sign.pegjs の `comment` と同じ判別）。
@@ -364,7 +371,10 @@ function refuseQuestionAfterClose(content, q) {
 // 2段戻れば DEDENT DEDENT。だから覚えるのは今の TAB の数だけでよい。
 // かつては Python のように「実際に深くなった TAB の数」を積んでいたので、何段跳んでも INDENT は1つで、
 // 跳んだ途中の深さへ戻ると、閉じてから開き直した別のブロックになっていた（0→2→1 が `a→b←→c←`）。
-function markBlock(input, commentLines = new Set()) {
+//
+// track は断りに行を持たせるための控え（R127、preprocessWithLines）：at は読んでいる処理行の番号、segs は処理行の中身を置いた所
+// （出力の何行目 k の何桁目 col から、処理行 line の中身）。中身はいつも出力の最後の行の後ろに足すので、置いた後の最後の行の末尾が中身である。
+function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] }) {
   const lines = input.split('\r');
   let depth = 0; // 今のブロックの深さ（TAB の数）
   let result = [];
@@ -402,6 +412,7 @@ function markBlock(input, commentLines = new Set()) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    track.at = i;
 
     // 行頭のコメントの行（classifyNewlines が読み捨てた行）。空行には数えない。
     if (commentLines.has(i)) {
@@ -445,6 +456,7 @@ function markBlock(input, commentLines = new Set()) {
         result.push(content);
         lastContentLineIdx = result.length - 1;
       }
+      track.segs.push({ k: result.length - 1, col: result[result.length - 1].length - content.length, line: i });
       logical = isContinuation ? logical + ' ' + content.replace(/^ +/, '') : content;
       // 括りの中の行も、いちばん外の文がまだ字下げのブロックを開いていなければ、その文の行である（括りを閉じた行の
       // 後ろの `:` を定義と見るため）。
@@ -530,6 +542,7 @@ function markBlock(input, commentLines = new Set()) {
       result.push(content);
       lastContentLineIdx = result.length - 1;
     }
+    track.segs.push({ k: result.length - 1, col: result[result.length - 1].length - content.length, line: i });
 
     logical = isContinuation ? logical + ' ' + content.replace(/^ +/, '') : content;
     sawBlank = false;
@@ -546,6 +559,64 @@ function markBlock(input, commentLines = new Set()) {
 }
 
 export function preprocess(input) {
-  const { text, commentLines } = classifyNewlinesWithComments(input);
-  return separateInfix(markBlock(text, commentLines));
+  return preprocessWithLines(input).text;
+}
+
+// 前処理の後の文字列（text）と、その位置から元のソースの行（1 から）を引く関数（lineAt）。断りに行を持たせる（R127。U [2026-10-30 18:00 159479c9]
+// 「どこで解なしになったかは明示で」。問2 の答え U〔答え〕[2026-11-01 12:09]「ファイルごと止める」は、選んだ側の文（主の Claude の物）が「行を名指しして
+// 知らせる」）。前処理の断り（markBlock・classifyNewlines の throw）は、ここで読んでいた行を持つ。
+// 前処理はコメントの行を読み捨て、続きの行とブロックを前の行へつなぐので、文法の位置は元の行と揃わない。separateInfix は空白しか足さないので、
+// 空白でない字の数は markBlock の出力と同じである。だから位置を「その前にある空白でない字の数」で数え、処理行の中身を置いた所（track.segs）と比べる。
+export function preprocessWithLines(input) {
+  const { text: classified, commentLines, sourceLines } = classifyNewlinesWithComments(input);
+  const track = { at: 0, segs: [] };
+  let marked;
+  try {
+    marked = markBlock(classified, commentLines, track);
+  } catch (e) {
+    if (e && typeof e === 'object' && e.line === undefined) e.line = sourceLines[track.at];
+    throw e;
+  }
+  const text = separateInfix(marked);
+  // 置いた所ごとに、その前の空白でない字の数（counts）・文字の改行（LF）の数（lfs）・元の行（lines）。処理行の中の LF は `\` + 改行で、元の行を1つ進める。
+  // 文法の位置の側は、空白でない字と LF の数を前から足した表（nonSpace・lf）で引く。resolve は行ごとに引くので、どちらも1回だけ作る。
+  let counts = null, lfs, lines, nonSpace, lf;
+  const lineAt = (offset) => {
+    if (!counts) {
+      const starts = [0];
+      for (let k = 0; k < marked.length; k++) if (marked[k] === '\r') starts.push(k + 1);
+      counts = [];
+      lfs = [];
+      lines = [];
+      let c = 0, l = 0, p = 0;
+      for (const s of track.segs) {
+        for (const at = starts[s.k] + s.col; p < at; p++) {
+          if (marked[p] !== ' ') c++;
+          if (marked[p] === '\n') l++;
+        }
+        counts.push(c);
+        lfs.push(l);
+        lines.push(sourceLines[s.line]);
+      }
+      nonSpace = new Int32Array(text.length + 1);
+      lf = new Int32Array(text.length + 1);
+      for (let k = 0; k < text.length; k++) {
+        nonSpace[k + 1] = nonSpace[k] + (text[k] !== ' ' ? 1 : 0);
+        lf[k + 1] = lf[k] + (text[k] === '\n' ? 1 : 0);
+      }
+    }
+    const o = Math.max(0, Math.min(offset, text.length));
+    const n = nonSpace[o];
+    // n 以下で最後の置いた所（counts は増えていく）
+    let lo = 0, hi = counts.length - 1, j = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (counts[mid] <= n) {
+        j = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    return j < 0 ? 1 : lines[j] + lf[o] - lfs[j];
+  };
+  return { text, lineAt };
 }

@@ -165,12 +165,14 @@ import { resolve, show, kindOf } from "../resolve.js";
 
 // 診断の比べの鍵。2026-10-27 の片8 の dollar-non-function（R100：`$` が関数以外を持ち上げた）は、書いた `$` の項ごとに1回出て、名前は書いた綴り（`$[5 !_]` と
 // `$[5 !_ , !_]`・`$vs` と `$[vs]`）なので、比べる2つの綴りでは名前も数も違う。出たかどうかだけにまとめる。leftover-lambda は、leftNames が偽なら名前を外す（余った
-// ラムダの綴りは比べる2つの綴りで違う。前からの outcome の読み）。
+// ラムダの綴りは比べる2つの綴りで違う。前からの outcome の読み）。片イ（R125、2026-11-02）の bare-function-return（本体の返す所に残った裸の関数）は、
+// 名前が書いた所の綴り（局所の別名 `@w` と仮引数 `@x`）なので、いつも名前を外して数だけを比べる。
 const diagKeys = (r, leftNames = false) => {
 	const out = [];
 	let lifted = false;
 	for (const d of r.diagnostics) {
 		if (d.reason === "dollar-non-function") lifted = true;
+		else if (d.reason === "bare-function-return") out.push(d.reason);
 		else out.push(d.reason === "leftover-lambda" && !leftNames ? d.reason : `${d.reason}/${d.name}`);
 	}
 	if (lifted) out.push("dollar-non-function");
@@ -233,7 +235,8 @@ const outcome = (s) => {
 		};
 	} catch (e) {
 		if (!e.reason) o = { crash: `${e.name}: ${e.message}` };
-		else o = { refused: { reason: e.reason, gate: e.gate || "", inst: (e.instances || []).map((i) => [i.fn, i.shape]) } };
+		// 言い分（message）は比べ（refusalText）には入れず、残す門の見分け（法則1 の §5 Q20）にだけ使う。
+		else o = { refused: { reason: e.reason, gate: e.gate || "", inst: (e.instances || []).map((i) => [i.fn, i.shape]), message: e.message } };
 	}
 	memo.set(s, o);
 	return o;
@@ -560,9 +563,11 @@ law("1 合成は適用の繰り返し：f1 … fm x と fm (… (f1 x))", () => 
 		文脈で断る組: 0,
 		余りを積んだ組: 0,
 		"余りが並び全体を受ける関数に届いて、並びの終わりまで受ける（R41、前は G12(c)）": 0,
-		"恒等射が2項以上を受けて後ろに関数（G18、比べの外）": 0,
-		"余りの前の結果が値でない（G2(a)、前は G12(b)、比べの外）": 0,
+		"恒等射が2項以上を受けて後ろに関数（R126 で恒等射を消した合成と同じ。前は G18）": 0,
+		"余りの前の結果が値でない（R120 から積む予想で通る。前は G2(a)、比べの外）": 0,
 		"頭の恒等射は単位律で消える（R74）": 0,
+		"入れ子が写す器の中身の G7（§5 Q20、オの片まで残す。比べの外）": 0,
+		"途中が未知で、両方が同じ残す門で断る（実体の綴りは予想で割れうる）": 0,
 	};
 	let n = 0;
 	const at = (expr) => at1(expr);
@@ -606,11 +611,14 @@ law("1 合成は適用の繰り返し：f1 … fm x と fm (… (f1 x))", () => 
 		const fl = flowNested1(fs, x);
 		const c = at(composed);
 		if (fl.cut) {
-			// 恒等射が2項以上を受けて、後ろに関数が続く。途中が全部 A なら、合成は G18 で断る（途中で断るか値でなくなれば、そちらが先）。
-			count["恒等射が2項以上を受けて後ろに関数（G18、比べの外）"]++;
-			if (fl.inner.every((s) => isA(at(s))) && !(c.refused && c.refused.gate === "G18")) {
-				problems.push(`${composed}`, `  恒等射が2項以上を受けて後ろに関数が続くのに G18 で断っていない`, `  合成: ${brief(c)}`);
-			}
+			// 恒等射が2項以上を受けて、後ろに関数が続く。前は、途中が全部 A なら合成は G18 で断っていた。片イ（R126、2026-11-03）から G18 は外へ出ず、
+			// 単位律の側に決まって恒等射を消した並びで畳み直す（`inc i inc 5 6` は `inc inc 5 6` と同じ木）ので、恒等射を全部消した合成と同じ答え（最後の行の
+			// 木・種類・門・診断）かを比べる。入れ子の読み（R29 の「並び全体を受ける」）とは割れるので、入れ子とは比べない。
+			count["恒等射が2項以上を受けて後ろに関数（R126 で恒等射を消した合成と同じ。前は G18）"]++;
+			const rest = fs.filter((g) => g !== "i");
+			const c0 = at(`${rest.join(" ")} ${x}`);
+			const last = (o) => (o.crash ? `例外 ${o.crash}` : o.refused ? `断り ${refusalText(o)}` : `${lastOf(o).text} : ${lastOf(o).kind} || ${o.diag.join(" ")}`);
+			if (last(c) !== last(c0)) problems.push(`${composed}  ⇔  ${rest.join(" ")} ${x}`, `  恒等射を消した合成と答えが違う（R126）`, `  恒等射あり: ${last(c)}`, `  恒等射なし: ${last(c0)}`);
 			return;
 		}
 		if (fl.wide) count["余りが並び全体を受ける関数に届いて、並びの終わりまで受ける（R41、前は G12(c)）"]++;
@@ -620,22 +628,45 @@ law("1 合成は適用の繰り返し：f1 … fm x と fm (… (f1 x))", () => 
 			count.余りを積んだ組++;
 			const lastStep = at(inner[inner.length - 1]);
 			if (!lastStep.crash && !lastStep.refused && !isA(lastStep) && inner.slice(0, -1).every((s) => isA(at(s)))) {
-				count["余りの前の結果が値でない（G2(a)、前は G12(b)、比べの外）"]++;
-				if (!(c.refused && c.refused.gate === "G2(a)")) problems.push(`${composed}`, `  余りの前の結果が値でないのに G2(a) で断っていない`, `  合成: ${brief(c)}`);
+				// 片イ（R120、2026-11-02。問3 の答え U〔答え〕[2026-11-01 12:12 159479c9]「左から読む」）から G2(a) は廃止：余りは積む予想で通り、
+				// 余りを当てるか積むかは値の段が書いた項の並び（R118）を畳んで決める。木の予想は入れ子と割れうるので、今までどおり比べの外。
+				count["余りの前の結果が値でない（R120 から積む予想で通る。前は G2(a)、比べの外）"]++;
+				if (c.crash || c.refused) problems.push(`${composed}`, `  余りの前の結果が値でないのに通らない（R120）`, `  合成: ${brief(c)}`);
 				return;
 			}
 		}
 		const d = at(nested);
 		const bad = (...why) => problems.push(`${composed}  ⇔  ${nested}`, ...why.map((w) => `  ${w}`), `  合成: ${brief(c)}`, `  入れ子: ${brief(d)}`);
 		if (c.crash || d.crash) return bad("内部の例外");
-		if (isA(c) !== isA(d)) return bad("A かどうかが違う");
-		if (isA(c)) count.合成がA++;
-		if (c.refused && c.refused.inst.length) count.合成が名指しで断る++;
 		// 途中で最初に「通って A」でなくなった物。
 		const firstNonA = inner
 			.slice(0, -1)
 			.map(at)
 			.find((o) => !isA(o));
+		if (firstNonA && !firstNonA.crash && !firstNonA.refused && lastOf(firstNonA).kind === "未知") {
+			// 途中が未知：片イ（R120、2026-11-02）から入れ子の側も G7 で断らず、未知の項を値の口に置いた木の予想で通る。合成の側の予想（未知の結果が
+			// 次の関数へ流れる）と種類が割れうるので、今までどおり比べの外。どちらも断らないことだけを見る（値は書いた項の並びを畳んだ答え、R118）。
+			count.途中で未知++;
+			// 入れ子の側が写像・畳み込みの口に未知の項を受けて G7（`[* 2,] (uu 5)`。写す器の中身の G7、§5 Q20）は、器の片（オ）まで残す門で、合成の側（未知の
+			// 結果が流れる）と割れるので数えるだけにする（片イ、R126 の「残る門」）。
+			if (d.refused && d.refused.gate === "G7" && /§5 Q20/.test(d.refused.message)) {
+				count["入れ子が写す器の中身の G7（§5 Q20、オの片まで残す。比べの外）"]++;
+				return;
+			}
+			// 両方が同じ残す門（穴の G5 など、カの片）で断る：未知の値の予想の形（合成は流れの `U`、入れ子は括りの口に1つで入る `[U…]`）で、名指しの実体の綴りが
+			// 割れうる。門と名前が同じなら同じ断りと数える（R118：予想は値を言わない）。
+			if (c.refused && d.refused && c.refused.reason === d.refused.reason && c.refused.gate === d.refused.gate) {
+				count["途中が未知で、両方が同じ残す門で断る（実体の綴りは予想で割れうる）"]++;
+				return;
+			}
+			if (d.refused && !(c.refused && refusalText(c) === refusalText(d))) bad("途中が未知なのに、入れ子が断る（R120 から G7 は廃止）");
+			// 合成の側だけが断る組も拾う（2026-11-03 の片イの確かめの指摘。前は入れ子の側が断る時だけ見て、合成の側だけの断りは黙って抜けた）。
+			else if (c.refused && !d.refused) bad("途中が未知なのに、合成が断る（R120 から G7 は廃止）");
+			return;
+		}
+		if (isA(c) !== isA(d)) return bad("A かどうかが違う");
+		if (isA(c)) count.合成がA++;
+		if (c.refused && c.refused.inst.length) count.合成が名指しで断る++;
 		if (!firstNonA) {
 			count.途中が全部A++;
 			if (c.refused || d.refused) {
@@ -654,17 +685,13 @@ law("1 合成は適用の繰り返し：f1 … fm x と fm (… (f1 x))", () => 
 			if (!c.refused || !d.refused || refusalText(c) !== refusalText(d)) bad("途中の適用が断るのに、合成と入れ子の断りが違う");
 			return;
 		}
-		if (lastOf(firstNonA).kind === "未知") {
-			count.途中で未知++;
-			if (!d.refused || d.refused.gate !== "G7") bad("途中が未知なのに、入れ子が G7 で断っていない");
-			return;
-		}
 		count["途中で L（比べの外）"]++;
 	};
 	for (const [f, x] of FIRSTS1) for (const g of LATER1) check([f, g], x);
 	for (const [f, x] of FIRSTS1_3) for (const g of LATER1_3) for (const h of LATER1_3) check([f, g, h], x);
-	// どの枝も1つ以上通っていなければ、法則は何も見ていない。
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// どの枝も1つ以上通っていなければ、法則は何も見ていない。「文脈で断る組」は片イ（R120、2026-11-03）から 0（HEAD 46c774e4 では 886 組で、`hx (inc 5)` の
+	// ように、文脈 hx の実体の本体 `x 1` の種類の未知な項の G7 だった）。比べは文脈で比べた組が見るので、0 を問題にしない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "文脈で断る組") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: `比べた組 ${n}：${Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・")}` };
 });
 
@@ -1539,6 +1566,8 @@ law("4 括りの関数と、括りを外した素の関数は、数を渡せば�
 // G7 になったので、比べの外にして、括りの側が G7 で断ることだけを見ていた。
 // 比べの外（同じにならない所。試験の側で、F の口の形の表 SHAPE5 から F Y を畳んで決める。実装の答えを見て決めない）：
 // - 括りの中が未知：F Y を畳んだ物の種類が未知（本体の根が未知の uu・`(pq 1)`・`[,]` に値が入った、`[' 0]` が数か2つ以上の値から引いた）。
+//   片イ（R120、2026-11-02）から、括りの側も G7 で断らず、未知の項の後ろは積む予想なので比べる（数は「括りの中が未知（R120 から比べる…）」）。
+//   下は前の記録。
 //   括りの側は、未知の葉が2項以上の並びにある前検査の G7（§3.3 の手順1）。括らない側は、未知の値が 5 の上にできて、後ろに何も来ないので
 //   根の未知（隣と結ぶときだけ断る、§6.4 の5）。どちらも答えを決めない側なので比べない（括りの側が G7、並びの側が未知か断ることを見る）。
 //   この枝に入るかは、試験の側で F と Y から決める（innerUnknown5）。実装の答えでは決めない（2026-10-24 の確かめで直した。前は `(F Y)` を
@@ -1645,11 +1674,11 @@ law("5 値の後ろの関数は、値を取らない：X F Y と X (F Y)（根�
 		"通る（根で余る）": 0,
 		同じ門で断る: 0,
 		"括りの中で閉じた後に関数（R52 で消える。比べる）": 0,
-		"括りの中が未知（括りの側は G7、並びの側は未知か断る、比べの外）": 0,
+		"括りの中が未知（R120 から比べる。前は括りの側が G7 で比べの外）": 0,
 		"文脈の中で通る": 0,
 		"文脈の中で余って消える（R52）": 0,
 		"文脈の中で同じ門で断る": 0,
-		"文脈の中で括りの中が未知（比べの外）": 0,
+		"文脈の中で括りの中が未知（R120 から比べる。前は比べの外）": 0,
 		"`(!_ _)` は書いた項どおり恒等射で比べる（R108。前は括りの側が G7 で比べの外）": 0,
 	};
 	let n = 0;
@@ -1681,13 +1710,10 @@ law("5 値の後ろの関数は、値を取らない：X F Y と X (F Y)（根�
 						continue;
 					}
 					if (pfTail5(f, ys)) count["`(!_ _)` は書いた項どおり恒等射で比べる（R108。前は括りの側が G7 で比べの外）"]++;
-					if (view(crow) !== view(cbr)) {
-						if (innerUnknown5(f, ys)) {
-							count["文脈の中で括りの中が未知（比べの外）"]++;
-							if (!cbr.refused || cbr.refused.gate !== "G7") problems.push(clabel, `  括りの中が未知なので G7 のはず: ${brief(cbr)}`);
-							if (!crow.refused && lastOf(crow).kind !== "未知") problems.push(clabel, `  並びの側は未知の根か断るはず: ${brief(crow)}`);
-						} else problems.push(clabel, `  並び: ${view(crow)}`, `  括り: ${view(cbr)}`);
-					} else if (crow.refused) count["文脈の中で同じ門で断る"]++;
+					// 括りの中が未知の組は、片イ（R120、2026-11-02）から括りの側も G7 で断らないので比べる（前は比べの外）。
+					if (innerUnknown5(f, ys)) count["文脈の中で括りの中が未知（R120 から比べる。前は比べの外）"]++;
+					if (view(crow) !== view(cbr)) problems.push(clabel, `  並び: ${view(crow)}`, `  括り: ${view(cbr)}`);
+					else if (crow.refused) count["文脈の中で同じ門で断る"]++;
 					else if (crow.diag.includes("leftover-lambda")) count["文脈の中で余って消える（R52）"]++;
 					else count["文脈の中で通る"]++;
 				}
@@ -1701,16 +1727,14 @@ law("5 値の後ろの関数は、値を取らない：X F Y と X (F Y)（根�
 				if (pfTail5(f, ys)) count["`(!_ _)` は書いた項どおり恒等射で比べる（R108。前は括りの側が G7 で比べの外）"]++;
 				const vr = view(row);
 				const vb = view(br);
+				// 括りの中が未知の組（上の注）は、片イ（R120、2026-11-02）から括りの側も G7 で断らないので比べる（前は比べの外）。括りの中が未知なことは
+				// 試験の側で畳んで確かめる。括りの中が別の理由で断る組（`[,] !_ 7` の穴。穴の門は片カまで今のまま）は、並びと同じ門なら下の「同じ門で断る」。
+				if (innerUnknown5(f, ys)) {
+					count["括りの中が未知（R120 から比べる。前は括りの側が G7 で比べの外）"]++;
+					const inner = outcome(src([...DEFS5, `(${f}${tail})`]));
+					if (!inner.refused && (inner.crash || lastOf(inner).kind !== "未知")) problems.push(label, `  試験の側で畳むと括りの中は未知のはず: ${brief(inner)}`);
+				}
 				if (vr !== vb) {
-					// 比べの外（上の注）。括りの側が G7 で断る。
-					if (innerUnknown5(f, ys)) {
-						count["括りの中が未知（括りの側は G7、並びの側は未知か断る、比べの外）"]++;
-						const inner = outcome(src([...DEFS5, `(${f}${tail})`]));
-						if (inner.refused || inner.crash || lastOf(inner).kind !== "未知") problems.push(label, `  試験の側で畳むと括りの中は未知のはず: ${brief(inner)}`);
-						if (!br.refused || br.refused.gate !== "G7") problems.push(label, `  括りの中が未知なので G7 のはず: ${brief(br)}`);
-						if (!row.refused && lastOf(row).kind !== "未知") problems.push(label, `  並びの側は未知の根か断るはず: ${brief(row)}`);
-						continue;
-					}
 					problems.push(label, `  並び: ${vr}`, `  括り: ${vb}`);
 					continue;
 				}
@@ -1906,7 +1930,8 @@ law("6 穴に後から当てるのは、埋めた適用と同じ：[h P] E・h P
 		}
 	}
 	Object.assign(count, count5);
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 同じ門で断る組（HEAD で 8）は、片イ（R120、2026-11-02。問3 の答え）で門が廃止されて 0 になった。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "同じ門で断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: `比べた組 ${n}：${Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・")}` };
 });
 
@@ -2109,7 +2134,8 @@ law("7 左からの畳み込み：カリー化・関数の並びを括る・余�
 		}
 	}
 	// (d)（一番近い1項の逆適用）は、2026-10-24 の逆適用の廃止（R47）で外した（上の注）。
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 断る組（HEAD で 4）は、片イ（2026-11-02）で門が廃止されて 0 になった（R120・R125）。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
@@ -2160,8 +2186,9 @@ law("8 既定値のある口に書いた _ は、同じ口に数を書いたの�
 			return { refused: `${e.reason} ${e.gate || ""}` };
 		}
 	};
-	// 既定値の葉 `_` を 5 に読み替える（木の綴りの中の、空白か括弧で区切られた `_` だけ。`!_`・`$p0` などは触らない）。
-	const asNum = (text) => text.replace(/(^|[\s(])_(?=[\s)]|$)/g, (m, p) => `${p}5`);
+	// 既定値の葉 `_` を 5 に読み替える（木の綴りの中の、空白か括弧で区切られた `_` だけ。`!_`・`$p0` などは触らない）。括りの葉の中の `_`（`[gd 7 _]`）も
+	// 読み替える：片イ（R120、2026-11-02）から `[gd 7 _] inc` が G7 で断らずに通り、括りの葉の綴りを比べるようになった（前は `[gd 7 5] inc` も同じ G7）。
+	const asNum = (text) => text.replace(/(^|[\s([])_(?=[\s)\]]|$)/g, (m, p) => `${p}5`);
 	const view = (o, asUnit) => (o.crash ? `例外 ${o.crash}` : o.refused ? `断り ${o.refused}` : `${asUnit ? asNum(o.last) : o.last} : ${o.kinds} || ${o.diag}`);
 	for (const [h, slots] of HEADS8) {
 		const n = slots.length;
@@ -2220,7 +2247,9 @@ law("8 既定値のある口に書いた _ は、同じ口に数を書いたの�
 			if (view(o, false) !== view(p, false)) problems.push(`${h} ${args.join(" ")}：既定値の無い口・仮引数の外の末尾の \`_\` が消えていない（${view(o, false)}  ⇔  外した ${view(p, false)}）`);
 		}
 	}
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 「断る」は片イ（R126、2026-11-03）で G15 を外してから 0（前は位置の数えられない `_` などで断っていた）。どちらの側も断らないことは上の比べが見るので、
+	// 組が無いことを問題にしない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
@@ -3872,6 +3901,7 @@ law("19 合成に来た流れは合成全体の口で受ける（R58）：F G X~
 	const problems = [];
 	const count = { "(a) 3つの綴り": 0, 通る: 0, 断る: 0, "(b) 素の関数で書いた h": 0, "(b) 合成の側が断る（許す）": 0, "(b) 同じ答え": 0 };
 	count["(b) h の側が断る（許す。本体の中で未知の項が並びにある `add (uu x9) y9` など）"] = 0; // 数えるだけ（0 でもよい）
+	count["(b) 合成の側だけが未知の予想（許す。R120 の前は h の側が G7）"] = 0;
 	const both = (lines) => [ans19(at19(lines)), ans19(at19([...lines.slice(0, -1), `inc (${lines[lines.length - 1]})`]))].join(" / 文脈 ");
 	for (const [f, mf] of FNS19) {
 		for (const [g, mg] of FNS19) {
@@ -3895,6 +3925,9 @@ law("19 合成に来た流れは合成全体の口で受ける（R58）：F G X~
 				if (oh.includes("例外")) problems.push(`(b) ${h} ⏎ h9 ${xs}~：例外 ${oh}`);
 				else if (oc.startsWith("断り coproduct-stream-arity")) count["(b) 合成の側が断る（許す）"]++;
 				else if (oh.startsWith("断り")) count["(b) h の側が断る（許す。本体の中で未知の項が並びにある `add (uu x9) y9` など）"]++;
+				// 片イ（R120、2026-11-02）から h の本体の `inc (uu x9)` は G7 で断らずに A で通る。合成の側は、途中が未知の結果を次の関数へ流す予想で未知のまま。
+				// 木と種類は予想で、値は書いた項の並びを畳んだ答え（R118）なので、合成の側の未知だけの違いは許す（前はこの組が h の側の G7 で上の枝に入っていた）。
+				else if (oc !== oh && oc.replace(/通る 未知/g, "通る A") === oh) count["(b) 合成の側だけが未知の予想（許す。R120 の前は h の側が G7）"]++;
 				else if (oc !== oh) problems.push(`(b) ${f} ${g} ${xs}~  ⇔  ${h} ⏎ h9 ${xs}~：合成全体の口で受けるので同じはず`, `  合成: ${oc}`, `  h: ${oh}`);
 				else count["(b) 同じ答え"]++;
 			}
@@ -4199,9 +4232,12 @@ law("23 参照の口は双積の点：H e1 … em と H e1 , … , em と H [e1 
 	anchor(["fp 1 2 , 3"], "通る A || (: fp (? [[a b c]] (inst [A…](2)");
 	anchor(["fab 1 , 2 3"], "通る A");
 	anchor(["fp _ , 1 , 2"], "通る A || (: fp (? [[a b c]] (inst [N…](2)");
-	anchor(["p3 1 , 2"], "断り coproduct-beside-product G3");
+	// 最後でない括りに入る `p3 1 , 2` と値の口の `inc 1 , 2` は、片イ（R121、2026-11-02。問4 の答え U〔答え〕[2026-11-01 12:15 159479c9]「同じ」）から
+	// G3 でなく `,` の辺を左から畳む：`inc 1 , 2` は `(inc 1) , 2`、`p3 1 , 2` は辺の終わりに余った `p3 1` が `_`（leftover-lambda）で 2。
+	anchor(["p3 1 , 2"], "通る A");
+	if (!ans23(["p3 1 , 2"]).includes("leftover-lambda")) problems.push("錨 p3 1 , 2：辺の終わりに余った `p3 1` の leftover-lambda が無い");
 	anchor(["fp 1 , _ , 2"], "通る A");
-	anchor(["inc 1 , 2"], "断り coproduct-beside-product G3");
+	anchor(["inc 1 , 2"], "通る A");
 	anchor(["fl 1 vs~"], "通る 未知");
 	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
@@ -4401,8 +4437,10 @@ law("25 `$v` の輪を通す形は、`$v` を輪の外の値の `$u25` に替え
 // ---------------------------------------------------------------------------
 //
 // 本体の返す所は、1行の本体の根（`t26 : y ? F`）・1行だけの字下げの本体（`⇥F`）・枝の値（`⇥y > 0 : F`）・枝の後の既定の行（`⇥F`）。どこに置いても、断るなら
-// 同じ門（裸の関数なら G16）、通るなら `t26 5` の種類と知らせの数が同じ。期待値は書かず、1行の本体の根と比べる。2行以上の手続きの最後の行は `&` の右の
+// 同じ門、通るなら `t26 5` の種類と知らせの数が同じ。期待値は書かず、1行の本体の根と比べる。2行以上の手続きの最後の行は `&` の右の
 // 被演算子（法則24）で、返す所ではない。最初の版の R76 は字下げの返す所を評価する所にしていて、`⇥[+ m]` が `_` で通り、1行の `[+ m]` の G16 と割れた。
+// 片イ（R125、2026-11-02）から G16 は廃止：裸の関数は `_` を返して bare-function-return（information）で知らせるので、断る組は無くなり、
+// 知らせの数（裸の関数の information）も比べる。
 const DEFS26 = [INC, "add : x y ? x + y", "f2 : x y ? x - y", "i : !_"];
 const UNITS26 = toUnits(DEFS26);
 const F26 = ["inc", "add 1", "add y", "inc add 5", "[+ 1]", "[+ y]", "[+ inc]", "([+ y])", "(inc)", "||inc||", "add !_ 3", "i", "!_", "x ? x + y", "[x ? x + y]", "y", "inc y", "y + 1", "5 inc", "$inc", "$[+ y]", "inc == y", "y & inc", "5"];
@@ -4416,18 +4454,21 @@ const ans26 = (lines) => {
 	try {
 		const r = resolve(s);
 		const left = r.diagnostics.filter((d) => d.reason === "leftover-lambda").length;
-		return `通る ${kindOf(r.trees[r.trees.length - 1])} 知らせ${left}`;
+		const bare = r.diagnostics.filter((d) => d.reason === "bare-function-return" && d.severity === "information").length;
+		return `通る ${kindOf(r.trees[r.trees.length - 1])} 知らせ${left} 裸の関数${bare}`;
 	} catch (e) {
 		return `断り ${e.reason} ${e.gate || ""}`;
 	}
 };
-law("26 本体の返す所（1行だけの字下げの本体・枝の値・枝の後の既定の行）に置いた F は、1行の本体の根に置いた F と同じ答え（R33・R76）", () => {
+law("26 本体の返す所（1行だけの字下げの本体・枝の値・枝の後の既定の行）に置いた F は、1行の本体の根に置いた F と同じ答え（R33・R76・R125）", () => {
 	const problems = [];
-	const count = { 比べた組: 0, 断る組: 0, 通る組: 0 };
+	const count = { 比べた組: 0, 通る組: 0, 裸の関数を知らせる組: 0 };
+	let refused = 0;
 	for (const f of F26) {
 		const root = ans26([`t26 : y ? ${f}`]);
-		if (root.startsWith("断り")) count.断る組++;
+		if (root.startsWith("断り")) refused++;
 		else count.通る組++;
+		if (/裸の関数[1-9]/.test(root)) count.裸の関数を知らせる組++;
 		for (const [label, place] of PLACES26) {
 			const a = ans26(place(f));
 			count.比べた組++;
@@ -4436,7 +4477,7 @@ law("26 本体の返す所（1行だけの字下げの本体・枝の値・枝�
 		}
 	}
 	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
-	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
+	return { problems, note: [...Object.entries(count).map(([k, v]) => `${k} ${v}`), `断る組 ${refused}`].join("・") };
 });
 
 // ---------------------------------------------------------------------------
@@ -4449,8 +4490,8 @@ law("26 本体の返す所（1行だけの字下げの本体・枝の値・枝�
 // なぜ同じか：`:` はメタで、名前は右辺を閉じた1つの項として指す（§5 Q50 の答え）。R80（主の Claude の傾き「枝の無い本体なら局所の定義」に U〔答え〕[2026-10-25
 // 08:44 c8ccdd69]「Q10 と Q45 は、君の傾きを採用できそうだと思う。」）で、枝の無い本体の局所の定義は、どの使い方でも右辺の種類で読む。局所の定義の行は定義で、
 // 手続きの行（`l1 & … & ln` の被演算子）に数えないので、本体の値の行は (c) と同じ1行。行の順は定義の順序に従う（先勝ち＋順序非依存、P2）。
-// 比べの外：外の仮引数を掴む右辺（閉包。(c) に置けない）は (a) と (b) だけを比べる。名前が重なる形（隠し）・枝のある本体・同じ範囲に2つ・局所の再帰は今のまま
-// 断る所で、錨で見る。
+// 比べの外：外の仮引数を掴む右辺（閉包。(c) に置けない）は (a) と (b) だけを比べる。名前が重なる形（隠し）・枝のある本体・同じ範囲に2つは今のまま
+// 断る所で、錨で見る。局所の再帰も錨で見る（片イの R120 から通る。前は断る所）。
 const DEFS27 = [
 	INC, "double : x ? x * 2", "add : x y ? x + y", "f3 : a b c ? a + b + c", "use : f x ? @f x", "uu : x ? [,] x", "mp2 : h [~l] ? [@h,] l~", "fold : f [~l] ? @f l~",
 	"vs : 1 , 2 , 3", "un : _", "five : 5", "hd : [x ~xs] ? x", "pq : [a] y ? y", "hx : [k] f ? @f 1", "gq : x [y : 1] ? x + y", "gf : [y : 1] ? y",
@@ -4564,7 +4605,9 @@ law("27 局所の定義は、同じ定義をファイルの定義に置いた形
 	anchor(["tt : x ?", "\tlf : inc", "\tlf : double", "\tlf x"], "断り coproduct-unknown-kind G7"); // 同じ範囲に2つ
 	anchor(["tt : x ?", "\tx > 0 : 1", "\tlf : inc", "\tlf x"], "断り coproduct-unknown-kind G7"); // 枝のある本体
 	anchor(["tt : x ?", "\tinc : z ? z * z", "\tmap $inc x"], "断り coproduct-dollar-value G20"); // 外の名前と同じ名前の行（隠し）
-	anchor(["tt : x ?", "\tlf : z ? lf z", "\tlf x"], "断り coproduct-unknown-kind G7"); // 局所の関数の再帰
+	// 局所の関数の再帰：片イ（R120）から、ファイルの再帰と同じく通る（読みは決まっていて、種類が未知なだけ。前は種類の未知な項の G7）。ほかの3つの錨は名前の読みが
+	// 決まらない所で、R120 の後も G7（undecidedWhy）。
+	anchor(["tt : x ?", "\tlf : z ? lf z", "\tlf x"], "通る (apply lf x)");
 	anchor(["tt : x ?", "\tlf : lg", "\tlg : lf", "\tlf + 1"], "断り name-cycle"); // 局所の値の輪
 	anchor(["tt : x ?", "\t[lf : z ? z * z]", "\tlf x"], "断り coproduct-unknown-kind G7"); // 入れ子の括りの中だけ
 	// 2026-10-26 の確かめの直し：外の関数の局所の名前と同じ名前の、内の関数の局所の定義（外の名前を隠す行）は、仮引数・ファイルの定義と同じく今のまま断る
@@ -5482,7 +5525,8 @@ law("37 `$x ' 0` は x（R102）：C[($x ' 0)] と C[(x)] と C[@[$x]] が同じ
 	anchor(["$five37 ' 0"], "通る A");
 	anchor(["($inc ' 0) 5"], "通る A");
 	anchor(["$vs37 ' 1"], "通る A");
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 断る組は、片イ（R125、2026-11-02）で G16 が廃止されて無くなった（`t37 : y ? (inc)` は本体の根の裸の関数で `_` と知らせ）。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
@@ -5638,7 +5682,8 @@ law("39 値の口に書いた `_` は、その `_` を消した綴りと同じ�
 			else count[a.startsWith("通る") ? "通る" : "断る"]++;
 		}
 	}
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 断る組（HEAD で 25）は、片イ（2026-11-02）の G2(a)・G7 の廃止（R120）と G16 の廃止（R125）で無くなった。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
@@ -5674,7 +5719,8 @@ law("40 値の口では、書いた `_`・書いた `[]`・長さ 0 の流れが
 			}
 		}
 	}
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 断る組（HEAD で 145）は、片イ（2026-11-02）の G2(a)・G7 の廃止（R120）と G16 の廃止（R125）で無くなった。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
@@ -5740,7 +5786,8 @@ law("41 既定値の口だけが開いた部分適用は、評価する所で既
 	anchor(["[gq 1]"], "通る [gq 1] : 未知");
 	anchor(["gl 1"], "通る (apply gl 1) : 未知");
 	anchor(["gf"], "通る (unit gf) : A");
-	anchor(["w : gq 1", "w 5"], "断り coproduct-unknown-kind G7");
+	// 片イ（R120、2026-11-02。§5 Q80 (b) の答え U〔答え〕[2026-10-27 23:12 438d5b1a]）から G7 でなく通る：木は w を値と読んだ予想の構築で、値は `gq 1 5` の 6。
+	anchor(["w : gq 1", "w 5"], "通る (: w (apply gq 1)) : A ⏎ (construct w 5) : 未知");
 	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
@@ -5866,7 +5913,8 @@ law("43 値の口に着いた `_` と分かる名前・括りは、同じ位置�
 	anchor(["gq 1 _"], "通る (apply gq (construct 1 _)) : 未知");
 	anchor(["pb2 no 1"], "通る (apply pb2 (construct no 1)) : A");
 	anchor(["pb2 _ 1"], "通る (unit (apply pb2 1)) : A"); // 書いた `_` は R15 で詰まって a が 1、b が開いたまま根で `_`
-	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	// 断る組（HEAD で 475）は、片イ（2026-11-02）の G2(a)・G7 の廃止（R120）と G16 の廃止（R125）で無くなった。数えるだけで、無くても落とさない。
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 

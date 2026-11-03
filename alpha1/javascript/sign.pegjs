@@ -68,7 +68,10 @@ Expression
       // 【修正済み】soloかどうかに関わらず常にflat()する（Termの返り値のwrapルールと対にするため。
       // 以前はsolo時にflat()をスキップしており、Blockが唯一の項の場合とそうでない場合とで
       // 結果の構造が一貫しなかった）。
-      return [head, ...tail].flat();
+      const row = [head, ...tail].flat();
+      // 行の書き始めの位置（resolve.js が断りに元のソースの行を持たせる、R127）。渡さない呼び手（前段だけの試験）には何もしない。
+      if (options.rowAt) options.rowAt.set(row, offset());
+      return row;
   }
 
 // --- 密着結合（Syntax = Type）の要 ---
