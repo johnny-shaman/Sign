@@ -143,8 +143,10 @@ export const CORPUS = [
 	// 同日：比較の右辺が `__` になり得るとき吸収する2命令が入った（4334 → 4369。parser・emit・target_info も同じ理由）。
 	// 2026-09-26：文字が左辺の比較から 0/1 の規則（3命令）を外した（4369 → 4361、target_info も 1303 → 1299）。
 	{ rel: "alpha/sign/layout.sn", front: 0, asm: [], insn: { full: 4361, plain: 6912 }, digest: { full: "8b2d8f0f4eee2fd7", plain: "23754b4acd70a9ac" } },
+	// 2026-10-24 に案内の例を今の書き方へ直した（29d5fb43）ので、門は直す前の版の写しを読む。alpha の言語は
+	// 固まっていて、案内の例はこれから alpha1 に合わせて動く。解釈器の試験は今も案内の例を読む。
 	{
-		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.sn",
+		rel: "alpha/javascript/test/n_queens_pinned/n_queens.sn",
 		front: 0,
 		asm: [{ severity: "error", includes: "器の構築はまだ出せません" }],
 		insn: { full: 226, plain: 391 },
@@ -153,7 +155,7 @@ export const CORPUS = [
 	// 注釈を落とした版。**同じ命令列が出るはず**で、比べる側（`asmdiff`）が注釈を落とす
 	// 根拠そのものである（注釈は命令を出さない）。指紋も同じ値になる。
 	{
-		rel: "documents/ja-jp/guide/examples/n-queen/n_queens.nocomment.sn",
+		rel: "alpha/javascript/test/n_queens_pinned/n_queens.nocomment.sn",
 		front: 0,
 		asm: [{ severity: "error", includes: "器の構築はまだ出せません" }],
 		insn: { full: 226, plain: 391 },

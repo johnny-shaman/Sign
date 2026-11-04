@@ -1,0 +1,22 @@
+conflict : col dist [h ~t] ?
+	h = col : !__
+	h - col = dist : !__
+	col - h = dist : !__
+	conflict col (dist + 1) t
+
+try_col : col row n [~board] ?
+	col > n : __
+	(conflict col 1 board) : try_col (col + 1) row n board
+	(place (row + 1) n (col board~)) | try_col (col + 1) row n board
+
+place : row n [~board] ?
+	row > n : board
+	try_col 1 row n board
+
+first_row : col n ?
+	col > n : __
+	(place 2 n col) | first_row (col + 1) n
+
+solve : n ? first_row 1 n
+
+solve 8

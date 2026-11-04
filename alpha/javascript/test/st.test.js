@@ -636,9 +636,9 @@ check(
 //
 // n_queens.sn は混在形のブラケット（`col dist [h ~t]`）と相互再帰（place ↔ try_col）の
 // 両方を含む。どちらか一方でも欠けると `_` が残るので、全体が解けることが両者の噛み合いの
-// 証拠になる。
+// 証拠になる。読むのは直す前の版の写し（`corpus.js` の n_queens の注）。
 {
-	const src = fs.readFileSync(path.join(__dirname, "..", "..", "..", "documents", "ja-jp", "guide", "examples", "n-queen", "n_queens.sn"), "utf8");
+	const src = fs.readFileSync(path.join(__dirname, "n_queens_pinned", "n_queens.sn"), "utf8");
 	const { nodes, env } = compile(src);
 	const r = generateSignType(nodes, env, { scope: "ist" });
 	check(`n_queens.sn に未解決が残らない（${r.entries} エントリ）`, r.unresolved, 0);
