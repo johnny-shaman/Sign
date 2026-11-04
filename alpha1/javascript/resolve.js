@@ -89,6 +89,9 @@
  * R128〜R130 は 2026-11-04 の寄せ1：関数の本体（と枝の値のブロック）の `:` の行は左が何でも枝で、本体に局所の定義は無く（R128。R80 と local-* の門を外し、局所の
  * 名前を持つのは括りと構造体の範囲 local-field だけ。枝の条件は `&` の左と同じに解く、resolveBranch・resolveBranchCondition）、値が `_` の枝は消えて次へ進む（R129、
  * 値の段。最後でない枝の bare-function-return の言い分）、枝のある本体の最後でない裸の行は読む段で止める（R130、refuseBareRowBetween の body-bare-row-between）、
+ * R131 は 2026-11-04 の寄せ2：仮引数の括り（参照の口）に既定値は書けず、括りの中に `:` のある仮引数と、仮引数のブロックの左に括りのある `:` の行は読む段で止める
+ * （bracketDefault・refuseBracketDefault の param-default-bracket。checkParamNames）。既定値は字下げの仮引数のブロックの `名前 : 既定値` の行だけなので、
+ * defaultsBare・defaultsSlots・defaultsArity・unitDefaultParam・bareRestParam・visitDefaults もブロックの行だけを見る、
  * §1.2 の P1〜P3、§2 の表の「する」の行）だけである。90% 以下の所は §6.2 の
  * 門（G1〜G22（G14 は 2026-10-21、G17 と G1 は 2026-10-22、G12 は 2026-10-23、G8 と G9 は 2026-10-24、G4 は 2026-10-27 に廃止。G19 は 2026-10-24 の R51（2026-10-25 に決定）、G20 は同じ日の R53。2026-10-25 に R54〜R57 で G20 の当たる形を直し、同じ日の R58〜R61 で G19・G20 の当たる形を直した。G21 は 2026-10-26 の R62、G22 は同じ日の R67）、P2 の門）で名指しで断る。決まっていない形を黙ってどれかの読みに倒すと、後で利用者の
  * 答えが出たときに、その形が黙った誤答として残るからである。断った形は、答えが出たら試験の「断られる」側から「通る」側へ移す。
@@ -678,8 +681,10 @@ function isBareBlock(term, c) {
   return term && term.type === "atom" && term.pre.length === 0 && term.post.length === 0 && term.core.c === c;
 }
 
-// 仮引数の並びの中の名前（P2）。括りの仮引数の中で `:` の右に書いた物は既定値で、仮引数ではないので数えない。
-// 既定値の右の名前まで数えると、`[z : inc]` の `inc` を仮引数と読み、ファイルの定義を隠すと誤って断る。
+// 仮引数の並びの中の名前（P2）。`:` の右に書いた物は既定値で、仮引数ではないので数えない。
+// 既定値の右の名前まで数えると、`z : inc` の `inc` を仮引数と読み、ファイルの定義を隠すと誤って断る。2026-11-04 の寄せ2（R131）から括りの中の `:` は読む段で
+// 止める（bracketDefault）ので、答えに出る `:` は字下げの仮引数のブロックの、左が名前1つでない既定値の行（`a b : inc`。parseParams）だけ（読む段より前に定義を
+// 集める所 asDefinition には括りの中の `:` も来るが、その源は読む段で止まる）。
 function forEachParamNameInTree(tree, cb) {
   if (!tree) return;
   if (tree.type === "seq") return tree.terms.forEach((t) => forEachParamNameInTerm(t, cb));
@@ -774,7 +779,7 @@ function parseParams(left) {
     else {
       // 括りの中の名前・前置 `~` の名前は、ここでは未知。括りの関数（R24：仮引数が裸の名前と括りだけで既定値が無い）
       // なら、実体の範囲では lookup が先に仮引数の desc（渡された物の生まれ）を見て、実体の外では本体を読まない（R25）。
-      // 既定値のある関数（`[x : 1] ? …`）は括りの関数ではないので、今までどおり定義の行で本体を読み、ここで未知にした名前は並びで G7 になる。片イ（R120）から、その名前は並びでも G7 で断らず、種類の未知な項として畳む（foldStep）。
+      // 既定値のある関数（前は `[x : 1] ? …` もそうだったが、2026-11-04 の寄せ2（R131）から既定値は字下げの仮引数のブロックだけで、その行はこの上で読む）は括りの関数ではないので、今までどおり定義の行で本体を読み、ここで未知にした名前は並びで G7 になる。片イ（R120）から、その名前は並びでも G7 で断らず、種類の未知な項として畳む（foldStep）。
       // 括りの外の前置 `~` の関数（`a ~y ? …`）は、2026-10-26 から定義の所で G22 で断る（R67、resolveLambda。前はここの「other」で通っていた）。
       forEachParamNameInTerm(t, other);
       plain = false;
@@ -791,6 +796,7 @@ function parseParams(left) {
 // 既定値と組んだ形（仮引数のブロックの行 `~y : 3`・その1行の綴りの既定値の括り `[~y : 5]`）も見る：既定値の括りは残りを受ける括り（参照の口）ではなく、
 // 既定値のある関数は括りの関数でもないので、名前の前置 `~` は括りの外の `~xs` と同じ（2026-10-26 の確かめの直し。最初の版はどちらも素通しし、
 // `gd : x [~y : 5] ? x` の `gd _ 2` に R68 のカリー化を当てていた。既定値つきの残りという綴りを作るかは §5 Q72）。見つかれば {text, withDefault}、無ければ null。
+// 2026-11-04 の寄せ2（R131）から、括りの既定値（`[~y : 5]` も）は読む段で止める（bracketDefault）ので、ここで見る既定値と組んだ形はブロックの行 `~y : 3` だけ。
 function bareRestParam(left) {
   if (!left || left.type !== "seq") return null;
   const tilde = (t) => (!!t && t.type === "atom" && t.pre.includes("~") ? writeTerm(t) : null);
@@ -808,11 +814,6 @@ function bareRestParam(left) {
   for (const t of left.terms) {
     const bare = tilde(t);
     if (bare) return found(bare, false);
-    // 1行の綴りの既定値の括り `[~y : 5]`（行が `名前 : 既定値` 1つの括り）。
-    if (isBareBlock(t, "bracket") && t.core.rows.length === 1) {
-      const hit = found(defaultTilde(t.core.rows[0]), true);
-      if (hit) return hit;
-    }
   }
   return null;
 }
@@ -823,49 +824,22 @@ function bareRestParam(left) {
 // `[y : _]` は断って、`y` か `[y]` と書くよう案内する、でいい？」（14:48 UTC）に U〔答え〕[14:49]（ボタンの文は主の Claude の物）「それでいい。既定値の [y : _] は
 // [~rest : _] と同じく断って、y か [y] と書くよう案内する。片9 に入れて。」。
 // 2026-10-28 の片9b の確かめの直し：括りを重ねた既定値の括り（`[[y : _]]`・`([y : _])`）と、字下げの仮引数のブロックの括りの行（`⇥⇥[y : _]`）も同じ既定値の括り（[x] ≅ x。
-// 解決器も中に `:` のある括りを既定値の口に数える、defaultsSlots）なので、1行1項の括りを剥がしてから見る。前は1行の綴りの `[y : _]` とブロックの `y : _` の行だけを見ていて、
+// 解決器も中に `:` のある括りを既定値の口に数えていた、defaultsSlots。寄せ2 の前）なので、1行1項の括りを剥がしてから見る。前は1行の綴りの `[y : _]` とブロックの `y : _` の行だけを見ていて、
 // `gz : x [[y : _]] ? x + y` は既定値のある口として黙って通った（確かめる人の指摘）。
 // 同じ確かめの直しで、既定値が書いた `_` でなくても `_` と分かる値（未定義の名前・書かなかったことにした `x : _` の名前（R111・R113）・単位律で書いた `_` に縮む綴り
 // `_~`・`[]`・`[_]`・`(_)`・`~_`・`_ , _`・`_ , !_`・`_ _`・右辺がそれらのファイルの値の定義の名前）なら、断る側に倒して G22 で名指しする（unitLikeDefault、§5 Q84）。
 // 利用者の答えが名指ししたのは `[y : _]` だけで、ほかの綴りを同じに読むかは決まっていない。返す物の unit は書いた `_` 以外の `_` と分かる既定値の綴り（言い分を分ける）。
+// 2026-11-04 の寄せ2（R131）から、括りの既定値（1行の `[y : _]`・重ねた `[[y : _]]`・丸い `([y : _])`・ブロックの括りの行 `⇥⇥[y : _]`・括りの中の行）は読む段で止める
+// （bracketDefault）ので、ここで見るのは字下げの仮引数のブロックの `名前 : 既定値` の行だけ（1行の並びには既定値が無い）。
 function unitDefaultParam(left, ctx) {
-  if (!left || left.type !== "seq") return null;
-  // 既定値の中の名前がこの関数の仮引数（`[y : x]` の x）なら、値は呼ばれた所で決まるので見ない（unitLikeDefault）。
+  if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return null;
+  // 既定値の中の名前がこの関数の仮引数（`y : x` の行の x）なら、値は呼ばれた所で決まるので見ない（unitLikeDefault）。
   const own = new Set(parseParams(left).names.map((p) => p.name));
-  // 1行1項の括りを剥がした既定値の括りの行（[x] ≅ x）。括りでなければ null。
-  const rowsOf = (t) => {
-    let b = t;
-    for (let d = 0; d < 64 && isBareBlock(b, "bracket") && b.core.rows.length === 1; d++) {
-      const r = b.core.rows[0];
-      if (!r || r.type !== "seq" || r.terms.length !== 1 || !isBareBlock(r.terms[0], "bracket")) break;
-      b = r.terms[0];
-    }
-    return isBareBlock(b, "bracket") ? b.core.rows : null;
-  };
-  const hit = (row) => {
-    if (!isColonRow(row) || !singleBareName(row.left)) return null;
+  for (const row of left.terms[0].core.rows) {
+    if (!isColonRow(row) || !singleBareName(row.left)) continue;
     const name = singleBareName(row.left);
     if (isUnitRhs(row.right)) return { text: writeTree(row), name };
     if (ctx && !own.has(singleBareName(row.right)) && unitLikeDefault(row.right, ctx)) return { text: writeTree(row), name, unit: writeTree(row.right) };
-    return null;
-  };
-  const inBracket = (t) => {
-    for (const row of rowsOf(t) || []) {
-      const h = hit(row);
-      if (h) return { ...h, text: writeTerm(t) };
-    }
-    return null;
-  };
-  if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
-    for (const row of left.terms[0].core.rows) {
-      const h = row && row.type === "seq" ? (row.terms.length === 1 ? inBracket(row.terms[0]) : null) : hit(row);
-      if (h) return h;
-    }
-    return null;
-  }
-  for (const t of left.terms) {
-    const h = inBracket(t);
-    if (h) return h;
   }
   return null;
 }
@@ -911,11 +885,11 @@ function refuseUnitDefault(u, label) {
   }
   return gate(
     "G22",
-    `${label}の仮引数 \`${u.text}\` は、既定値に書いた \`_\` を置いています。既定値に \`_\` を置いた仮引数は、\`[~rest : _]\` と同じく断ります。値で受けるなら \`${u.name}\`（値の口）、参照で受けるなら \`[${u.name}]\`（参照の口）と書きます（§4 R114）。`
+    `${label}の仮引数 \`${u.text}\` は、既定値に書いた \`_\` を置いています。既定値に \`_\` を置いた仮引数は、\`~rest : _\` と同じく断ります。値で受けるなら \`${u.name}\`（値の口）、参照で受けるなら \`[${u.name}]\`（参照の口）と書きます（§4 R114）。`
   );
 }
 function refuseBareRest(bare, label) {
-  const what = bare.withDefault ? "既定値と組んでいますが（既定値の括り `[名前 : 既定値]` と仮引数のブロックの `名前 : 既定値` の行は、残りを受ける括りではありません）、" : "";
+  const what = bare.withDefault ? "既定値と組んでいますが（仮引数のブロックの `名前 : 既定値` の行は、残りを受ける括りではありません）、" : "";
   return gate(
     "G22",
     `${label}の仮引数 \`${bare.text}\` は、${what}括りの外に前置 \`~\` を付けた裸の仮引数です。裸の \`~xs\` は廃止しました。残りの並びを受けるなら、\`[x ~xs]\` と括って書きます（最後の括りが残りの並び全体を1つの List として受けます。§4 R24・R67${bare.withDefault ? "、§5 Q72" : ""}）。`
@@ -923,7 +897,9 @@ function refuseBareRest(bare, label) {
 }
 
 // 括りの関数（R24 の言葉）の仮引数の並び。括りの関数でなければ null。
-// 括りの関数は、仮引数が裸の名前と括りだけで（括りが1つ以上）、既定値が無い（括りの中にも `:` が無い）関数である。
+// 括りの関数は、仮引数が裸の名前と括りだけで（括りが1つ以上）、既定値が無い（括りの中にも `:` が無い）関数である。2026-11-04 の寄せ2（R131）から、中に `:` のある
+// 括りの仮引数は読む段で止める（bracketDefault）。下の treeHasColon は、読む段より前にファイルの定義を集める所（asDefinition）ではまだ当たるが、その源は読む段で
+// 止まるので答えには出ない（寄せ2 の確かめ）。括りの関数と読まないように残す。
 // 印の付いた仮引数は、R24 の言葉に入らないので今までどおりアリティの分からない関数（other）にする。括りの外の前置 `~`（2026-10-04 に廃止した
 // 裸の `~xs`）も前はここで other にしていたが、2026-10-26 から定義の所で G22 で断る（R67、bareRestParam）。字下げの仮引数のブロックも、行が裸の名前か
 // 既定値なので今までどおり。
@@ -1025,7 +1001,8 @@ function asDefinition(line) {
 }
 
 // P2：同じ範囲の同じ名前と、隠し（仮引数と、ファイルの定義や外の仮引数が同じ名前）を、解く前に全部見る。
-// p2 は P2 を見るか。仮引数の既定値の中の関数（`p : x [z : [w : x 3 ? x]] ? x`）は、名前でない仮引数（R119）だけを見る（2026-11-03 の片イの確かめの直し。前は既定値の中へ
+// p2 は P2 を見るか。仮引数の既定値の中の関数（`p :` ⏎ `⇥⇥x` ⏎ `⇥⇥z : [w : x 3 ? x]` ⏎ `⇥? x`。寄せ2 の前の括りの綴り `p : x [z : [w : x 3 ? x]] ? x` は今は
+// R131 が先に止める）は、名前でない仮引数（R119）だけを見る（2026-11-03 の片イの確かめの直し。前は既定値の中へ
 // 降りず、名前でない仮引数が通った）。既定値の中の関数の P2 の隠しは前から見ていない（§5 Q85 (m)）。
 function checkParamNames(lines, F) {
   const visitTree = (t, outer, p2 = true) => {
@@ -1035,8 +1012,8 @@ function checkParamNames(lines, F) {
       // R119（2026-11-03 の片イ）：仮引数の並びに名前でない項（`g : x 3 ? x` の 3）があれば、文法に無い形なので読む段でファイルごと止める（問2 の答え、parseRow の注。R .92）。
       // 前は口の数の分からない関数（parseParams の other）として通った。括りの関数の本体の中の `?` も、ここで定義の所で止まる。
       const bad = nonNameParam(t.left);
+      const who = F.namedLambdas.has(t) ? `関数 \`${F.namedLambdas.get(t).name}\`` : `関数 \`[${cutShape(writeTree(t))}]\``;
       if (bad) {
-        const who = F.namedLambdas.has(t) ? `関数 \`${F.namedLambdas.get(t).name}\`` : `関数 \`[${cutShape(writeTree(t))}]\``;
         const e = shapeError(
           "param-not-name",
           `${who} の仮引数の並び \`${writeTree(t.left)}\` に、名前でない項 \`${writeTerm(bad.term)}\` があります。仮引数は名前（値の口）か括り（参照の口・残りの並び）で書きます（§3.4・R24）。文法に無い形なので、読む段で止めます（§4 R119）。`,
@@ -1045,6 +1022,10 @@ function checkParamNames(lines, F) {
         // 仮引数のブロックの行なら、その行（R127。2026-11-03 の片イの再確かめの直し：前は `p :` の定義の行を指し、同じブロックの既定値の行の断りと割れた）。
         throw withLine(e, bad.row ? rowTreeLine.get(bad.row) : undefined);
       }
+      // R131（2026-11-04 の寄せ2）：仮引数の括り（参照の口）に既定値は書けない。綴りに依らず、読む段でファイルごと止めて、既定値の行を名指す（R127 の行）。
+      // P2 より前に見るので、括りの綴りのまま書いた name-duplicate・name-shadow・既定値の中の param-not-name・export-mark-position より先に当たる。
+      const dflt = bracketDefault(t.left);
+      if (dflt) throw withLine(refuseBracketDefault(dflt, who, F.namedLambdas.has(t) ? F.namedLambdas.get(t).name : null), rowTreeLine.get(dflt.row));
       const seen = new Set();
       if (p2) {
         const { names } = parseParams(t.left);
@@ -1068,17 +1049,14 @@ function checkParamNames(lines, F) {
       visitTerm(term.right, outer, p2);
     } else if (term.core.rows) term.core.rows.forEach((r) => inRowLine(r, () => visitTree(r, outer, p2)));
   };
-  // 仮引数の並び（`?` の左）の括り・仮引数のブロックの行の、既定値（1項の `:` の右）。中の関数は名前でない仮引数だけを見る（p2 は false）。
+  // 字下げの仮引数のブロックの行の、既定値（`:` の行の右）。中の関数は名前でない仮引数だけを見る（p2 は false）。2026-11-04 の寄せ2（R131）から、括りの中の既定値は
+  // この上の bracketDefault が止めるので、括りの中へは降りない（前は括りの行の `:` の右も見ていた）。
   const visitDefaults = (left, outer) => {
-    if (!left || left.type !== "seq") return;
-    for (const term of left.terms) {
-      if (!term || term.type !== "atom" || !term.core.rows) continue;
-      for (const row of term.core.rows) {
-        inRowLine(row, () => {
-          if (row && row.type === "op" && row.sym === ":") visitTree(row.right, outer, false);
-          else visitDefaults(row, outer);
-        });
-      }
+    if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return;
+    for (const row of left.terms[0].core.rows) {
+      inRowLine(row, () => {
+        if (isColonRow(row)) visitTree(row.right, outer, false);
+      });
     }
   };
   for (const line of lines) {
@@ -1106,6 +1084,106 @@ function nonNameParam(left) {
   }
   const hit = bad(left.terms);
   return hit ? { term: hit, row: null } : null;
+}
+
+// R131（2026-11-04 の寄せ2）：仮引数の括りに書いた既定値（checkParamNames）。既定値は字下げの仮引数のブロックの `名前 : 既定値` の行に書き（ファイルの名前の定義・
+// 構造体の欄・枝の値のブロック・仮引数のブロックの既定値の値の関数。枝の値の関数は返す所の裸の関数で `_`、R125。名前の定義でない3つを残すかは §5 Q86）、括りは
+// 参照の口（呼ぶ側の器を指す口）なので既定値を持たない。当てるのは2つ（並びでない左 `x , [y : 1]`・演算の行・前置の印の付いた括り・中置の項の中も、findTree が見る）：
+//  - inside：仮引数の括り（`[…]`・`(…)`。前置の印に依らない）の中のどこか（入れ子の括りも）に `:` がある。`?` の左の並びの項（1行の `gq : x [y : 1] ? x + y`・
+//    重ねた `[[y : 1]]`・丸い `([y : 1])`・`[~y : 5]`・`[#z : 1]`・`[y : _]`・名前の無い `[x [y : 1] ? x + y]`）と、仮引数のブロックの行の項（`⇥⇥[y : 1]`・複数行の括りの
+//    中の行・カンマの `[foo, bar : foo * 2, ~obj]`）。`:` の有無は、前に既定値のある口に数えていた所（defaultsSlots の withDefault）と同じ treeHasColon で見る。
+//  - left：仮引数のブロックの `:` の行で、左に括りがある（`[x ~xs] : [1 2 3]`・`[y] : 1`・`(y) : 1`。function_guide.md の「分解の形の仮引数にデフォルト値は書けない」）。
+// 当てない物：中に `:` の無い括り（参照の口 `[a b c]`・`[x ~xs]`・`[[a b] c]`）と、ブロックの既定値の右辺（`z : [a : 1]` の `[a : 1]`。右辺へは降りない）。
+// 根拠：U〔答え〕[2026-10-29 13:04:19 32fe4b9c]「外して断る」、U〔答え〕[2026-11-04 06:36:16 159479c9]「断る」（複数行の括りの中の欄の既定値も）、
+// U [2026-11-04 06:42:23 159479c9]「参照の口は、既定値を取れない。 / 理由は、アドレスの直差しをしたければ、本当にアドレスを渡せという話になると考えてる。」。
+// D documents/ja-jp/guide/pattern_guide.md:49「括りの中の仮引数には既定値を書けない（利用者 2026-10-18）」。
+// 見つかれば {term, row, kind, block}（term は名指す括り、row は名指す行で R127 の行を引く、kind は "inside" か "left"、block は `?` の左が字下げの仮引数の
+// ブロックか）、無ければ null。
+function bracketDefault(left) {
+  if (!left) return null;
+  const isBracket = (t) => !!t && t.type === "atom" && t.core.c === "bracket";
+  const inside = (t) => (isBracket(t) && t.core.rows.some(treeHasColon) ? { term: t, row: colonRowIn(t.core.rows), kind: "inside" } : null);
+  // 木の項（中置の両側も。括りの中へは降りない：中は inside が見る）を左から見て、f が返した最初の物。
+  const findTerm = (term, f) => (!term ? null : term.type === "infix" ? findTerm(term.left, f) || findTerm(term.right, f) : f(term));
+  const findTree = (tree, f) => {
+    if (!tree) return null;
+    if (tree.type === "seq") {
+      for (const term of tree.terms) {
+        const h = findTerm(term, f);
+        if (h) return h;
+      }
+      return null;
+    }
+    return findTree(tree.left, f) || findTree(tree.right, f);
+  };
+  if (left.type === "seq" && left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
+    for (const row of left.terms[0].core.rows) {
+      if (!row) continue;
+      if (isColonRow(row)) {
+        // 既定値の行：左の括りは left、右辺（既定値）へは降りない。
+        const b = findTree(row.left, (t) => (isBracket(t) ? t : null));
+        if (b) return { term: b, row, kind: "left", block: true };
+        continue;
+      }
+      const h = findTree(row, inside);
+      if (h) return { ...h, block: true };
+    }
+    return null;
+  }
+  const h = findTree(left, inside);
+  return h ? { ...h, block: false } : null;
+}
+// 括りの行 rows の中で、`:` を持ついちばん内の行（R127 の行の粒度。入れ子の括りの中の行も）。行の木でない所の `:` なら、それを含む行。
+function colonRowIn(rows) {
+  for (const row of rows) {
+    if (!treeHasColon(row)) continue;
+    if (isColonRow(row)) return row;
+    return innerColonRow(row) || row;
+  }
+  return null;
+}
+function innerColonRow(tree) {
+  if (!tree) return null;
+  if (tree.type === "seq") {
+    for (const term of tree.terms) {
+      const r = termColonRow(term);
+      if (r) return r;
+    }
+    return null;
+  }
+  return innerColonRow(tree.left) || innerColonRow(tree.right);
+}
+function termColonRow(term) {
+  if (!term) return null;
+  if (term.type === "infix") return termColonRow(term.left) || termColonRow(term.right);
+  return term.core.rows ? colonRowIn(term.core.rows) : null;
+}
+function refuseBracketDefault(hit, who, name) {
+  const term = cutShape(writeTerm(hit.term));
+  const row = cutShape(writeTree(hit.row));
+  const slot = isColonRow(hit.row) ? singleBareName(hit.row.left) : null;
+  // 書き直す先。既定値が `_` と書いた綴り（`[y : _]`・`[y] : _`。書いた `_`・単位律で `_` に縮む綴り）なら、既定値の行へ移しても R114（G22）が断るので、口の綴りを
+  // 見せる（§4 R114。寄せ2 の確かめの直し）。ファイルの名前の定義なら、その名前で書き直す先を見せる。`?` の左がもう字下げの仮引数のブロック（構造体の欄・枝の値の
+  // 関数、§5 Q86）なら、そのブロックの行を言う。ほか（括りの `?`・`$[…]`）は仮引数のブロックの綴りが無いので、名前の定義にするよう言う。
+  const unitRhs = isColonRow(hit.row) && (isUnitRhs(hit.row.right) || unitSpelled(hit.row.right));
+  const where = unitRhs
+    ? slot && hit.kind === "inside"
+      ? `既定値に \`_\` を置く口は要りません。値で受けるなら \`${slot}\`（値の口）、参照で受けるなら \`[${slot}]\`（参照の口）と書きます（§4 R114）`
+      : `既定値に \`_\` を置く口は要りません。参照で受けるなら \`${term}\` とだけ書きます（§4 R114）`
+    : name
+      ? `既定値は、字下げの仮引数のブロックの行に書きます（\`${name} :\` ⏎ \`⇥⇥${slot ? row : "名前 : 既定値"}\` ⏎ \`⇥? …\`）`
+      : hit.block
+        ? "既定値は、この仮引数のブロックの `名前 : 既定値` の行に書きます"
+        : "既定値は、字下げの仮引数のブロックの行（`名前 : 既定値`）に書きます。括りの `?` と `$[…]` には仮引数のブロックの綴りが無いので、既定値を使うなら名前の定義にします";
+  const what =
+    hit.kind === "left"
+      ? `${who} の仮引数のブロックの行 \`${row}\` は、括り \`${term}\` に既定値を付けています。`
+      : `${who} の仮引数の括り \`${term}\` に、既定値の行 \`${row}\` があります。`;
+  return shapeError(
+    "param-default-bracket",
+    `${what}括りは参照の口（呼ぶ側の器を指す口）で、既定値を持ちません。番地を直に指したいなら、呼ぶ側が番地を渡します。${where}。文法に無い形なので、読む段で止めます（§4 R131）。`,
+    "§4 R131"
+  );
 }
 
 // R119（2026-11-03 の片イ）：前置 `#` は公開の印で、定義する名前（1項の `:` の左）に付ける（asDefinition・isNameTarget）。使う所の前置 `#` の項（`#zq 5`・`5 #zq`・
@@ -1139,17 +1217,13 @@ function refuseExportMarkUse(lines, F) {
       });
     }
   };
-  // 仮引数の並びの括り・仮引数のブロックの行の、既定値（1項の `:` の右）だけを見る。
+  // 字下げの仮引数のブロックの行の、既定値（`:` の行の右）だけを見る。括りの中の既定値は、先に checkParamNames が止める（R131、2026-11-04 の寄せ2）。
   const visitDefaults = (left) => {
-    if (!left || left.type !== "seq") return;
-    for (const term of left.terms) {
-      if (!term || term.type !== "atom" || !term.core.rows) continue;
-      for (const row of term.core.rows) {
-        inRowLine(row, () => {
-          if (row && row.type === "op" && row.sym === ":") visitTree(row.right);
-          else visitDefaults(row);
-        });
-      }
+    if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return;
+    for (const row of left.terms[0].core.rows) {
+      inRowLine(row, () => {
+        if (isColonRow(row)) visitTree(row.right);
+      });
     }
   };
   const visitTerm = (term) => {
@@ -2260,6 +2334,9 @@ function chainFrom(F, i) {
 // h を通ったことが見えず、vk → k → h → vk の輪が黙って抜けた（7 文の並べ方 5040 のうち 1680）。だから、例外で抜けた枠を
 // 輪の依りに持つ記録には、未知でも古いと印を付け、次に読まれたときに解き直す。未知の記録を解き直しても、「仮置きの記録」の
 // 注の「単調」により未知のままなので、答えは変わらない（変わるのは、輪を見つけるかだけ）。
+// 2026-11-04 の寄せ2（R131）から、名前の無い関数（括りの `?`・`$[…]`）は既定値を持てない（`[[y : v 2] ? 5]` は読む段で止まる）。試験の dz の形（`dz :` ⏎
+// `⇥⇥y : v 2` ⏎ `⇥? 5` と `g : x ? dz x`）は同じ輪を断るが、dz の既定値を覗くのは dz の定義の行なので、例外で抜けた枠を通らない（この印を外す変異でも通る）。
+// この印を試すのは、枝の値のブロックに仮引数のブロックで書いた関数の行（`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`。§5 Q86）だけ（寄せ2 の確かめ）。
 //
 // 残る割れ（§5 Q30 の未決、HEAD から）：輪を閉じる道が、仮置きの上でだけ通る形。`pb : [y ~ys] ? y + 1`・`g : x ? ⏎ ⇥pb [k x]
 // ⏎ ⇥ek`・`k : x ? pb [g x]`・`ek : k 1`・`pf : g 1` は、ek が先なら k の仮置き（A）の上で g の本体が行 `ek` まで進んで
@@ -2456,31 +2533,25 @@ function finishFrame(F, frame, memo, value) {
 // 既定値のある口に当たれば既定値という値（defaultUnit・tryHole）、ほかは消える（片イの R126 の前は、位置が数えられなければ G15）ので、実体の鍵にも入れる。
 // 値の口の位置（bareAt、2026-10-27 の R94）：前から数えた仮引数ごとに、値の口（裸の名前か、既定値のある口）か。括りの仮引数（`[a b]`）は参照の口で false。
 // 書いた `[]` が値の口に着いたら、同じ位置に書いた `_` と同じに読む（R94、valuePortOf・emptyArgsAtValue）ので、どの口が値の口かを持つ。n が数えられなければ null。
+// 2026-11-04 の寄せ2（R131）から、既定値を書けるのは字下げの仮引数のブロックの `名前 : 既定値` の行だけ（括りの中の既定値は読む段で止める、bracketDefault）。
+// だから既定値のある関数の `?` の左はいつも仮引数のブロックで、defaultsBare・defaultsSlots・defaultsArity もブロックの行だけを数える（前は1行の並びの中に `:` の
+// ある括り `[x : 1]` も既定値のある口に数えていた）。
 function otherFn(left) {
   if (!left || !treeHasColon(left)) return { type: "other" };
   const n = defaultsArity(left);
   return { type: "other", defaults: true, n, defaultAt: n === null ? null : defaultsSlots(left), bareAt: n === null ? null : defaultsBare(left) };
 }
 
-// 既定値のある関数の、仮引数ごとの「値の口か」（R94）。数え方は defaultsArity・defaultsSlots と同じで、値の口は、裸の名前・`名前 : 既定値` の行・中に `:` のある括り
-// （`[x : 1]`。括りは既定値を書く綴りで、受けるのは裸の名前 x）。ほかの括り（`[a b]`）は括りの仮引数（参照の口）。
+// 既定値のある関数の、仮引数ごとの「値の口か」（R94）。数え方は defaultsArity・defaultsSlots と同じで、値の口は、裸の名前の行と `名前 : 既定値` の行。
+// 括りの行（`[a b]`）は括りの仮引数（参照の口）。
 function defaultsBare(left) {
-  const withDefault = (t) => isBareBlock(t, "bracket") && t.core.rows.some(treeHasColon);
-  const bare = (t) => !!bareName(t) || withDefault(t);
-  if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
-    return left.terms[0].core.rows.map((row) => row.type === "op" || bare(row.terms[0]));
-  }
-  return left.terms.map(bare);
+  return left.terms[0].core.rows.map((row) => row.type === "op" || !!bareName(row.terms[0]));
 }
 
 // 既定値のある関数の、仮引数ごとの「既定値のある口か」（R39）。数え方は defaultsArity と同じで、既定値のある口は、仮引数の
-// ブロックの `名前 : 既定値` の行と、中に `:` のある括り（`[x : 1]`）。
+// ブロックの `名前 : 既定値` の行。
 function defaultsSlots(left) {
-  const withDefault = (t) => isBareBlock(t, "bracket") && t.core.rows.some(treeHasColon);
-  if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
-    return left.terms[0].core.rows.map((row) => row.type === "op" || withDefault(row.terms[0]));
-  }
-  return left.terms.map(withDefault);
+  return left.terms[0].core.rows.map((row) => row.type === "op");
 }
 
 // 既定値のある関数の仮引数の数（§3.4 の言葉。既定値のある仮引数も1つ）。1つと数えるのは、裸の名前・括り（R24 と同じく
@@ -2489,15 +2560,13 @@ function defaultsSlots(left) {
 // 穴がどの口を占めるかを外れた n で決める（`gz :` ⏎ `⇥⇥a b` ⏎ `⇥⇥c : 3` ⏎ `⇥? a` の `gz !_ 3` が、仮引数3つの関数を
 // k = 2 の穴にした）ので、決めない（null。`!_` は G7 で断る）。
 function defaultsArity(left) {
-  if (!left || left.type !== "seq") return null;
+  // 既定値のある関数の左は仮引数のブロック（R131。上の otherFn の注）。ブロックでなければ数えない。
+  if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return null;
   const isParamTerm = (t) => !!bareName(t) || isBareBlock(t, "bracket");
-  if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
-    const one = (row) =>
-      !!row && ((row.type === "seq" && row.terms.length === 1 && isParamTerm(row.terms[0])) || (row.type === "op" && row.sym === ":" && !!singleBareName(row.left)));
-    const rows = left.terms[0].core.rows;
-    return rows.every(one) ? rows.length : null;
-  }
-  return left.terms.every(isParamTerm) ? left.terms.length : null;
+  const one = (row) =>
+    !!row && ((row.type === "seq" && row.terms.length === 1 && isParamTerm(row.terms[0])) || (row.type === "op" && row.sym === ":" && !!singleBareName(row.left)));
+  const rows = left.terms[0].core.rows;
+  return rows.every(one) ? rows.length : null;
 }
 
 // 名前の種類（§2「ファイルの定義の名前」）。`?` なら L、それ以外は右辺を解いた根の種類。値なら中身の形も持つ（R24：
@@ -5956,12 +6025,12 @@ function isNameTarget(term) {
 // 実体が作れず、関数は defer になって本体の門が黙って消える（確かめ 2026-10-19 の F3。n_queens.sn の `(conflict col 1 board) : …` がそうだった）。
 // 1項の左を条件として解くかは P3 の話で、仕様が決めていないので、ここでは読まずに名指しで断る（G7、断る側）。2026-11-04 の寄せ1（R128、細目3）から、関数の本体
 // （と枝の値のブロック）の枝の条件は1項でも `&` の左と同じに解く（resolveBranch）ので実体が作れ、その分（n_queens の形も）はここに来ない。残るのは括りの中の行の
-// 1項の `:` の左と既定値（`[z : pb1 [1]]`）。
+// 1項の `:` の左と既定値（仮引数のブロックの行 `z : pb1 [1]`。2026-11-04 の寄せ2（R131）の前は括りの `[z : pb1 [1]]` も）。
 // 片イ（R126）の作る途中の版は、素の関数なら同じ所から呼んでも通るので解決器の遅れと読んで、この G7 を外していた（そこからしか呼ばれない括りの関数は defer の
 // まま「走らない」とした）。枝の条件は呼ばれた関数が条件を確かめるたびに、既定値はその口が空のたびに値の段で走るので「走らない」は成り立たず、本体の門
 // （`bad : [y] ? [[g5] ? g5] !_ 1` の G5）が黙って消えた（2026-11-03 の片イの確かめの指摘）。外すのは実体を作れるようにしてから（§5 Q85 (j)）。
 // 「呼んでいる」は、解かずに字面で見る：括りの関数が2項以上の並びの項にある（適用・合成のどれかになる。値の後ろに積まれて何も受けない形（`5 h`）も、
-// 字面では見分けないので断る側に数える）。1項だけ（`[z : inc]` の inc、`(t)`）は関数を値として書いただけで、`$` で渡すのと同じく実体を作らないので断らない。
+// 字面では見分けないので断る側に数える）。1項だけ（既定値の行 `z : inc` の inc、`(t)`）は関数を値として書いただけで、`$` で渡すのと同じく実体を作らないので断らない。
 // 素の関数は定義の行で本体を読むので、ここには関わらない。
 // 覗くのは namesPattern で、輪（§5 Q30）も見る：枝の条件を覗いた所を通る輪は断り（未決、断る側）、既定値を覗いた所を通る輪は輪に数えない（namesPattern の注）。
 // 括りの関数を見つけた所で止める（前の G7 を探す所と同じ順）。
@@ -6060,15 +6129,17 @@ function namesPattern(name, ctx, inDefault) {
     if (e.guard) taint(F); // 守りの断りを握りつぶす：この先の計算は汚れる（taint）
     if (e.reason !== "name-cycle") return false; // 門は、その定義の行を解くときに出る
     // 名前の輪（§5 Q30）。既定値の中を覗いた所を通る輪（輪のいちばん下の枠が、覗く前から解いている途中）は、種類の輪では
-    // ない。既定値は解かず（P3）、値の無で呼ばれたときにだけ評価する（§3.7）ので、値はできる（`v : g 1`・`g : x ? [[y : v 2]
-    // ? 5] x` は v = 5）。覗くのは G7（R25）を探すためだけで、行を解く段（枠が空）で、確定した種類でもう一度覗く。だから
+    // ない。既定値は解かず（P3）、値の無で呼ばれたときにだけ評価する（§3.7）ので、値はできる（寄せ2 の前の `v : g 1`・`g : x ? [[y : v 2]
+    // ? 5] x` は v = 5。R131 から名前の無い関数は既定値を持てないので、今ここに届くのは枝の値のブロックの仮引数のブロックの関数の既定値
+    // （`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`、§5 Q86）だけ。名前の関数の既定値は、その定義の行（枠が空）でしか覗かない）。覗くのは G7（R25）を探すためだけで、行を解く段（枠が空）で、確定した種類でもう一度覗く。だから
     // 握りつぶして「括りの関数ではない」と読み、作った言い分（F.cycleRefused）も覗く前に戻す。前（2026-10-20 の作り直し）は
     // 投げ直していて、HEAD がどの並べ方でも通していた、値のできるプログラムを name-cycle で断った（確かめ 2026-10-20 の
     // Q30-V1・ADV-1）。
     // 覗いた定義の計算の中だけで閉じる輪（輪のいちばん下の枠が、覗いてから積んだ物）は、覗いた所を通らない本物の輪なので、
     // 投げ直す（`a : g 1`・`g : x ? [[y : v 2] ? 5] x`・`v : h 1`・`h : x ? ⏎ ⇥k x ⏎ ⇥vk ⏎ ⇥inc`・`k : x ? ⏎ ⇥h x ⏎ ⇥inc`・
     // `vk : k 1` の vk → k → h → vk）。前の作り（例外で抜けた枠を輪の依りに持つ記録に印を付けない）で全部を握りつぶすと、a が先
-    // なら黙って通った（5040 のうち 1680）。今は、握りつぶしても後の計算が印から同じ輪をもう一度見つける（確かめ 2026-10-20、
+    // なら黙って通った（5040 のうち 1680）。g の本体の無名の関数の綴りは寄せ2（R131）の前の物で、今の試験は名前の関数 `dz` にした形（上の「例外で抜けた枠」の注）。
+    // 今は、握りつぶしても後の計算が印から同じ輪をもう一度見つける（確かめ 2026-10-20、
     // 生成器 1 万本で、全部を握りつぶす写しと答え・輪の道筋が同じ）が、見つけた本物の輪を捨てる理由が無いので、断る側に置く。
     // 1項の `:` の左（枝の条件）を覗いた所を通る輪は、投げ直す（断る側。§5 Q30 の未決）。枝の条件も解かない（P3）が、本体を
     // 実行すれば評価するので、値は本当にできない（`v : (g 1) , 1`・`g : x ? ⏎ ⇥(v 2) : 1`）。ただ、覗くのは値の定義の名前だけ
@@ -6376,7 +6447,7 @@ function sectionTerm(term) {
 // 括りの関数は、ここでは本体を解かない（R25）。木は resolve の最後に、集めた実体で埋める（patternNode）。
 // 本体の根に残った裸の関数か区間の綴りは、resolveBody が `_` にする（R125。前は G16）。
 // 片イ（R118 の続き）：lambda の節は、どれも書いた `?`（前段の項）を op に持つ（括りの関数は pattern.op と同じ物）。値の段（解釈器）が実引数を当てて本体を読む時、
-// 仮引数の並びと既定値（`?` の左は解かない、P3）を木から辿るため。前は既定値のある関数（`gf : [y : 1] ? y`・仮引数のブロックの `y : 1` の行）の仮引数が paramsText の
+// 仮引数の並びと既定値（`?` の左は解かない、P3）を木から辿るため。前は既定値のある関数（仮引数のブロックの `y : 1` の行。寄せ2（R131）の前は括りの `gf : [y : 1] ? y` も）の仮引数が paramsText の
 // 綴りにしか無く（fn も op を持たない、otherFn）、綴りを読み直すしかなかった。綴り（show）は変わらない。
 function resolveLambda(op, ctx) {
   if (isSection(op)) {
@@ -7463,7 +7534,7 @@ function defaultUnit(s, x) {
 // U〔答え〕[2026-10-27 12:46 58a809c9]「既定値で埋める。 / 埋めないなら、 !_ で穴であると明示」。
 // 埋めるのは評価する所だけ（主の Claude の読み、R）：並びの中で後ろに実引数が続けばその口に入る（`gq 1 5` は y が 5。左結合でも内側は評価する所ではない）。
 // 「既定値でない口が全部埋まった時」に埋めると、左結合の `gq 1 5` で y に実引数を渡せなくなる。評価する所の外（括りの中・`:` の右辺）は部分適用のまま（`w : gq 1` の w）。
-// 埋めずに関数として残すなら `!_` で穴を明示する（`gq 1 !_` は穴の関数で、評価する所では余ったラムダの `_`、R42）。何も受けていない関数（既定値の口だけの `gf : [y : 1] ? y`
+// 埋めずに関数として残すなら `!_` で穴を明示する（`gq 1 !_` は穴の関数で、評価する所では余ったラムダの `_`、R42）。何も受けていない関数（既定値の口だけの `gf :` ⏎ `⇥⇥y : 1` ⏎ `⇥? y`
 // の `gf`）は部分適用ではないので埋めない（R42 の余ったラムダ。§5 の問いに残した）。位置の数えられない段（撒く項を受けた・n が数えられない）も埋めない。
 function fillDefaults(st) {
   const top = st.stack[st.stack.length - 1];
