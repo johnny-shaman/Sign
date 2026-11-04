@@ -7878,6 +7878,9 @@ const r130Lines = [
 	["枝の値に置いた関数の本体の中も同じ", src(["t : x ?", "\tg : y ?", "\t\ty", "\t\tz : 1", "\t\ty", "\tx", "", "t 1"]), "body-bare-row-between", 3],
 	// 呼ばない括りの関数の本体も、素の関数と同じく定義の行で止める（R119 の線。確かめ2人目の変異 M5 が素通りした所の守り）。
 	["呼ばない括りの関数の本体の枝の前の裸の行", src(["bf : [a] ?", "\tinc a", "\ta > 0 : 1", "\t0", ""]), "body-bare-row-between", 2],
+	// 案内の example.sn の「コンストラクタのような記述」を括らずに書いた形。括らない本体なので `@etc : x` は枝（R128）で、前の裸の行2つが R130 に当たる
+	// （寄せ1 の前も木は `(block name age (: @etc x))` で、構造体ではなかった）。構造体を返すなら括る（下の bracketBodyPasses の Person）。
+	["括らないコンストラクタの本体（構造体にならない）", src(["Person : name age etc x ?", "\tname", "\tage", "\t@etc : x", "", "john : Person `john` 18 $`Like` `Sushi`"]), "body-bare-row-between", 2],
 ];
 for (const [name, s, want, line] of r130Lines) {
 	total++;
@@ -7950,6 +7953,25 @@ for (const [name, s, want] of yose1ConditionRefused) checkRefused(name, s, want)
 		else fail(`言い分 寄せ1 bare-function-return ${name}`, `次へ ${g}/${goesOn}・返す ${r}/${returns}`, ...msgs);
 	}
 }
+
+// 寄せ1 の R128 の外：括った関数の本体（`? [` ⏎ 字下げの行 ⏎ `]`）の行は枝でなく、返す構造体の欄（細目2。match_case.md「`?` 直後のトークンが Indent か `[` か
+// でどちらの構文かを一意に判定する」、function_guide.md のフィールド名の省略記法）。木は括りのまま（`[…]`、枝の節 `(: c v)` を作らない）で、裸の行（省略記法）と
+// `:` の行が混ざっても R130 に当たらない。値の段は器の片で「まだ」（interpret.test.js）。木は寄せ1 の前と同じ。利用者の問い（2026-11-04）「括った function body 内
+// では、枝ではなく返すべき構造体の定義になる。これは大丈夫？」から足した守りで、前はこの形の試験が1本も無かった。
+const bracketBodyPasses = [
+	["括った本体の省略記法だけ（function_guide.md の f 1 2）", src(["f : x y ? [", "\tx", "\ty", "]", "", "f 1 2"]), "(: f (? [x y] [x ⏎ y]))"],
+	["括った本体の省略記法と欄（裸の行が `:` の行の前）", src(["f : x y ? [", "\tx", "\tb : x + y", "]", "", "f 1 2"]), "(: f (? [x y] [x ⏎ b : x + y]))"],
+	["括った本体の裸の行が `:` の行の前後に3つ（本体なら R130）", src(["f : x y ? [", "\tx", "\tb : x + y", "\ty", "\tx", "]", "", "f 1 2"]), "(: f (? [x y] [x ⏎ b : x + y ⏎ y ⏎ x]))"],
+	["括った本体の欄だけ（match_case.md の Point）", src(["Point : x y ? [", "\tx : x", "\ty : y", "]", "", "Point 1 2"]), "(: Point (? [x y] [x : x ⏎ y : y]))"],
+	["括った本体の欄が隣の欄を引く", src(["g : x ? [", "\ty : x + 1", "\tz : y * 2", "]", "", "g 1"]), "(: g (? [x] [y : x + 1 ⏎ z : y * 2]))"],
+	["括った本体の欄の後ろに撒く行（list_model.md の set_foo）", src(["set_foo : v [~this] ? [", "\tfoo : v", "\tthis~", "]", "", "set_foo 1 [foo : 0]"]), "(: set_foo (? [v [~this]] (inst A {foo:N} [foo : v ⏎ this~])))"],
+	["括った本体の欄の値に括りを入れ子（example.sn の regreet）", src(["regreet : [~this] ? [", "\tgreet : [", "\t\twelcome : `w`", "\t\t(this ' greet)~", "\t]", "\tworld : `m`", "\tthis~", "]", "", "regreet [greet : [hi : `h`]]"]), "(: regreet (? [[~this]] (inst {greet:{hi:[N…]}} [greet : [welcome : `w` ⏎ [this ' greet]~] ⏎ world : `m` ⏎ this~])))"],
+	["括ったコンストラクタの本体（example.sn の Person を括った形）", src(["Person : name age etc x ? [", "\tname", "\tage", "\t@etc : x", "]", "", "john : Person `john` 18 $`Like` `Sushi`"]), "(: Person (? [name age etc x] [name ⏎ age ⏎ @etc : x]))"],
+	["括った本体の比べを左に置いた行も欄の行（枝の節にしない）", src(["g : x ? [", "\tx > 0 : 1", "\ty : 2", "]", "", "g 1"]), "(: g (? [x] [x > 0 : 1 ⏎ y : 2]))"],
+	["括らない本体の行に置いた括りの中の行は欄", src(["g : x ?", "\t[", "\t\ty : x + 1", "\t\tz : 2", "\t]", "", "g 1"]), "(: g (? [x] (block [y : x + 1 ⏎ z : 2])))"],
+	["枝の値に置いた括りの中の行は欄（外の行は枝）", src(["g : x ?", "\tx > 0 : [", "\t\ty : x + 1", "\t\tz : 2", "\t]", "\t0", "", "g 1"]), "(: g (? [x] (block (: (> x 0) [y : x + 1 ⏎ z : 2]) 0)))"],
+];
+for (const [name, s, want] of bracketBodyPasses) checkPass(`寄せ1 ${name}`, s, want, null, { at: 0 });
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
