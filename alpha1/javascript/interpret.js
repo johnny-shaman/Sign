@@ -471,12 +471,14 @@ function evalBlock(cx, rows, env, outer) {
       const r = rows[i];
       const line = lineAt(r);
       const last = i === rows.length - 1;
+      // 枝の前か間の裸の行と2つ目からの既定の行は、読む段が名指しして止める（寄せ1 の R130、body-bare-row-between）ので、ここには来ない。来たら読む段の
+      // 抜けなので、言語の `_` に倒さず「まだ」で止める。
       if (!isOp(r, ":")) {
-        if (!last) throw notYet("枝の間に置いた既定の行", line);
+        if (!last) throw notYet("枝の間に置いた既定の行（読む段の R130 の抜け）", line);
         return evalRow(cx, r, env, line, "tail");
       }
-      // 本体の `:` の行は左が何でも枝（U〔答え〕10-29 12:18「ガイドに戻す」）。解決器は左が名前1つの行をまだ局所の定義と読む（R80）ので、寄せの片まで止める。
-      if (singleTerm(r.left) && bareName(singleTerm(r.left)) !== null) throw notYet("本体の、左が名前1つの `:` の行（寄せの片）", line);
+      // 本体の `:` の行は左が何でも枝で、何も定義しない（寄せ1 の R128、U〔答え〕10-29 12:18「ガイドに戻す」）。左が名前1つでも、条件として読む（未定義の名前は `_`）。
+      // 最後でない枝の値は末尾でない（値が `_` なら次の枝へ進むので、値を見るまで戻れない。R129）。
       if (sideValue(cx, r.left, env, line) === UNIT) continue;
       if (last) return evalRow(cx, r.right, env, line, "tail");
       const v = sideValue(cx, r.right, env, line);
