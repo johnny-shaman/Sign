@@ -97,7 +97,7 @@
  * 答えが出たときに、その形が黙った誤答として残るからである。断った形は、答えが出たら試験の「断られる」側から「通る」側へ移す。
  *
  * 入り口は `resolve(source)` の1つで、`{ trees, diagnostics, rows, lineOf }` を返す（rows は書いた行の木、lineOf は行の木から元のソースの行を引く関数で、値の段 interpret.js が読む）。trees は1行に1つの木、diagnostics は
- * 止めない診断（information の undefined-name・pointfree-not-folded・bracket-excess・erased-unit-shadow・bare-function-return と、warning の leftover-lambda・dollar-non-function。各要素は元のソースの行 line を持つ、R127。重さは DIAG_SEVERITY の1か所）。門に当たったら OperationError を投げる（reason は §6.2 の名前、
+ * 止めない診断（information の undefined-name・pointfree-not-folded・bracket-excess・erased-unit-shadow・bare-function-return・name-shadow（R133）と、warning の leftover-lambda・dollar-non-function。各要素は元のソースの行 line を持つ、R127。重さは DIAG_SEVERITY の1か所）。門に当たったら OperationError を投げる（reason は §6.2 の名前、
  * spec は `…§6.2 G2(a)` のように門の番号まで、`gate` に門の番号）。
  *
  * **木の書き方（`show`）**。§1.3・§6.3 の S 式に合わせ、無い所はここで決めた。
@@ -682,7 +682,7 @@ function isBareBlock(term, c) {
 }
 
 // 仮引数の並びの中の名前（P2）。`:` の右に書いた物は既定値で、仮引数ではないので数えない。
-// 既定値の右の名前まで数えると、`z : inc` の `inc` を仮引数と読み、ファイルの定義を隠すと誤って断る。2026-11-04 の寄せ2（R131）から括りの中の `:` は読む段で
+// 既定値の右の名前まで数えると、`z : inc` の `inc` を仮引数と読み、ファイルの定義を隠すと誤って知らせる（寄せ3 の R133 から name-shadow は知らせ。前は誤って断った）。2026-11-04 の寄せ2（R131）から括りの中の `:` は読む段で
 // 止める（bracketDefault）ので、答えに出る `:` は字下げの仮引数のブロックの、左が名前1つでない既定値の行（`a b : inc`。parseParams）だけ（読む段より前に定義を
 // 集める所 asDefinition には括りの中の `:` も来るが、その源は読む段で止まる）。
 function forEachParamNameInTree(tree, cb) {
@@ -787,6 +787,53 @@ function parseParams(left) {
   }
   return { plain: plain && names.length > 0, names };
 }
+// 字下げの仮引数のブロックの1行が書く仮引数の名前（parseParams と同じ読み：名前1つの行・`名前 : 既定値` の行の左・ほかの行の中の名前）。
+function blockRowParamNames(row) {
+  const n = singleBareName(row);
+  if (n) return [n];
+  if (row && row.type !== "seq" && row.sym === ":" && singleBareName(row.left)) return [singleBareName(row.left)];
+  const out = [];
+  forEachParamNameInTree(row, (x) => out.push(x));
+  return out;
+}
+// `?` の仮引数が縛る範囲（2026-11-04 の寄せ3、R133「内側が勝つ」）。仮引数は、ファイルの定義や外の関数の仮引数と同じ綴りでも、その関数の中では仮引数を指す。
+// 既定値の行の右（`y : 式` の式）には前の仮引数までが見え（D documents/en-us/guide/function_guide.md:104 の "preceding parameters"、ja-jp の同じ所の `y : x + 1` ⏎
+// `z : y + 1`）、本体には全部の仮引数が見える。{tree, bound, body} の並び（既定値の行の右が書いた順に先、本体が最後）。bound はその木で縛られる仮引数の名前、
+// body は本体か（既定値の行の右なら row にその行）。仮引数の名前そのもの（`?` の左の名前）は入らない。2026-11-04 の寄せ2（R131）から既定値は字下げの仮引数のブロックの行だけに書く（括りの中の
+// `:` は読む段で止める）ので、ブロックでない左には既定値の木が無い。
+function lambdaScopes(op) {
+  const parts = [];
+  const l = op.left;
+  if (l && l.type === "seq" && l.terms.length === 1 && isBareBlock(l.terms[0], "indent")) {
+    const prev = [];
+    for (const row of l.terms[0].core.rows) {
+      if (row && row.type !== "seq" && row.sym === ":") parts.push({ tree: row.right, bound: [...prev], body: false, row });
+      prev.push(...blockRowParamNames(row));
+    }
+  }
+  parts.push({ tree: op.right, bound: parseParams(l).names.map((p) => p.name), body: true });
+  return parts;
+}
+// 木の中の、縛られていない名前（入れ子の `?` の仮引数が縛る名前を除く。lambdaScopes。forEachNameInTree は縛られた名前と仮引数の名前も数える）。
+function forEachFreeNameInTree(tree, cb, bound = new Set()) {
+  if (!tree) return;
+  if (tree.type === "seq") return tree.terms.forEach((t) => forEachFreeNameInTerm(t, cb, bound));
+  if (tree.sym === "?") {
+    for (const part of lambdaScopes(tree)) forEachFreeNameInTree(part.tree, cb, part.bound.length ? new Set([...bound, ...part.bound]) : bound);
+    return;
+  }
+  forEachFreeNameInTree(tree.left, cb, bound);
+  forEachFreeNameInTree(tree.right, cb, bound);
+}
+function forEachFreeNameInTerm(term, cb, bound) {
+  if (!term) return;
+  if (term.type === "infix") {
+    forEachFreeNameInTerm(term.left, cb, bound);
+    forEachFreeNameInTerm(term.right, cb, bound);
+  } else if (term.core.c === "name") {
+    if (!bound.has(term.core.name)) cb(term.core.name);
+  } else if (term.core.rows) term.core.rows.forEach((r) => forEachFreeNameInTree(r, cb, bound));
+}
 
 // R67（2026-10-26、G22）：仮引数の括りの外の前置 `~`（裸の `~xs`）。`?` の左の並びの項（`gx : a ~y ? a`）と、字下げの仮引数のブロックの、項1つの行
 // （`gw :` ⏎ `⇥⇥a` ⏎ `⇥⇥~y` ⏎ `⇥? a`）を見る。括りの中の `[~c]`・`[x ~xs]` は残りを受ける綴りで、当たらない。見つかれば書いた綴り、無ければ null。
@@ -833,13 +880,18 @@ function bareRestParam(left) {
 // （bracketDefault）ので、ここで見るのは字下げの仮引数のブロックの `名前 : 既定値` の行だけ（1行の並びには既定値が無い）。
 function unitDefaultParam(left, ctx) {
   if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return null;
-  // 既定値の中の名前がこの関数の仮引数（`y : x` の行の x）なら、値は呼ばれた所で決まるので見ない（unitLikeDefault）。
-  const own = new Set(parseParams(left).names.map((p) => p.name));
+  // 既定値の中の名前がこの関数の前の仮引数（`x` ⏎ `y : x` の行の x）なら、値は呼ばれた所で決まるので見ない（unitLikeDefault）。
+  // R133（2026-11-04 の寄せ3）：既定値の行の右に見えるのは前の仮引数まで（lambdaScopes の既定値の範囲と同じ）。後ろの仮引数と自分の名前は外の名前を指すので、
+  // 外の名前として見る（`e0 : []` ⏎ `t :` ⏎ `⇥⇥y : e0` ⏎ `⇥⇥e0` ⏎ `⇥? y` の e0 はファイルの `[]` で G22）。寄せ3 の確かめの直し：前はこの関数の仮引数を全部見える側に
+  // 数えていて、後ろの仮引数か自分の名前をファイルの定義と同じ綴りにすると、G22 が name-shadow の知らせだけになって黙って通った（α 同値の5つ目の割れ）。
+  const prev = new Set();
   for (const row of left.terms[0].core.rows) {
-    if (!isColonRow(row) || !singleBareName(row.left)) continue;
-    const name = singleBareName(row.left);
-    if (isUnitRhs(row.right)) return { text: writeTree(row), name };
-    if (ctx && !own.has(singleBareName(row.right)) && unitLikeDefault(row.right, ctx)) return { text: writeTree(row), name, unit: writeTree(row.right) };
+    const name = isColonRow(row) ? singleBareName(row.left) : null;
+    if (name) {
+      if (isUnitRhs(row.right)) return { text: writeTree(row), name };
+      if (ctx && !prev.has(singleBareName(row.right)) && unitLikeDefault(row.right, ctx)) return { text: writeTree(row), name, unit: writeTree(row.right) };
+    }
+    for (const n of blockRowParamNames(row)) prev.add(n);
   }
   return null;
 }
@@ -1000,14 +1052,34 @@ function asDefinition(line) {
   return def;
 }
 
-// P2：同じ範囲の同じ名前と、隠し（仮引数と、ファイルの定義や外の仮引数が同じ名前）を、解く前に全部見る。
-// p2 は P2 を見るか。仮引数の既定値の中の関数（`p :` ⏎ `⇥⇥x` ⏎ `⇥⇥z : [w : x 3 ? x]` ⏎ `⇥? x`。寄せ2 の前の括りの綴り `p : x [z : [w : x 3 ? x]] ? x` は今は
-// R131 が先に止める）は、名前でない仮引数（R119）だけを見る（2026-11-03 の片イの確かめの直し。前は既定値の中へ
-// 降りず、名前でない仮引数が通った）。既定値の中の関数の P2 の隠しは前から見ていない（§5 Q85 (m)）。
+// P2：同じ範囲の同じ名前（同じ関数の仮引数どうし）を、解く前に全部見て名指しで断る（name-duplicate。ファイルのいちばん外の2つ目は定義を集める所）。
+// 仮引数がファイルの定義や外の関数の仮引数と同じ名前なら、内側が勝つ（2026-11-04 の寄せ3、R133。U〔答え〕[2026-10-29 12:12:33 32fe4b9c]「内側が勝つ」。
+// 押したボタンの文は「仮引数も局所の定義も内側が勝つ。断りは information に下げる。」で、文は主の Claude の物）：断らずに information の知らせ name-shadow を出して
+// 走る（前は断っていた）。知らせの見つけ方と行は前の断りと同じ（R127。行の粒度は §5 Q85 (n)）。隠す名前1つにつき1つ出し（最初の1つで止めない）、呼ばれない
+// 括りの関数の本体でも出す（R25）。外の関数の仮引数とファイルの定義の両方を隠すなら、近い方（外の関数の仮引数）を名指す。
+// 仮引数の既定値の中の関数（`p :` ⏎ `⇥⇥x` ⏎ `⇥⇥z : [w : x 3 ? x]` ⏎ `⇥? x`）にも同じ P2 を当てる（寄せ3 で §5 Q85 (m) を閉じた。前は名前でない仮引数（R119）
+// だけを見ていた：隠しを断るか決めていなかったため）。既定値の行の右から見える外の仮引数は、前の仮引数まで（lambdaScopes）。
 function checkParamNames(lines, F) {
-  const visitTree = (t, outer, p2 = true) => {
+  // 今見ている行（R127）。知らせ name-shadow はこの行を持つ。断りは inRowLine と下の catch が持たせる（同じ行になる）。
+  let at;
+  const inRow = (row, f) =>
+    inRowLine(row, () => {
+      const prev = at;
+      const l = row && typeof row === "object" ? rowTreeLine.get(row) : undefined;
+      if (l !== undefined) at = l;
+      try {
+        f();
+      } finally {
+        at = prev;
+      }
+    });
+  const reportShadow = (name, hid) => {
+    pushDiag(F, "name-shadow", name, `仮引数 \`${name}\` は${hid} \`${name}\` を隠します。この関数の中の \`${name}\` は仮引数です（内側が勝つ。§4 R133）。`);
+    withLine(F.diag[F.diag.length - 1], at);
+  };
+  const visitTree = (t, outer) => {
     if (!t) return;
-    if (t.type === "seq") return t.terms.forEach((term) => visitTerm(term, outer, p2));
+    if (t.type === "seq") return t.terms.forEach((term) => visitTerm(term, outer));
     if (t.sym === "?") {
       // R119（2026-11-03 の片イ）：仮引数の並びに名前でない項（`g : x 3 ? x` の 3）があれば、文法に無い形なので読む段でファイルごと止める（問2 の答え、parseRow の注。R .92）。
       // 前は口の数の分からない関数（parseParams の other）として通った。括りの関数の本体の中の `?` も、ここで定義の所で止まる。
@@ -1023,43 +1095,40 @@ function checkParamNames(lines, F) {
         throw withLine(e, bad.row ? rowTreeLine.get(bad.row) : undefined);
       }
       // R131（2026-11-04 の寄せ2）：仮引数の括り（参照の口）に既定値は書けない。綴りに依らず、読む段でファイルごと止めて、既定値の行を名指す（R127 の行）。
-      // P2 より前に見るので、括りの綴りのまま書いた name-duplicate・name-shadow・既定値の中の param-not-name・export-mark-position より先に当たる。
+      // P2 より前に見るので、括りの綴りのまま書いた name-duplicate・既定値の中の param-not-name・export-mark-position より先に当たる（この `?` の name-shadow の知らせも出ない）。
       const dflt = bracketDefault(t.left);
       if (dflt) throw withLine(refuseBracketDefault(dflt, who, F.namedLambdas.has(t) ? F.namedLambdas.get(t).name : null), rowTreeLine.get(dflt.row));
       const seen = new Set();
-      if (p2) {
-        const { names } = parseParams(t.left);
-        for (const { name } of names) {
-          if (seen.has(name)) throw nameError("name-duplicate", `仮引数 \`${name}\` が同じ関数に2つあります。`);
-          seen.add(name);
-          if (F.defs.has(name)) throw nameError("name-shadow", `仮引数 \`${name}\` がファイルの定義 \`${name}\` を隠します。`);
-          if (outer.has(name)) throw nameError("name-shadow", `仮引数 \`${name}\` が外の関数の仮引数 \`${name}\` を隠します。`);
-        }
+      const { names } = parseParams(t.left);
+      for (const { name } of names) {
+        if (seen.has(name)) throw nameError("name-duplicate", `仮引数 \`${name}\` が同じ関数に2つあります。`);
+        seen.add(name);
+        // R133：内側が勝つ。近い方（外の関数の仮引数）を名指す。
+        const hid = outer.has(name) ? "外の関数の仮引数" : F.defs.has(name) ? "ファイルの定義" : null;
+        if (hid) reportShadow(name, hid);
       }
-      visitDefaults(t.left, outer);
-      return visitTree(t.right, new Set([...outer, ...seen]), p2);
+      visitDefaults(t, outer);
+      return visitTree(t.right, new Set([...outer, ...seen]));
     }
-    visitTree(t.left, outer, p2);
-    visitTree(t.right, outer, p2);
+    visitTree(t.left, outer);
+    visitTree(t.right, outer);
   };
-  const visitTerm = (term, outer, p2) => {
+  const visitTerm = (term, outer) => {
     if (!term) return;
     if (term.type === "infix") {
-      visitTerm(term.left, outer, p2);
-      visitTerm(term.right, outer, p2);
-    } else if (term.core.rows) term.core.rows.forEach((r) => inRowLine(r, () => visitTree(r, outer, p2)));
+      visitTerm(term.left, outer);
+      visitTerm(term.right, outer);
+    } else if (term.core.rows) term.core.rows.forEach((r) => inRow(r, () => visitTree(r, outer)));
   };
-  // 字下げの仮引数のブロックの行の、既定値（`:` の行の右）。中の関数は名前でない仮引数だけを見る（p2 は false）。2026-11-04 の寄せ2（R131）から、括りの中の既定値は
-  // この上の bracketDefault が止めるので、括りの中へは降りない（前は括りの行の `:` の右も見ていた）。
-  const visitDefaults = (left, outer) => {
-    if (!left || left.type !== "seq" || left.terms.length !== 1 || !isBareBlock(left.terms[0], "indent")) return;
-    for (const row of left.terms[0].core.rows) {
-      inRowLine(row, () => {
-        if (isColonRow(row)) visitTree(row.right, outer, false);
-      });
+  // 字下げの仮引数のブロックの行の、既定値（`:` の行の右）。外の仮引数に前の仮引数を足した範囲で見る（R133、lambdaScopes）。2026-11-04 の寄せ2（R131）から、
+  // 括りの中の既定値はこの上の bracketDefault が止めるので、括りの中へは降りない（前は括りの行の `:` の右も見ていた）。
+  const visitDefaults = (op, outer) => {
+    for (const part of lambdaScopes(op)) {
+      if (!part.body) inRow(part.row, () => visitTree(part.tree, part.bound.length ? new Set([...outer, ...part.bound]) : outer));
     }
   };
   for (const line of lines) {
+    at = F.rowLines.get(line);
     try {
       visitTree(line, new Set());
     } catch (e) {
@@ -2108,6 +2177,9 @@ const DIAG_SEVERITY = {
   // 片イ（R125）：本体の根に残った裸の関数は `_`（前の G16。U〔答え〕[2026-10-30 17:58 159479c9]「全部 _」）。重さは U [2026-10-30 15:28 159479c9]「…まぁinfomationは出そう。」
   // （手続きの最後の行への言葉。1行の本体と枝の値にも同じ重さを当てたのは主の Claude の読み）。
   "bare-function-return": "information",
+  // 2026-11-04 の寄せ3（R133）：仮引数がファイルの定義か外の関数の仮引数を隠す（前は断り）。U〔答え〕[2026-10-29 12:12:33 32fe4b9c]「内側が勝つ」（押したボタンの文
+  // 「…断りは information に下げる。」）。
+  "name-shadow": "information",
 };
 function pushDiag(ctx, reason, name, message) {
   ctx.diag.push({ severity: DIAG_SEVERITY[reason], reason, name, message });
@@ -4322,10 +4394,12 @@ function ringDefsOf(F, e) {
 function liftRingLowering(F, defs) {
   const reach = new Set(defs);
   const namesOf = new Map();
+  // 縛られていない名前だけを辿る（2026-11-04 の寄せ3、R133：仮引数はファイルの定義と同じ綴りでも仮引数で、その定義へは届かない。前は仮引数の名前も数え、
+  // `h : v ? v , 5` が輪の値の定義 v へ届くと読んで偽の輪で断った）。
   const names = (def) => {
     if (!namesOf.has(def)) {
       const s = new Set();
-      forEachNameInTree(def.lambda || def.rhs, (n) => s.add(n));
+      forEachFreeNameInTree(def.lambda || def.rhs, (n) => s.add(n));
       namesOf.set(def, s);
     }
     return namesOf.get(def);
@@ -4370,7 +4444,13 @@ function liftRingLowering(F, defs) {
     vt(tree);
     return s;
   };
-  const inLambda = (op, ll) => new Set([...(ll || []), ...colonNames(op)]);
+  // 関数 op の中の木と、そこで運びうる側に数える名前（R133 の範囲、lambdaScopes）：本体は外の ll・op の中の `:` の左・全部の仮引数、既定値の行の右は外の ll・
+  // その右の中の `:` の左・前の仮引数まで。前（寄せ3 の前）は仮引数を数えず、ファイルの定義と同じ綴りの仮引数（`g9 : [inc] ? inc ' 0` の inc）を輪へ届かない
+  // ファイルの定義と読んで、下ろす所を見落とした（黙った通り）。
+  const lambdaParts = (op, ll) => {
+    const body = new Set([...(ll || []), ...colonNames(op), ...parseParams(op.left).names.map((p) => p.name)]);
+    return lambdaScopes(op).map((part) => [part.tree, part.body ? body : new Set([...(ll || []), ...colonNames(part.tree), ...part.bound])]);
+  };
   // ll：関数の本体の外なら null、中ならその本体の局所の名前の集まり。
   const carries = (t, ll) => {
     let r = false;
@@ -4378,9 +4458,15 @@ function liftRingLowering(F, defs) {
       if (!x || r) return;
       if (x.type === "seq") return x.terms.forEach((u) => vm(u, l));
       if (x.type === "atom" || x.type === "infix") return vm(x, l);
-      const inner = x.sym === "?" ? inLambda(x, l) : l;
-      vt(x.left, inner);
-      vt(x.right, inner);
+      if (x.sym === "?") {
+        // 仮引数は何を受けたか書いた所で分からないので運びうる側：仮引数のある関数は運びうる式（前は `?` の左の名前を本体と同じ集まりで見て、ファイルの定義と
+        // 同じ綴りの仮引数だけを外していた）。
+        if (parseParams(x.left).names.length) return void (r = true);
+        for (const [y, s] of lambdaParts(x, l)) vt(y, s);
+        return;
+      }
+      vt(x.left, l);
+      vt(x.right, l);
     };
     const vm = (x, l) => {
       if (!x || r) return;
@@ -4442,10 +4528,12 @@ function liftRingLowering(F, defs) {
     if (!t || found || !carries(t, ll)) return;
     if (t.type === "seq") t.terms.forEach((u) => visitTerm(u, ll));
     else if (t.type === "atom" || t.type === "infix") visitTerm(t, ll);
-    else {
-      const inner = t.sym === "?" ? inLambda(t, ll) : ll;
-      visitTree(t.left, inner);
-      visitTree(t.right, inner);
+    else if (t.sym === "?") {
+      // 仮引数の名前（`?` の左）は辿らない（仮引数で、同じ綴りのファイルの定義ではない。R133）。既定値の行の右と本体を、それぞれの範囲で見る。
+      for (const [y, s] of lambdaParts(t, ll)) visitTree(y, s);
+    } else {
+      visitTree(t.left, ll);
+      visitTree(t.right, ll);
     }
   };
   const visitTerm = (t, ll) => {
@@ -4634,12 +4722,20 @@ function aliasDeadOfTree(F, t, s) {
 function deadInPatternBody(F, op, scope) {
   const names = new Set();
   forEachParamNameInTree(op.left, (n) => names.add(n));
-  const mentions = (t) => !!t && (t.type === "seq" ? t.terms.some(termMentions) : mentions(t.left) || mentions(t.right));
-  const termMentions = (term) => {
+  // 入れ子の `?` が同じ綴りの仮引数で縛り直した名前は、この関数の仮引数を含まない（2026-11-04 の寄せ3、R133 の範囲。lambdaScopes）。前は入れ子の仮引数の名前も
+  // 「含む」に数え、`g : [x] ? [x ? x (5 inc)] 1` の `$g` で余る inc（G20）が、内の x を別の名前にした形と割れて黙って消えた。
+  const without = (b, own) => (own.some((n) => b.has(n)) ? new Set([...b].filter((n) => !own.includes(n))) : b);
+  const mentions = (t, b = names) => {
+    if (!t) return false;
+    if (t.type === "seq") return t.terms.some((x) => termMentions(x, b));
+    if (t.sym === "?") return lambdaScopes(t).some((part) => mentions(part.tree, without(b, part.bound)));
+    return mentions(t.left, b) || mentions(t.right, b);
+  };
+  const termMentions = (term, b) => {
     if (!term) return false;
-    if (term.type === "infix") return termMentions(term.left) || termMentions(term.right);
-    if (term.core.c === "name") return names.has(term.core.name);
-    return !!term.core.rows && term.core.rows.some(mentions);
+    if (term.type === "infix") return termMentions(term.left, b) || termMentions(term.right, b);
+    if (term.core.c === "name") return b.has(term.core.name);
+    return !!term.core.rows && term.core.rows.some((r) => mentions(r, b));
   };
   const rows = [];
   const visit = (t) => {
@@ -6037,12 +6133,15 @@ function isNameTarget(term) {
 // visitTree は並びの木、visitTerm は項を歩く（start に渡す）。inDefault は既定値の中を見ているか（namesPattern）。
 function peekUnreadNames(ctx, start, inDefault) {
   let found = null;
+  // 入れ子の `?` の仮引数（2026-11-04 の寄せ3、R133：同じ綴りのファイルの定義より内側が勝つ）。前はファイルの定義を引いて、`[bad ? bad 1]` の bad を括りの関数と
+  // 読み、内を別の名前にした形が通るのに G7 で断った。
+  const bound = [];
   // 項が括りの関数を指せば（裸の名前か、括った `?`。それを1行の括りで包んだ物も）、その名前。2026-11-03 の片イの再確かめの直し：包んだ名前（`([bad] [x]) : 1`・
   // `((bad) [x]) : 1`・既定値の `[bad] [1]`）は、読む所に置けば `bad [x]` と同じく実体を作る（[x] ≅ x）のに、裸の名前だけを見て通り、本体の門が黙って消えた（HEAD から）。
   // 前置 `~` だけの項（`~bad [x]`・`~[bad] [x]`）も同じ（`~x` は書いた `[x]` と同じ項、R79。2026-11-03 の2回目の再確かめ）。入れ子の深さに上限は置かない（undecidedOf の注）。
   const calledName = (x) => {
     const n = bareName(x);
-    if (n) return namesPattern(n, ctx, inDefault) ? n : null;
+    if (n) return !bound.some((b) => b.has(n)) && namesPattern(n, ctx, inDefault) ? n : null;
     if (!x || x.type !== "atom" || x.post.length) return null;
     if (x.pre.length) return x.pre.every((p) => p === "~") ? calledName({ ...x, pre: [] }) : null;
     const op = unwrapLambda({ type: "seq", terms: [x] });
@@ -6064,7 +6163,16 @@ function peekUnreadNames(ctx, start, inDefault) {
       if (t.terms.length >= 2) found = calledIn(t.terms);
       return t.terms.forEach(visitTerm);
     }
-    if (t.sym === "?") return visitTree(t.right); // 入れ子の関数の本体も読まない所にある。左（仮引数）は名前だけ
+    if (t.sym === "?") {
+      // 入れ子の関数の本体も読まない所にある。左（仮引数）は名前だけで、本体ではその名前が仮引数を指す。
+      bound.push(new Set(parseParams(t.left).names.map((p) => p.name)));
+      try {
+        visitTree(t.right);
+      } finally {
+        bound.pop();
+      }
+      return;
+    }
     visitTree(t.left);
     visitTree(t.right);
   };
@@ -6078,32 +6186,19 @@ function peekUnreadNames(ctx, start, inDefault) {
   start(visitTree, visitTerm);
   return found;
 }
-// 仮引数の既定値（`?` の左の `:` の右）の中で括りの関数を呼んでいれば、その名前（peekUnreadNames）。既定値の右は全部を見る。`?` の左は解かない（P3）ので、
-// 1項の `:` の左と同じ理由（R25 の「一度も呼ばれない」に当たらないのに、実体が作れない）で断る。
-function peekDefaults(left, ctx) {
-  let found = null;
-  const visit = (t) => {
-    if (found || !t) return;
-    if (t.type === "seq") {
-      for (const term of t.terms) visitParamTerm(term);
-      return;
-    }
-    if (t.sym === ":") {
-      found = peekUnreadNames(ctx, (visitTree) => visitTree(t.right), true);
-      return;
-    }
-    visit(t.left);
-    visit(t.right);
-  };
-  const visitParamTerm = (term) => {
-    if (found || !term) return;
-    if (term.type === "infix") {
-      visitParamTerm(term.left);
-      visitParamTerm(term.right);
-    } else if (term.core.rows) term.core.rows.forEach(visit);
-  };
-  visit(left);
-  return found;
+// 関数 op の仮引数の既定値（字下げの仮引数のブロックの `:` の行の右）の中で括りの関数を呼んでいれば、その名前（peekUnreadNames）。既定値の右は全部を見る。
+// `?` の左は解かない（P3）ので、1項の `:` の左と同じ理由（R25 の「一度も呼ばれない」に当たらないのに、実体が作れない）で断る。
+// 既定値の行の右は、外の範囲に前の仮引数を足した範囲で引く（2026-11-04 の寄せ3、R133。lambdaScopes）。前は外の範囲で引き、ファイルの定義と同じ綴りの仮引数
+// （`t :` ⏎ `⇥⇥bad` ⏎ `⇥⇥w : bad 1` の bad）を括りの関数と読んで G7 で断った。後ろの仮引数と自分の名前は見えないので、外の名前として引く。
+// 2026-11-04 の寄せ2（R131）から括りの中の既定値は読む段で止まるので、ブロックでない左には既定値が無い。
+function peekDefaults(op, ctx) {
+  for (const part of lambdaScopes(op)) {
+    if (part.body) continue;
+    const scope = part.bound.length ? { parent: ctx.scope, params: new Map(part.bound.map((n) => [n, "other"])), locals: new Set(), key: ctx.scope.key } : ctx.scope;
+    const found = peekUnreadNames({ ...ctx, scope }, (visitTree) => visitTree(part.tree), true);
+    if (found) return found;
+  }
+  return null;
 }
 // 名前が括りの関数を指すか（lookup と同じ順に探す。未定義の information は出さない）。inDefault は、既定値の中を覗いて
 // いるか（peekDefaults）。
@@ -6467,7 +6562,7 @@ function resolveLambda(op, ctx) {
     return patternNode(op, pattern, ctx);
   }
   // 既定値の中で括りの関数を呼べば、実体が作れないので名指しで断る（F3 と同じ穴の G7、peekDefaults。§5 Q85 (j)）。
-  const inDefault = peekDefaults(op.left, ctx);
+  const inDefault = peekDefaults(op, ctx);
   if (inDefault) {
     throw gate(
       "G7",
@@ -9026,7 +9121,7 @@ export function resolve(source) {
     const def = asDefinition(line);
     if (!def) continue;
     // R113（2026-10-28 の片9b）：右辺が書いた `_` だけの定義（`x : _`）は、書かなかったことと同じ（席を取らない）。定義の表に入れないので、同じ名前の2つ目にも
-    // （`x : _` ⏎ `x : 5` の x は 5、順を逆にしても同じ）、仮引数の隠し（P2）にも、輪にもならず、使う所では未定義の名前（R111 の `_`）と同じに読む。知らせ
+    // （`x : _` ⏎ `x : 5` の x は 5、順を逆にしても同じ）、仮引数の隠し（R133 の知らせ name-shadow）にも、輪にもならず、使う所では未定義の名前（R111 の `_`）と同じに読む。知らせ
     // （undefined-name）だけは出さない（書いた人は名前を `_` と定義している。reportUndefined）。行の木は今のまま `(: x _)`。
     // 根拠：U [2026-10-27 14:07 58a809c9]「つまり、 / un : _ / は書かなかったことに出来る。」、U [15:48]「…未定義を定義する / un : _ / つまり、定義が未定義という不動点に
     // 至ってる。 / だから、 / un : _ / は書かなかったことと同じ。」、主の Claude の問い「同じ名前がほかにある所でも、`x : _` は席を取らずに消える、でいい？」（14:49 UTC）に

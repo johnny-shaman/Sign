@@ -83,6 +83,11 @@
  *    隣の欄から消した欄の名前を引く形は同じ日の確かめの直しで足した。寄せ1 から本体の所は消える枝（R129）で、手続きの本体に置いた形は R130 の錨）
  * 45. 条件が未定義の名前の枝は、その行を消した本体と同じ値（R128・R129、2026-11-04 の寄せ1。値の段で比べる）
  * 46. `⇥x : v` は `⇥(x) : v` と同じ（R128 の細目3、2026-11-04 の寄せ1。木・種類・知らせ・値）
+ * 47. 仮引数の名前を新しい名前から外の名前に替えても、木・種類・断り・値が同じ（R133、2026-11-04 の寄せ3。α 同値。name-shadow の知らせは外して比べ、数と行は
+ *    coproduct.test.js の寄せ3 の節が見る）
+ *
+ * 2026-11-04 の寄せ3（R133。U〔答え〕2026-11-04「入って」で文面を承認。仮引数の隠しは内側が勝ち、name-shadow は断らずに知らせる）で、47 を足した。17 の仮引数を u に
+ * した理由の注を、断りから知らせに直した。
  *
  * 2026-11-04 の寄せ1（R128〜R130。U〔答え〕2026-11-04「入って」で文面を承認。本体の字下げの `:` の行は左が何でも枝で、何も定義しない・値が `_` の枝は消えて次へ・
  * 枝と途中の裸の行が混ざった本体は断る）で、45・46 を足し、27 を消し（比べる片方の綴りの本体の局所の定義が無くなった）、18（(3) を本体の同じ名前の枝の後ろの
@@ -3528,7 +3533,7 @@ const CTX17 = [
 	(t) => [`[${t}]`],
 	(t) => [`${t} , 1`],
 	(t) => [`||${t}||`],
-	// 仮引数は u（右辺を開いた `$[x y ? x + y]`・`$[[y ~ys] ? y]` の仮引数が外の仮引数を隠すと、P2 の name-shadow で断る）。
+	// 仮引数は u（右辺を開いた `$[x y ? x + y]`・`$[[y ~ys] ? y]` の仮引数が外の仮引数を隠すと、比べる片方の綴りにだけ name-shadow の知らせが出る。寄せ3 の R133 の前は P2 で断った）。
 	(t) => [`t : u ? ${t}`, "t 1"],
 	(t) => [`t : u ? use ${t} u`, "t 1"],
 ];
@@ -6131,6 +6136,155 @@ law("46 `⇥x : v` は `⇥(x) : v` と同じ（R128）：名前1つの条件と
 		}
 	}
 	for (const [k, v] of Object.entries(count)) if (!v && !["断る組", "値の段が止めた組"].includes(k)) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
+});
+
+// ---------------------------------------------------------------------------
+// 法則47：仮引数の名前を、新しい名前から外の名前に替えても答えは同じ（α 同値。R133、2026-11-04 の寄せ3）
+// ---------------------------------------------------------------------------
+//
+// 比べる綴り：仮引数 N を新しい名前 qq にしたプログラムと、外の名前（ファイルの定義の名前か、外の関数の仮引数 x）にしたプログラム。外の名前は、型板が N のほかに
+// その名前を書いていない物だけ（書いていれば、替えると外の名前を捕まえる）。型板ごとに外の名前を決めた物（names）はそれだけ。
+// 何を同じと見るか：読む段（resolve.js）の全部の行の木と種類、知らせ（name-shadow を除く。名前も比べる）、断れば reason・門・行。値の段（interpret.js）の全部の行の値と
+// 値の知らせ（止めれば reason と行）。qq の側の答えの qq は外の名前に読み替える。外の名前の側にだけ name-shadow の知らせが出る（数と行は coproduct.test.js の寄せ3 の節）。
+// なぜ同じか：寄せ3 の R133（U〔答え〕2026-11-04「入って」。出どころ U〔答え〕[2026-10-29 12:12:33 32fe4b9c]「内側が勝つ」）で、仮引数はその関数の中ではいつも仮引数を
+// 指す。名前を範囲で引けば、縛った名前の綴りは答えを変えない（λ計算の α 同値）。前は名前を範囲で引かない所が4つあり（R103 の輪の下ろし・読まない所の G7・既定値の
+// G7 の範囲・`$` の G20。寄せ3 の確かめで5つ目の既定値の G22 の範囲（unitDefaultParam）が見つかった）、隠しの断りを外すだけだと並べ方の依存・黙った通り・偽の断りが
+// 出た（law_map M26 の「守りの約束」を、この法則の試験に替えた）。
+// 既定値の行の右に見えるのは前の仮引数まで（N が後ろの仮引数・自分の名前の行は、外の名前を指すので替えると答えが変わる。その形は型板に入れない）。
+// 比べの外：取り込み（`io@`）の名前は表に無い（外の名前に選ばない）。
+const DEFS47 = { inc: "inc : z ? z + 1", vs: "vs : 1 2 3", bad: "bad : [y] ? y", five: "five : 5", nx: "nx : 0x10", al: "al : inc", e0: "e0 : []", sq: "sq :\n\t\tz\n\t? z * z\n" };
+// [名前, 型板, 外の名前（省けば DEFS47 の名前）, ファイルの定義（省けば DEFS47 の inc だけと、全部の2通り。false なら型板だけ）]
+const SHAPES47 = [
+	// 置き場：`$` で括りの関数の本体を覗く道（deadInPatternBody）・構造体の欄・`@`・中置・括り・別名・枝・`$[…]`・合成・残りの括り・輪
+	["`$g` の素の関数", "g : x ? [N ? N (5 inc)] 1\np : $g\np"],
+	["`$g` の括りの関数", "g : [x] ? [N ? N (5 inc)] 1\np : $g\np"],
+	["`$g` の括りの関数（外の仮引数を書く行）", "g : [x] ? [N ? N (5 inc)] x\np : $g\np"],
+	["`$g` の仮引数のブロックの関数", "g :\n\t\tx\n\t? [N ? N (5 inc)] 1\n\np : $g\np"],
+	["`$[[x] ? …]`", "p : $[[x] ? [N ? N (5 inc)] 1]\np"],
+	["構造体の欄の関数", "s :\n\tf : N ? N 1\n\n(s ' f) 2"],
+	["`@N`", "g : N ? @N 1\ng $inc"],
+	["`N ' 0`", "g : N ? N ' 0\ng [1 2]"],
+	["括りの仮引数 `[N]`", "g : [N] ? N + 1\ng [2]"],
+	["`x , [N ? N] 1`", "g : x ? x , [N ? N] 1\ng 1"],
+	["別名の `$a`", "a : g\ng : x ? [N ? N (5 inc)] 1\np : $a\np"],
+	["`[N ? N + x] 1`", "g : x ? [N ? N + x] 1\ng 2"],
+	["枝の条件と値", "g : N ?\n\tN > 0 : N\n\t0\n\ng 1"],
+	["`$[N + 1]`", "g : N ? $[N + 1]\n@(g 1)"],
+	["`[N ? $N] 1`", "g : x ? [N ? $N] 1\ng 2"],
+	["関数へ渡す仮引数", "h : f ? f 1\ng : N ? h N\ng $inc"],
+	["`|N|`", "g : N ? |N|\ng 3"],
+	["`N~`", "g : N ? inc N~\ng [1 2]"],
+	["`[N ? N] (5 inc)`", "g : x ? [N ? N] (5 inc)\ng 1"],
+	["括った本体の欄の関数", "t : x ? [\n\tf : N ? N 1\n\tk : x\n]\n(t 1) ' k"],
+	["仮引数のブロックの既定値の行の左", "g :\n\t\tx\n\t\tN : 3\n\t? x + N\n\ng 1"],
+	["仮引数のブロックの名前の行", "g :\n\t\tN\n\t? N + 1\n\ng 1"],
+	["合成の頭", "g : N ? N + 1\nh : x ? x * 2\n(g h) 3"],
+	["`$[g inc]` の g", "g : N ? N + 1\np : $[g inc]\n@p 1"],
+	["括りの関数の実体の中の関数", "g : [x ~xs] ? [N ? N + x] 1\ng [1 2]"],
+	["残りの括りの名前", "g : [x ~N] ? x\ng [1 2 3]"],
+	["入れ子の括りの関数", "g : [x] ? [[N] ? N + x] [1]\ng [2]"],
+	["`$[N ? N + 1]`", "p : $[N ? N + 1]\n@p 2"],
+	["自分を持ち上げる値の中の関数", "v : 1 , $[[N ? N] 2]\nv"],
+	["関数を通る輪", "g : N ? N , 7\nv : 1 , (g $v)\nv"],
+	// 外の関数の仮引数 x を内の仮引数で隠す形（N = x）
+	["外の x：`$g` の素の関数", "g : x ? [N ? N (5 inc)] 1\np : $g\np", ["x"]],
+	["外の x：`$g` の括りの関数", "g : [x] ? [N ? N (5 inc)] 1\np : $g\np", ["x"]],
+	["外の x：`$g` の括りの関数（本体の実引数）", "g : [x] ? [N ? N + 1] (5 inc)\np : $g\np", ["x"]],
+	["外の x：`$g` の括りの関数（本体がブロック）", "g : [x] ?\n\t[N ? N (5 inc)] 1\n\np : $g\np", ["x"]],
+	["外の x：`$g` の括りの関数（枝の値）", "g : [x] ?\n\t1 > 0 : [N ? N (5 inc)] 1\n\t0\n\np : $g\np", ["x"]],
+	["外の x：`$g` の仮引数のブロックの関数", "g :\n\t\tx\n\t? [N ? N (5 inc)] 1\n\np : $g\np", ["x"]],
+	["外の x：`$[[x] ? …]`", "p : $[[x] ? [N ? N (5 inc)] 1]\np", ["x"]],
+	["外の x：`$[[x] ? [[N] ? …]]`", "p : $[[x] ? [[N] ? N (5 inc)] [1]]\np", ["x"]],
+	["外の x：括りの関数を呼ぶ", "g : [x] ? [N ? N (5 inc)] 1\ng [2]", ["x"]],
+	["外の x：括りの関数の実体", "g : [x] ? [N ? N + 1] x\ng [2]", ["x"]],
+	["外の x：入れ子の括りの関数", "g : [x] ? [[N] ? N + 1] [x]\ng [2]", ["x"]],
+	["外の x：素の関数の入れ子", "g : x ? [N ? N + 1] x\ng 2", ["x"]],
+	["外の x：輪で下ろす", "g : x ? [N ? N ' 0] x\nv : 1 , (g $v)\nv", ["x"]],
+	["外の x：輪を通る", "g : x ? [N ? N] 7\nv : 1 , (g $v)\nv", ["x"]],
+	["外の x：輪を通る（内で外の x を書かない）", "g : x ? [N ? x] 7\nv : 1 , (g $v)\nv", ["x"]],
+	["外の x：括った本体の欄", "g : x ? [\n\tf : N ? N + 1\n\tk : x\n]\n(g 1) ' k", ["x"]],
+	["外の x：既定値の中の関数", "g :\n\t\tx\n\t\tz : [N ? N 1]\n\t? x\n\ng 1", ["x"]],
+	["外の x：別名を通る `$a`", "g : [x] ? [N ? N (5 inc)] 1\na : g\np : $a\np", ["x"]],
+	// 値の段まで届く形（interpret.test.js の寄せ3 の答えと同じ形）
+	["値：本体で仮引数に積む", "h : N ? N 5\nh 2"],
+	["値：閉包", "mk : N ? [x ? N + x] 5\nmk 10"],
+	["値：外の x を内で隠す", "f : x ? [N ? N + 1] 10\nf 3", ["x"]],
+	["値：内の関数の外では外の x", "f : x ? ([N ? N * 2] 5) + x\nf 3", ["x"]],
+	["値：枝の値の関数", "f : x ?\n\tx == 1 : [N ? N * 10] 5\n\tx\n\nf 1", ["x"]],
+	["値：枝の条件の関数", "f : x ?\n\t([N ? N > 5] 3) : 1\n\tx\n\nf 7", ["x"]],
+	["値：手続きの行の関数", "f : x ?\n\t[N ? N > 5] 1\n\tx\n\nf 9", ["x"]],
+	["値：関数自身の名前の仮引数", "f : N ?\n\tN == 0 : 0\n\tN (N - 1)\n\nf 3", ["f"]],
+	// 寄せ3 で直した4か所の最小の形（coproduct.test.js の寄せ3 の節の錨と同じ）
+	["R103 の輪で括りの仮引数を下ろす", "inc : z ? z + 1\ng9 : [N] ? N ' 0\nv : 1 , (g9 [$v])\nv", ["inc"], false],
+	["R103 の輪で素の仮引数を下ろす（実体が先）", "inc : z ? z + 1\ng9 : N ? @N\ng8 : y ? y , 7\nu : g8 1\nx1 : g9 $u\nv : 1 , (g9 $v)\nv", ["inc"], false],
+	["R103 の輪で素の仮引数を下ろす（実体が後）", "inc : z ? z + 1\ng9 : N ? @N\ng8 : y ? y , 7\nu : g8 1\nv : 1 , (g9 $v)\nx1 : g9 $u\nv", ["inc"], false],
+	["R103 の偽の輪", "v : 1 , $v , ((h 1) ' 0)\nh : N ? N , 5\nv", ["v"], false],
+	["R103 の輪で既定値の中の関数の仮引数を下ろす", "inc : z ? z + 1\nv : 1 , (t $v)\nt :\n\t\tz\n\t\ty : [N ? N ' 0]\n\t? z\n\nv", ["inc"], false],
+	["R103 の偽の輪（既定値の中の関数）", "w : y ? (y ' 0) , v\nv : 1 , (t $v)\nt :\n\t\tz\n\t\tk : [N ? N]\n\t? z\n\nv", ["w"], false],
+	["読まない枝の条件の関数", "bad : [y] ? y\no : [([N ? N 1] 2) : 1]\no", ["bad"], false],
+	["既定値の中の関数の仮引数", "bad : [y] ? y\nt :\n\t\tz\n\t\tw : [N ? N 1]\n\t? z\n\nt 1", ["bad"], false],
+	["枝の値の関数の既定値の中の関数", "bad : [y] ? y\nt : z ?\n\tz = 1 :\n\t\t\tk : [N ? N 1]\n\t\t? k\n\t0\n\nt 1", ["bad"], false],
+	["既定値の行の右の前の仮引数", "bad : [y] ? y\nt :\n\t\tN\n\t\tw : N 1\n\t? w\n\nt 1", ["bad"], false],
+	["`$g` の括りの関数の本体の余る関数", "inc : z ? z + 1\ng : [x] ? [N ? N (5 inc)] 1\np : $g\np", ["x"], false],
+	["`$a`（a : g の別名）の余る関数", "inc : z ? z + 1\ng : [x] ? [N ? N (5 inc)] 1\na : g\np : $a\np", ["x"], false],
+	["`$[[x] ? …]` の余る関数", "inc : z ? z + 1\np : $[[x] ? [N ? N (5 inc)] 1]\np", ["x"], false],
+	// 寄せ3 の確かめで見つかった5つ目（unitDefaultParam、§5 Q84 の G22。既定値の行の右の e0 は後ろの仮引数・自分の名前に縛られない外の名前）と、輪の下ろしの
+	// 既定値の行の右の前の仮引数・仮引数のある関数を運びうる側に数える守り（coproduct.test.js の寄せ3 の節の錨と同じ）
+	["既定値の行の右に後ろの仮引数と同じ綴りの名前（G22）", "e0 : []\nt :\n\t\ty : e0\n\t\tN\n\t? y\n\nt 1", ["e0"], false],
+	["既定値の行の右に自分の名前と同じ綴りの名前（G22）", "e0 : []\nt :\n\t\tx\n\t\tN : e0\n\t? x\n\nt 1", ["e0"], false],
+	["R103 の輪で既定値の行の右の前の仮引数を下ろす", "inc : z ? z + 1\ng :\n\t\tN\n\t\tk : N ' 0\n\t? k\n\nv : 1 , (g $v)\nv", ["inc"], false],
+	["R103 の輪で下ろす関数の中の関数", "g9 : y ? ([N ? 5] 1) ' 0\nv : 1 , (g9 $v)\nv", ["y"], false],
+];
+law("47 仮引数の名前を新しい名前から外の名前に替えても、木・種類・断り・値が同じ（R133、α 同値）：name-shadow の知らせだけが増える", () => {
+	const problems = [];
+	const count = { 比べた組: 0, 隠しの知らせが出た組: 0, 通る組: 0, 断る組: 0, 値まで出た組: 0 };
+	const word = (n) => new RegExp(`(?<![A-Za-z0-9_])${n}(?![A-Za-z0-9_])`, "g");
+	const answer = (s) => {
+		let out;
+		let shadows = 0;
+		try {
+			const r = resolve(s);
+			shadows = r.diagnostics.filter((d) => d.reason === "name-shadow").length;
+			const d = r.diagnostics.filter((x) => x.reason !== "name-shadow").map((x) => `${x.severity}/${x.reason}@${x.line}:${x.name}`).sort();
+			out = `通る ${r.trees.map((t) => `${show(t)} : ${kindOf(t)}`).join(" ⏎ ")} ／ ${d.join(" ")}`;
+		} catch (e) {
+			return { text: e.reason ? `断り ${e.reason} ${e.gate || ""} @${e.line}` : `例外 ${e.name}: ${e.message}`, shadows };
+		}
+		let v;
+		try {
+			const x = interpret(s);
+			v = `値 ${x.values.map((y) => showValue(y.value)).join(" | ")} ／ ${x.notices.map((n) => `${n.reason}@${n.line}`).join(" ")}`;
+		} catch (e) {
+			v = e.reason ? `止め ${e.reason} @${e.line}` : `例外 ${e.name}: ${e.message}`;
+		}
+		return { text: `${out} || ${v}`, shadows };
+	};
+	for (const [label, tpl, only, defsMode] of SHAPES47) {
+		const others = tpl.replace(word("N"), " ");
+		const defSets = defsMode === false ? [[]] : [["inc"], Object.keys(DEFS47)];
+		for (const defs of defSets) {
+			const program = (n) => [...defs.map((k) => DEFS47[k]), tpl.replace(word("N"), n)].join("\n");
+			const fresh = answer(program("qq"));
+			for (const n of only || defs) {
+				if (!only && word(n).test(others)) continue; // 型板がほかの所にその名前を書いている（替えると捕まえる）
+				const got = answer(program(n));
+				const want = fresh.text.replace(word("qq"), n);
+				count.比べた組++;
+				if (got.text.startsWith("例外") || got.text !== want) {
+					problems.push(`${label}（N = ${n}、定義 ${defs.length}）：${got.text}  ⇔  qq：${want}`);
+					continue;
+				}
+				if (got.shadows > 0) count.隠しの知らせが出た組++;
+				if (got.text.startsWith("断り")) count.断る組++;
+				else {
+					count.通る組++;
+					if (got.text.includes(" || 値 ")) count.値まで出た組++;
+				}
+			}
+		}
+	}
+	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 

@@ -5,12 +5,13 @@
  * reason と枝（`gate`）で確かめる。値の列は確かめない——値の段はまだ無い（§6.4 の7）。断られる行は「今は断る」
  * 試験で、§5 の問いの答えが出たら通る側へ移す（§6.4 の8）。
  *
- * 定義は §6.3 の「定義」をそのまま使う。ただし次の3か所は、仕様のほかの規則（P2：隠し）と両立しないので直した。
+ * 定義は §6.3 の「定義」をそのまま使う。ただし次の3か所は、仕様のほかの規則（P2：隠し）と両立しないので直した（2026-11-04 の寄せ3 の R133 から隠しは断らずに
+ * information の name-shadow を出すので、今は「両立しない」でなく「知らせが増える」。直した綴りはそのまま使う）。
  * - `adder : n ? [+ n]` の仮引数 `n` は、同じ表の `n : [~x] ? x`（ファイルの定義）を隠すので `m` にした（2026-10-22 から §6.3 も
  *   `adder : m ? $[+ m]` と書く）。
  * - 「`x : add 1` の後で `x 5`」は、ファイルの定義 `x` が `inc` や `add` の仮引数 `x` を隠すので、名前を `add1` にした。
  * - `map : f [x ~y] ? …` の本体は書かれていないので、門に当たらない `x` を置いた（`@f x , map y~` は G3）。
- * 定義を足すと別の門に当たる行（隠し・同名）は、その行に要る定義だけで書いた。
+ * 定義を足すと別の門に当たる行（隠し・同名。隠しは寄せ3 から知らせ）は、その行に要る定義だけで書いた。
  *
  * 木の書き方は resolve.js の頭の注のとおり。括りは前段が種類を残さないので、いつも `[…]` で書く（§6.3 の
  * `(f3 1)` は `[f3 1]`）。
@@ -255,7 +256,7 @@ const refused = [
 	// 通る側（いちばん後ろの「R83〜R93」の節）へ移した。
 	// §6.3 の `5 !_ 3`（G7）は、口の外の `!_` が恒等射になって（R44、2026-10-23）通る側（下の「口の外の恒等射」の idPasses）へ移した。
 	["a : b 1 と b : a 2", "a : b 1\nb : a 2", "name-cycle"],
-	["inc : x ? x + 1 と h : inc ? inc 5", "inc : x ? x + 1\nh : inc ? inc 5", "name-shadow"],
+	// `inc : x ? x + 1` ⏎ `h : inc ? inc 5`（name-shadow）は、2026-11-04 の寄せ3（R133：内側が勝つ）で通る側（下の extraPasses）へ移した。
 ];
 
 const GATE_REASON = {
@@ -396,10 +397,12 @@ const extraPasses = [
 	["字下げの本体", std(["sgn : v ?", "\tv < 0 : 0 - v", "\tv", "", "sgn 5"]), "(apply sgn 5)", "A"],
 	// 種類の未知な `r 1` の後ろに 2 が来る（R40 の読み6。前は G12(b)、G12 は廃止）。片イ（R120）から、2 は積む予想で通る。
 	["再帰：仮置きが外れて k > n（G2(a)、R40）（前は G2(a)）", std(["r : k ? (r k) ' 0", "r 1 2"]), "(construct (apply r 1) 2)", "未知"],
+	// 2026-11-04 の寄せ3（R133：内側が勝つ）：仮引数がファイルの定義か外の関数の仮引数を隠しても断らず、information の name-shadow を1つ出す（前は断った）。
+	["R133 inc : x ? x + 1 と h : inc ? inc 5（前は name-shadow で断った）", "inc : x ? x + 1\nh : inc ? inc 5", "(: h (? [inc] (construct inc 5)))", "A", { severities: ["information/name-shadow"] }],
+	["R133 入れ子の関数の仮引数が外の仮引数を隠す（前は name-shadow で断った）", "f : x ? [x ? x] x", "(: f (? [x] (apply [x ? x] x)))", "A", { severities: ["information/name-shadow"] }],
 ];
 const extraRefused = [
 	["同じ名前の定義が2つ", "p : 1\np : 2", "name-duplicate"],
-	["入れ子の関数の仮引数が外の仮引数を隠す", "f : x ? [x ? x] x", "name-shadow"],
 	["取り込みのある範囲の未定義の名前は未知", "io@\nsay 5", "G7"],
 ];
 for (const [name, src, want, kind, extra] of extraPasses) checkPass(`追加 ${name}`, src, want, kind, extra);
@@ -7603,7 +7606,7 @@ const r111Passes = [
 	["R113 zz : _ ⏎ zz : 5 ⏎ inc zz は zz が 5（前は name-duplicate）", r111(["zz : _", "zz : 5", "inc zz"]), "(apply inc zz)", "A", { diagCount: 0 }],
 	["R113 zz : 5 ⏎ zz : _ ⏎ inc zz（順を逆にしても同じ）", r111(["zz : 5", "zz : _", "inc zz"]), "(apply inc zz)", "A", { diagCount: 0 }],
 	["R113 zz : _ ⏎ zz : _ ⏎ inc zz は zz が未定義の名前（知らせは出さない）", r111(["zz : _", "zz : _", "inc zz"]), "(unit inc)", "A", { leftoverDiag: ["inc"] }],
-	["R113 x : _ ⏎ g2 : x ? x + 1 ⏎ g2 2 は仮引数の隠しにならない（前は name-shadow）", r111(["x : _", "g2 : x ? x + 1", "g2 2"]), "(apply g2 2)", "A", { diagCount: 0 }],
+	["R113 x : _ ⏎ g2 : x ? x + 1 ⏎ g2 2 は隠す物が無く、R133 の知らせも出ない（R113 の前は name-shadow で断った）", r111(["x : _", "g2 : x ? x + 1", "g2 2"]), "(apply g2 2)", "A", { diagCount: 0 }],
 	// 2026-11-04 の寄せ1（R128・R129）：本体の `⇥x : _` は枝で、値が書いた `_` なので消えて次へ進み、何も定義しない（細目5）。外の名前を隠さないので、本体の
 	// erased-unit-shadow は無い（構造体の欄の分は残る、下の fix9bPasses）。R113 は本体にも当たる（「枝の無い本体と構造体に限る」を外した）。
 	["R113 本体の zz : _ ⏎ zz : 3（寄せ1 から条件 zz の枝2つで、zz は未定義の名前。前は R80 の局所の定義1つ、その前は同じ範囲に2つで未知）", r111(["t : y ?", "\tzz : _", "\tzz : 3", "\tzz + y", "", "t 1"]), "(apply t 1)", "A", { diag: "zz", diagCount: 1 }],
@@ -8057,7 +8060,7 @@ for (const [name, s, want] of bracketBodyPasses) checkPass(`寄せ1 ${name}`, s,
 // 仮引数のブロックの綴り（name）。`?` の左がもう仮引数のブロックの名前の無い関数（枝の値・欄・既定値の値の関数、§5 Q86）なら、そのブロックの行（block）。括りの `?` と
 // `$[…]` には仮引数のブロックの綴りが無いので、名前の定義にするよう言う（anon）。既定値が `_` と書いた綴りなら、既定値の行へ移しても R114 の G22 なので、口の綴り
 // `y`・`[y]` を言う（unit。寄せ2 の確かめの直し）。
-// 同じ `?` では param-not-name（R119）の後、P2（name-duplicate・name-shadow）・export-mark-position・解く段の門（G22・G7）の前に当たる。
+// 同じ `?` では param-not-name（R119）の後、P2（name-duplicate。name-shadow は寄せ3（R133）から断らない知らせ）・export-mark-position・解く段の門（G22・G7）の前に当たる。
 // 前（HEAD）は括りの既定値を全部「既定値のある関数」として黙って通し、断るのは既定値が `_` と分かる時（R114 の G22）と `[~y : 5]`（R67 の G22）だけだった。
 // 上の節で括りの綴りそのものを見ていた行（R67 の `[~y : 5]`・R114 の `[y : _]`・重ねた `[[y : _]]`・丸い `([y : _])`・仮引数のブロックの括りの行 `⇥⇥[y : _]`・
 // 無名の `[x [y : _] ? x]`・Q84 の `[y : no]`・既定値の中で括りの関数を呼ぶ `[x : t [1 2]]`）は、同じ綴りのまま下の r131Moved へ移した（行の名前に前の答え）。
@@ -8173,13 +8176,14 @@ const r131Order = [
 	["param-not-name が先：g : x 3 [y : 1] ? x", src(["g : x 3 [y : 1] ? x"]), "param-not-name", 1],
 	["param-not-name が先（括りが前）：g : [y : 1] x 3 ? x", src(["g : [y : 1] x 3 ? x"]), "param-not-name", 1],
 	["P2 の name-duplicate より先：f : y [y : 1] ? y", src(["f : y [y : 1] ? y"]), "param-default-bracket", 1],
-	["P2 の name-shadow（ファイルの定義）より先：f : x [inc : 1] ? x", src(["inc : x ? x + 1", "f : x [inc : 1] ? x"]), "param-default-bracket", 2],
-	["P2 の name-shadow（外の仮引数）より先：f : x ? [x [y : 1] ? x] x", src(["f : x ? [x [y : 1] ? x] x"]), "param-default-bracket", 1],
+	// 寄せ3（R133）から隠しは断らない（知らせ）ので、次の2行は「隠す仮引数があっても R131 で止まる」を見る（前の名前は「P2 の name-shadow より先」）。
+	["ファイルの定義を隠す仮引数があっても R131：f : x [inc : 1] ? x", src(["inc : x ? x + 1", "f : x [inc : 1] ? x"]), "param-default-bracket", 2],
+	["外の仮引数を隠す仮引数があっても R131：f : x ? [x [y : 1] ? x] x", src(["f : x ? [x [y : 1] ? x] x"]), "param-default-bracket", 1],
 	["export-mark-position より先：p : x [z : #zq] ? x", src(["zq : 5", "p : x [z : #zq] ? x"]), "param-default-bracket", 2],
 	["既定値の中の param-not-name より先：p : x [z : [w : x 3 ? x]] ? x", src(["p : x [z : [w : x 3 ? x]] ? x"]), "param-default-bracket", 1],
 	["仮引数のブロックの #z : 1 は今のまま param-not-name（その行）", src(["h :", "\t\tx", "\t\t#z : 1", "\t? x", "", "h 1"]), "param-not-name", 3],
 	["仮引数のブロックの P2 の name-duplicate は今のまま", src(["f :", "\t\ty", "\t\ty : 1", "\t? y", "", "f 1"]), "name-duplicate", 1],
-	["仮引数のブロックの P2 の name-shadow は今のまま", src(["inc : x ? x + 1", "f :", "\t\tx", "\t\tinc : 1", "\t? x", "", "f 1"]), "name-shadow", 2],
+	// 「仮引数のブロックの P2 の name-shadow は今のまま」（`⇥⇥inc : 1` の行）は、寄せ3（R133）で通る側（いちばん後ろの「寄せ3 の R133」の節）へ移した。
 	// 並びの中の中置の項は名前でも括りでもない項なので、括りの中の `:` より先に param-not-name（並びでない左の `x , [y : 1] ' 0` は上の r131Shapes で R131）。
 	["並びの中置の項は param-not-name が先：h : x [y : 1] ' 0 ? x", src(["h : x [y : 1] ' 0 ? x", "", "h 1"]), "param-not-name", 1],
 	// ファイルの全部の行で見る物との順（寄せ2 の確かめ）：ファイルの名前の重なりは R131 より先（後ろの行でも）、R130 の body-bare-row-between は R131 の後（前の行でも）。
@@ -8224,8 +8228,9 @@ const r131Passes = [
 	["既定値の値に置いた仮引数のブロックの関数（§5 Q86）", src(["o :", "\t\tz :", "\t\t\t\ty : 1", "\t\t\t? y", "\t? 5", "", "o"]), "(unit o)", "A"],
 	// 仮引数のブロックの、左が名前1つでない既定値の行（`a b : …`）の右は既定値で、仮引数に数えない（forEachParamNameInTree の `:` の右を飛ばす守り）。寄せ2 から
 	// 括りの中の `:` は読む段で止まるので、答えでこの守りを通るのはこの綴りだけ（上の ff の行はブロックの `z : inc` で parseParams が見るので、もう通らない）。
-	// 守りを外すと、`a b : inc` は inc を仮引数に数えて name-shadow、`a b : x` は x を2度目の仮引数に数えて name-duplicate で断った（寄せ2 の確かめ）。
-	["仮引数のブロックの a b : inc（inc を仮引数に数えない）", src(["inc : x ? x + 1", "h :", "\t\tx", "\t\ta b : inc", "\t? x", "", "h 1"]), "(apply h 1)", "未知"],
+	// 守りを外すと、`a b : inc` は inc を仮引数に数えて name-shadow、`a b : x` は x を2度目の仮引数に数えて name-duplicate で断った（寄せ2 の確かめ）。寄せ3（R133）から
+	// name-shadow は断らない知らせなので、`a b : inc` の行は知らせが出ないこと（diagCount 0）で守りを見る。
+	["仮引数のブロックの a b : inc（inc を仮引数に数えない）", src(["inc : x ? x + 1", "h :", "\t\tx", "\t\ta b : inc", "\t? x", "", "h 1"]), "(apply h 1)", "未知", { diagCount: 0 }],
 	["仮引数のブロックの a b : x（x を2度目の仮引数に数えない）", src(["h :", "\t\tx", "\t\ta b : x", "\t? x", "", "h 1"]), "(apply h 1)", "未知"],
 ];
 for (const [name, s, want, kind, extra] of r131Passes) checkPass(`寄せ2 R131 当たらない ${name}`, s, want, kind, extra);
@@ -8255,6 +8260,144 @@ for (const [name, s, must, mustNot] of r131Messages) {
 	const extra = mustNot.filter((w) => String(e.message).includes(w));
 	if (e.reason === "param-default-bracket" && !missing.length && !extra.length) ok(`言い分 寄せ2 R131 ${name}`);
 	else fail(`言い分 寄せ2 R131 ${name}`, `reason: ${e.reason}`, `無い語: ${missing.join("・")}`, `余計な語: ${extra.join("・")}`, String(e.message));
+}
+
+// ---------------------------------------------------------------------------
+// 寄せ3 の R133（2026-11-04）：仮引数の隠しは内側が勝つ。U〔答え〕[2026-10-29 12:12:33 32fe4b9c]「内側が勝つ」（押したボタンの文「仮引数も局所の定義も内側が勝つ。
+// 断りは information に下げる。」は主の Claude の物）。同じ範囲の同じ名前は U〔答え〕[2026-10-29 12:10:03 32fe4b9c]「名指しで断る」のまま（name-duplicate）。
+// ---------------------------------------------------------------------------
+// 仮引数がファイルの定義か外の関数の仮引数と同じ名前なら、断らずに information の name-shadow を出して走る（前は断った）。見つけ方と行は前の断りと同じ（R127）。
+// 隠す名前1つにつき1つ出し、呼ばれない括りの関数の本体でも出す。両方を隠すなら近い方（外の関数の仮引数）を名指す。既定値の中の関数にも P2 を当てる（§5 Q85 (m) を
+// 閉じた）。既定値の行の右に見えるのは前の仮引数まで（D documents/en-us/guide/function_guide.md:104 の "preceding parameters"）。
+{
+	const L = (...a) => a.join("\n");
+	// [名前, ソース, 最後の木, 種類, name-shadow の「行:名前」（並べ替え）, ほかの診断の「重さ/reason」（並べ替え）]
+	const r133Notices = [
+		["ファイルの定義を隠す h : inc ? inc 5 ⏎ h 2", L("inc : x ? x + 1", "h : inc ? inc 5", "h 2"), "(apply h 2)", "A", ["2:inc"]],
+		["隠す名前1つにつき1つ f : a b ? a + b", L("a : 1", "b : 2", "f : a b ? a + b", "f 3 4"), "(apply f (construct 3 4))", "A", ["3:a", "3:b"]],
+		["入れ子は `?` ごとに1つ f : x ? [x ? [x ? x] x] x", L("f : x ? [x ? [x ? x] x] x", "f 3"), "(apply f 3)", "A", ["1:x", "1:x"]],
+		["両方を隠す内の inc は1つ（近い方）", L("inc : z ? z + 1", "f : inc ? [inc ? inc] inc", "f 2"), "(apply f 2)", "A", ["2:inc", "2:inc"]],
+		["関数自身の名前の仮引数 f : f ? f + 1（本体の f は仮引数）", L("f : f ? f + 1", "f 2"), "(apply f 2)", "A", ["1:f"]],
+		["呼ばれない括りの関数の本体でも出す", L("inc : x ? x + 1", "b : [y] ? [inc ? inc 1] y"), "(: b (? [[y]] (defer {[inc ? inc 1] y})))", "A", ["2:inc"]],
+		["括りの関数を3つの形で呼んでも1つ", L("inc : x ? x + 1", "b : [y] ? [inc ? inc + y] 1", "b [1]", "b [1 2]", "b [3]"), "(apply b [3])", "A", ["2:inc"], ["information/bracket-excess"]],
+		["`$[…]` の中の関数", L("inc : x ? x + 1", "h : $[inc ? inc 1]"), "(: h $[inc ? inc 1])", "A", ["2:inc"]],
+		["構造体のブロックの欄の関数は、その行", L("x : 5", "s :", "\tf : x ? x + 1", ""), "(: s (block (: f (? [x] (+ x 1)))))", "A", ["3:x"]],
+		["複数行の括りの中の行は、その行", L("x : 5", "r : [", "\tg : x ? x * 2", "\th : 1", "]"), "(: r [g : x ? x * 2 ⏎ h : 1])", "A", ["3:x"]],
+		["枝の条件に置いた関数", L("f : x ?", "\t([x ? x > 5] 3) : 1", "\tx", "", "f 7"), "(apply f 7)", "A", ["2:x"]],
+		["仮引数のブロックの名前の行は定義の行", L("a : 7", "t :", "\t\ta", "\t\tb", "\t? a + b", "", "t 1 2"), "(apply t (construct 1 2))", "A", ["2:a"]],
+		// 前（寄せ2 の r131Order）は「仮引数のブロックの P2 の name-shadow は今のまま」で断った行。
+		["仮引数のブロックの既定値の行の左 ⇥⇥inc : 1 は定義の行", L("inc : x ? x + 1", "f :", "\t\tx", "\t\tinc : 1", "\t? x", "", "f 1"), "(apply f (construct 1 _))", "未知", ["2:inc"]],
+		// 既定値の中の関数（§5 Q85 (m)）：前の仮引数とファイルの定義を隠せば知らせる。後ろの仮引数と自分の名前は既定値の行の右に見えないので、隠さない。
+		["既定値の中の関数が前の仮引数を隠す", L("p :", "\t\tx", "\t\tz : [x ? x]", "\t? x", "", "p 1"), "(apply p (construct 1 _))", "未知", ["3:x"]],
+		["既定値の中の関数がファイルの定義を隠す", L("inc : z ? z + 1", "p :", "\t\tx", "\t\tz : [inc ? inc]", "\t? x", "", "p 1"), "(apply p (construct 1 _))", "未知", ["4:inc"]],
+		["既定値の中の関数と後ろの仮引数（隠さない）", L("p :", "\t\tz : [w ? w]", "\t\tw", "\t? z", "", "p 1"), "(apply p 1)", "未知", []],
+		["既定値の中の関数と自分の名前（隠さない）", L("p :", "\t\tx", "\t\tz : [z ? z]", "\t? x", "", "p 1"), "(apply p (construct 1 _))", "未知", []],
+	];
+	for (const [name, s, want, kind, notes, others = []] of r133Notices) {
+		total++;
+		let r;
+		try {
+			r = resolve(s);
+		} catch (e) {
+			fail(`寄せ3 R133 知らせ ${name}`, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const shadows = r.diagnostics.filter((d) => d.reason === "name-shadow");
+		const problems = [];
+		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		const gotNotes = shadows.map((d) => `${d.line}:${d.name}`).sort();
+		if (JSON.stringify(gotNotes) !== JSON.stringify(notes)) problems.push(`name-shadow got: ${JSON.stringify(gotNotes)}  want: ${JSON.stringify(notes)}`);
+		for (const d of shadows) {
+			if (d.severity !== "information" || !d.message.includes(`仮引数 \`${d.name}\``) || !d.message.includes("内側が勝つ。§4 R133")) problems.push(`name-shadow の重さか文面が違う: ${JSON.stringify(d)}`);
+		}
+		const gotOthers = r.diagnostics.filter((d) => d.reason !== "name-shadow").map((d) => `${d.severity}/${d.reason}`).sort();
+		if (JSON.stringify(gotOthers) !== JSON.stringify(others)) problems.push(`ほかの診断 got: ${JSON.stringify(gotOthers)}  want: ${JSON.stringify(others)}`);
+		if (problems.length) fail(`寄せ3 R133 知らせ ${name}`, ...problems);
+		else ok(`寄せ3 R133 知らせ ${name}`);
+	}
+	// 近い方を名指す：外の関数の仮引数 inc を隠す内の inc は「外の関数の仮引数」、外の inc は「ファイルの定義」。
+	{
+		total++;
+		const r = resolve(L("inc : z ? z + 1", "f : inc ? [inc ? inc] inc", "f 2"));
+		const msgs = r.diagnostics.filter((d) => d.reason === "name-shadow").map((d) => d.message);
+		const fileDef = msgs.filter((m) => m.includes("ファイルの定義 `inc`")).length;
+		const outer = msgs.filter((m) => m.includes("外の関数の仮引数 `inc`")).length;
+		if (msgs.length === 2 && fileDef === 1 && outer === 1) ok("寄せ3 R133 知らせ 近い方を名指す");
+		else fail("寄せ3 R133 知らせ 近い方を名指す", JSON.stringify(msgs));
+	}
+	// 断る物：同じ範囲の同じ名前（隠しに隠れていた物も、既定値の中の関数も）と、既定値の行の右に見えない名前で括りの関数を呼ぶ形（G7）。[名前, ソース, reason か門, 行]
+	const r133Refused = [
+		["隠しに隠れていた同名 a : 1 ⏎ f : a a ? a（前は name-shadow）", L("a : 1", "f : a a ? a"), "name-duplicate", 2],
+		["既定値の中の関数の同名（§5 Q85 (m)。前は黙って通った）", L("p :", "\t\tx", "\t\tz : [g : y y ? y]", "\t? x", "", "p 1"), "name-duplicate", 3],
+		["既定値の行の右に後ろの仮引数は見えない（bad は括りの関数）", L("bad : [y] ? y", "t :", "\t\tw : bad 1", "\t\tbad", "\t? w", "", "t 1"), "G7", 2],
+		["既定値の行の右に自分の名前は見えない（bad は括りの関数）", L("bad : [y] ? y", "t :", "\t\tx", "\t\tbad : bad 1", "\t? x", "", "t 1"), "G7", 2],
+	];
+	for (const [name, s, want, line] of r133Refused) {
+		total++;
+		const e = refusalOfSrc(s);
+		const isName = !/^G/.test(want);
+		const wantReason = isName ? want : GATE_REASON[want];
+		if (e && e.reason === wantReason && (isName || e.gate === want) && e.line === line) ok(`寄せ3 R133 断る ${name} → ${want} line ${line}`);
+		else fail(`寄せ3 R133 断る ${name}`, !e ? "断るはずが通った" : `got: ${e.reason} ${e.gate || ""} line ${e.line}  want: ${want} line ${line}`, e ? String(e.message) : "");
+	}
+	// α 同値の錨（R133 の帰結、law_map 法則47）：仮引数 N を外の名前にしても、新しい名前 qq にしても、木・種類・断り・行・ほかの診断が同じ（name-shadow の知らせだけが
+	// 増える）。前（寄せ3 の前の作り）は名前を範囲で引かない所が4つあり、断りを外すだけだと次の形で割れた（並べ方の依存・黙った通り・偽の断り）。寄せ3 の確かめで
+	// 5つ目（既定値の G22 の範囲、unitDefaultParam）が見つかり、R103 の2つの守り（既定値の行の右の前の仮引数・仮引数のある関数を運びうる側に数える）は錨が無かった。
+	// [名前, N のソース, 外の名前, 答え]。答えは「ERR reason 門 行」か「OK 最後の木 種類 [ほかの診断]」。
+	const answerOf = (s) => {
+		try {
+			const r = resolve(s);
+			const t = r.trees[r.trees.length - 1];
+			const d = r.diagnostics.filter((x) => x.reason !== "name-shadow").map((x) => `${x.severity}/${x.reason}@${x.line}`).sort();
+			return `OK ${show(t)} ${kindOf(t)} [${d.join(",")}]`;
+		} catch (e) {
+			return `ERR ${e.reason} ${e.gate || ""} ${e.line}`;
+		}
+	};
+	const r133Alpha = [
+		// liftRingLowering（R103）：仮引数 inc を輪へ届かないファイルの定義と読んで、下ろす所を見落とした（黙った通り）。
+		["R103 の輪で括りの仮引数 inc を下ろす", L("inc : z ? z + 1", "g9 : [N] ? N ' 0", "v : 1 , (g9 [$v])", "v"), "inc", "ERR name-cycle P2 3"],
+		["R103 の輪で素の仮引数 inc を下ろす（輪の外の実体が先）", L("inc : z ? z + 1", "g9 : N ? @N", "g8 : y ? y , 7", "u : g8 1", "x1 : g9 $u", "v : 1 , (g9 $v)", "v"), "inc", "ERR name-cycle P2 6"],
+		["R103 の輪で素の仮引数 inc を下ろす（輪の外の実体が後）", L("inc : z ? z + 1", "g9 : N ? @N", "g8 : y ? y , 7", "u : g8 1", "v : 1 , (g9 $v)", "x1 : g9 $u", "v"), "inc", "ERR name-cycle P2 5"],
+		// 仮引数 v を輪の値の定義 v へ届く名前と読んで、偽の輪で断った。
+		["R103 の偽の輪（仮引数 v は輪の定義 v でない）", L("v : 1 , $v , ((h 1) ' 0)", "h : N ? N , 5", "v"), "v", "OK v A [warning/dollar-non-function@1]"],
+		["R103 の輪で既定値の中の関数の仮引数を下ろす", L("inc : z ? z + 1", "v : 1 , (t $v)", "t :", "\t\tz", "\t\ty : [N ? N ' 0]", "\t? z", "", "v"), "inc", "ERR name-cycle P2 2"],
+		// 既定値の中の関数の仮引数 w を、輪へ届くファイルの定義 w と読んで偽の輪で断った（HEAD でも割れていた：既定値の中の関数は P2 を見なかった）。
+		["R103 の偽の輪（既定値の中の関数の仮引数 w）", L("w : y ? (y ' 0) , v", "v : 1 , (t $v)", "t :", "\t\tz", "\t\tk : [N ? N]", "\t? z", "", "v"), "w", "OK v A [warning/dollar-non-function@2]"],
+		// peekUnreadNames（G7）：入れ子の関数の仮引数 bad を括りの関数と読んで、偽の G7 で断った。
+		["読まない枝の条件の関数の仮引数 bad", L("bad : [y] ? y", "o : [([N ? N 1] 2) : 1]", "o"), "bad", "OK o A []"],
+		["既定値の中の関数の仮引数 bad", L("bad : [y] ? y", "t :", "\t\tz", "\t\tw : [N ? N 1]", "\t? z", "", "t 1"), "bad", "OK (apply t (construct 1 _)) 未知 []"],
+		// 枝の値の仮引数のブロックの関数（§5 Q86）の既定値の中の関数の仮引数 bad を括りの関数と読んで、偽の G7 で断った（HEAD でも割れていた：既定値の中の関数は
+		// P2 を見なかった）。
+		["枝の値の関数の既定値の中の関数の仮引数 bad", L("bad : [y] ? y", "t : z ?", "\tz = 1 :", "\t\t\tk : [N ? N 1]", "\t\t? k", "\t0", "", "t 1"), "bad", "OK (apply t 1) A [information/bare-function-return@2]"],
+		// peekDefaults の範囲：前の仮引数 bad を括りの関数と読んで、偽の G7 で断った。
+		["既定値の行の右の前の仮引数 bad", L("bad : [y] ? y", "t :", "\t\tN", "\t\tw : N 1", "\t? w", "", "t 1"), "bad", "OK (apply t (construct 1 _)) 未知 []"],
+		// deadInPatternBody（`$g` の G20）：内で縛り直した x を外の仮引数を含む行と読んで、余る inc を見落とした（黙った通り）。
+		["`$g` の括りの関数の本体の余る関数", L("inc : z ? z + 1", "g : [x] ? [N ? N (5 inc)] 1", "p : $g", "p"), "x", "ERR coproduct-dollar-value G20 3"],
+		["`$a`（a : g の別名）の余る関数", L("inc : z ? z + 1", "g : [x] ? [N ? N (5 inc)] 1", "a : g", "p : $a", "p"), "x", "ERR coproduct-dollar-value G20 4"],
+		["`$[[x] ? …]` の余る関数", L("inc : z ? z + 1", "p : $[[x] ? [N ? N (5 inc)] 1]", "p"), "x", "ERR coproduct-dollar-value G20 2"],
+		// 寄せ3 の確かめの直し（2026-11-04）。unitDefaultParam（R114・§5 Q84 の G22）：既定値の行の右の後ろの仮引数と自分の名前を、この関数の仮引数と読んで G22 を
+		// 見落とした（黙った通り）。既定値の行の右の e0 は、後ろの仮引数 N にも自分の名前 N にも縛られない外の名前（ファイルの `[]`、`_` と分かる値）なので、N を替えても G22。
+		["既定値の行の右に後ろの仮引数と同じ綴りの e0（G22）", L("e0 : []", "t :", "\t\ty : e0", "\t\tN", "\t? y", "", "t 1"), "e0", "ERR coproduct-bare-rest-param G22 2"],
+		["既定値の行の右に自分の名前と同じ綴りの e0（G22）", L("e0 : []", "t :", "\t\tx", "\t\tN : e0", "\t? x", "", "t 1"), "e0", "ERR coproduct-bare-rest-param G22 2"],
+		["括りの関数の枝の値の仮引数のブロックで、既定値の行の右に後ろの仮引数と同じ綴りの e0（G22、R119 の定義の行）", L("e0 : []", "b : [z] ?", "\t1 > 0 :", "\t\t\ty : e0", "\t\t\tN", "\t\t? y", "\t0", "", "b [1]"), "e0", "ERR coproduct-bare-rest-param G22 2"],
+		// liftRingLowering の既定値の行の右（lambdaParts）：前の仮引数 inc を輪へ届かないファイルの定義と読んで、下ろす所を見落とした（黙った通り）。
+		["R103 の輪で既定値の行の右の前の仮引数 inc を下ろす", L("inc : z ? z + 1", "g :", "\t\tN", "\t\tk : N ' 0", "\t? k", "", "v : 1 , (g $v)", "v"), "inc", "ERR name-cycle P2 7"],
+		// liftRingLowering の carries：仮引数のある関数は運びうる側（本体が仮引数を返さなくても）。隠しの無い形でも HEAD と同じ答えを守る（外すと黙って通る）。
+		["R103 の輪で輪の行の中の関数（仮引数 v）", L("v : 1 , $v , (([N ? 5] 1) ' 0)", "v"), "v", "ERR name-cycle P2 1"],
+		["R103 の輪で下ろす関数の中の関数（外の仮引数 y を隠す）", L("g9 : y ? ([N ? 5] 1) ' 0", "v : 1 , (g9 $v)", "v"), "y", "ERR name-cycle P2 2"],
+		["R103 の輪で下ろす関数の中の関数（並べ方を逆に）", L("v : 1 , (g9 $v)", "g9 : y ? ([N ? 5] 1) ' 0", "v"), "y", "ERR name-cycle P2 1"],
+	];
+	for (const [name, s, nm, want] of r133Alpha) {
+		total++;
+		const sub = (to) => s.replace(/\bN\b/g, to);
+		const got = answerOf(sub(nm));
+		const fresh = answerOf(sub("qq")).replace(/\bqq\b/g, nm);
+		if (got === want && fresh === want) ok(`寄せ3 R133 α 同値 ${name}`);
+		else fail(`寄せ3 R133 α 同値 ${name}`, `外の名前 ${nm}: ${got}`, `新しい名前: ${fresh}`, `want: ${want}`);
+	}
 }
 
 console.log(`\n${passed}/${total} passed`);
