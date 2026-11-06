@@ -190,10 +190,41 @@ const SPEC = "alpha1/docs/coproduct_spec.md";
 let parser = null;
 // 前段の行（語の並び。括りと字下げのブロックの中の行も）→ 元のソースの行（1 から）。resolve が前段を通す間だけ置き、parseRow が断りに行を持たせる（R127）。
 let rowLineOf = null;
+// 前段の行 → その行の `?` の語ごとの、行頭の `?` の行（`?` の語が書いた行の頭にあれば、その元の行。なければ undefined）。resolve が前段を通す間だけ置く
+// （R127 の「1行の本体は `?` の行」。2026-11-06 の寄せ5 の確かめの直し：仮引数のブロックの下や定義の行の下の `?` の行は、前段では定義の行の続きなので、
+// 書いた行でなく定義の書き始めの行を指していた）。
+let qLinesOf = null;
 // parseRow が作った行の木（括りと字下げのブロックの中の行も）→ 元のソースの行。木を組んだ後に読む段で見る所（checkParamNames・refuseExportMarkUse）が、
-// 中の行で断ったときにその行を持たせる（R127 の「括りの中の行・字下げのブロックの行は、その中の行」。2026-11-03 の片イの確かめの直し：前はその2つだけ
+// 中の行で断ったときにその行を持たせる（R127 の「書いた行」。2026-11-03 の片イの確かめの直し：前はその2つだけ
 // いちばん外の行を名指しし、parseRow の段で見る compare-chain などは中の行を名指しして割れていた）。
 const rowTreeLine = new WeakMap();
+// 行の木の中の `?` の木 → その行（R127。2026-11-06 の寄せ5、§5 Q85 (n)）。1行の本体の `?` は行の木でないので、括りの関数の実体の本体を解く間、
+// 書いた行をここから引く（materialize）。
+const opLine = new WeakMap();
+// 行頭の `?` の行に書いた本体（`?` の右）→ その `?` の行（R127。2026-11-06 の寄せ5 の確かめの直し）。resolveBody が本体を解く間と、checkParamNames が本体を見る間、
+// 読む段の今の行にする。
+const bodyLine = new WeakMap();
+function markOps(t, line) {
+  if (!t || t.type === "seq") return;
+  if (t.sym === "?" && !opLine.has(t)) opLine.set(t, line);
+  markOps(t.left, line);
+  markOps(t.right, line);
+}
+// 行の木 row を解く間、読む段の今の行（F.line）をその行にし、断れば row の行を持たせる（R127 の「書いた行」。2026-11-06 の寄せ5）。
+// 行の無い物（行の木でない項）はそのまま f。知らせは出した時の F.line を持つ（pushDiag）。
+function atRow(F, row, f) {
+  const l = F && row && typeof row === "object" ? rowTreeLine.get(row) : undefined;
+  if (l === undefined) return f();
+  const prev = F.line;
+  F.line = l;
+  try {
+    return f();
+  } catch (e) {
+    throw withLine(e, l);
+  } finally {
+    F.line = prev;
+  }
+}
 // 行の木 row の中を f で見て、断れば row の元の行を持たせる（先に持たせた、より内の行は残る。withLine）。
 function inRowLine(row, f) {
   try {
@@ -209,14 +240,26 @@ function frontEnd(source) {
     parser = peggy.generate(fs.readFileSync(path.join(dir, "sign.pegjs"), "utf8"));
   }
   const { text, lineAt } = preprocessWithLines(source);
+  // 元のソースの行（lexer の classifyNewlines と同じく CR・CRLF・LF の3つを改行に数える。lineAt の番号と揃える）。
+  const srcLines = source.split(/\r\n|\r|\n/);
   const rowAt = new WeakMap();
+  const qAt = new WeakMap();
   let rows;
   try {
-    rows = parser.parse(text, { rowAt });
+    rows = parser.parse(text, { rowAt, qAt });
   } catch (e) {
     throw withLine(e, e && e.location ? lineAt(e.location.start.offset) : undefined);
   }
-  return { rows, lineOf: (row) => (rowAt.has(row) ? lineAt(rowAt.get(row)) : undefined) };
+  // `?` の語の行は、その元の行が `?` で始まる（行頭の空白・TAB の後）時だけ返す。続きの行（行頭の空白）の中の `?` は今のまま書き始めの行（§5 Q85 (n) の残り）。
+  const qLineOf = (o) => {
+    const l = lineAt(o);
+    return l !== undefined && /^[\t ]*\?/.test(srcLines[l - 1] || "") ? l : undefined;
+  };
+  return {
+    rows,
+    lineOf: (row) => (rowAt.has(row) ? lineAt(rowAt.get(row)) : undefined),
+    qLinesOf: (row) => (qAt.has(row) ? qAt.get(row).map(qLineOf) : undefined),
+  };
 }
 // 断りに元のソースの行（1 から）を持たせる（R127）。先に持たせた行（いちばん内の行・前処理が読んでいた行）を残す。message は変えない（試験が行の順を
 // 替えて言い分を比べる所がある。coproduct.test.js の「行の順に依らない」）。
@@ -424,6 +467,9 @@ function parseRow(words, { inBracket = false } = {}) {
     throw rowRefusal(e, words); // 括りの中の行で断れば、その行が先に行を持つ（withLine）
   }
   let pos = 0;
+  // 行の `?` の語ごとの、行頭の `?` の行（qLinesOf）。parseLow は `?` を左から順に読むので、読んだ順に引く。
+  const qLines = qLinesOf ? qLinesOf(words) : undefined;
+  let qi = 0;
   const peek = () => toks[pos];
   const isLow = (t) => t && t.t === "op" && t.stage <= 9;
   const isHigh = (t) => t && t.t === "op" && t.stage >= 12;
@@ -432,8 +478,14 @@ function parseRow(words, { inBracket = false } = {}) {
     let left = parseSegment();
     while (isLow(peek()) && peek().stage >= minStage) {
       const op = toks[pos++];
+      const ql = op.sym === "?" && qLines ? qLines[qi++] : undefined;
       const right = parseLow(op.assoc === "right" ? op.stage : op.stage + 1);
       left = { type: "op", sym: op.sym, stage: op.stage, left, right };
+      // 行頭の `?` の行に書いた `?` は、`?` の木と本体にその行を持たせる（R127 の「1行の本体は `?` の行」）。
+      if (ql !== undefined) {
+        opLine.set(left, ql);
+        if (right) bodyLine.set(right, ql);
+      }
     }
     return left;
   }
@@ -457,7 +509,10 @@ function parseRow(words, { inBracket = false } = {}) {
   const tree = parseLow(1);
   if (tree && rowLineOf) {
     const line = rowLineOf(words);
-    if (line !== undefined) rowTreeLine.set(tree, line);
+    if (line !== undefined) {
+      rowTreeLine.set(tree, line);
+      markOps(tree, line);
+    }
   }
   const allowMissing = inBracket && words.length > 0 && (isInfixWord(words[0]) || isInfixWord(words[words.length - 1]));
   if (!allowMissing && hasMissing(tree)) {
@@ -770,14 +825,15 @@ function parseParams(left) {
     return { plain: false, names };
   }
   if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
+    // 仮引数のブロックの名前は、その名前を書いた行を持つ（row。P2 の同名と隠しの行、R127。2026-11-06 の寄せ5）。
     for (const row of left.terms[0].core.rows) {
       const n = singleBareName(row);
-      if (n) names.push({ name: n, cls: "bare" });
+      if (n) names.push({ name: n, cls: "bare", row });
       else if (row && row.type === "op" && row.sym === ":" && singleBareName(row.left)) {
-        other(singleBareName(row.left)); // 既定値のある仮引数。既定値の右は `?` の左なので解かない（P3）
+        names.push({ name: singleBareName(row.left), cls: "other", row }); // 既定値のある仮引数。既定値の右は `?` の左なので解かない（P3）
         plain = false;
       } else {
-        forEachParamNameInTree(row, other);
+        forEachParamNameInTree(row, (x) => names.push({ name: x, cls: "other", row }));
         plain = false;
       }
     }
@@ -864,7 +920,7 @@ function bareRestParam(left) {
   if (left.terms.length === 1 && isBareBlock(left.terms[0], "indent")) {
     for (const row of left.terms[0].core.rows) {
       const hit = row && row.type === "seq" ? found(row.terms.map(tilde).find(Boolean), false) : found(defaultTilde(row), true);
-      if (hit) return hit;
+      if (hit) return { ...hit, row }; // 断りはこの行（R127、2026-11-06 の寄せ5）
     }
     return null;
   }
@@ -899,8 +955,9 @@ function unitDefaultParam(left, ctx) {
   for (const row of left.terms[0].core.rows) {
     const name = isColonRow(row) ? singleBareName(row.left) : null;
     if (name) {
-      if (isUnitRhs(row.right)) return { text: writeTree(row), name };
-      if (ctx && !prev.has(singleBareName(row.right)) && unitLikeDefault(row.right, ctx)) return { text: writeTree(row), name, unit: writeTree(row.right) };
+      // row：断りはこの既定値の行（R127、2026-11-06 の寄せ5）。
+      if (isUnitRhs(row.right)) return { text: writeTree(row), name, row };
+      if (ctx && !prev.has(singleBareName(row.right)) && unitLikeDefault(row.right, ctx)) return { text: writeTree(row), name, unit: writeTree(row.right), row };
     }
     for (const n of blockRowParamNames(row)) prev.add(n);
   }
@@ -1066,12 +1123,13 @@ function asDefinition(line) {
 // P2：同じ範囲の同じ名前（同じ関数の仮引数どうし）を、解く前に全部見て名指しで断る（name-duplicate。ファイルのいちばん外の2つ目は定義を集める所）。
 // 仮引数がファイルの定義や外の関数の仮引数と同じ名前なら、内側が勝つ（2026-11-04 の寄せ3、R133。U〔答え〕[2026-10-29 12:12:33 32fe4b9c]「内側が勝つ」。
 // 押したボタンの文は「仮引数も局所の定義も内側が勝つ。断りは information に下げる。」で、文は主の Claude の物）：断らずに information の知らせ name-shadow を出して
-// 走る（前は断っていた）。知らせの見つけ方と行は前の断りと同じ（R127。行の粒度は §5 Q85 (n)）。隠す名前1つにつき1つ出し（最初の1つで止めない）、呼ばれない
+// 走る（前は断っていた）。知らせの見つけ方は前の断りと同じ。行は、2026-11-06 の寄せ5 から隠す名前を書いた行（R127。§5 Q85 (n) を閉じた。前は定義の行）。隠す名前1つにつき1つ出し（最初の1つで止めない）、呼ばれない
 // 括りの関数の本体でも出す（R25）。外の関数の仮引数とファイルの定義の両方を隠すなら、近い方（外の関数の仮引数）を名指す。
 // 仮引数の既定値の中の関数（`p :` ⏎ `⇥⇥x` ⏎ `⇥⇥z : [w : x 3 ? x]` ⏎ `⇥? x`）にも同じ P2 を当てる（寄せ3 で §5 Q85 (m) を閉じた。前は名前でない仮引数（R119）
 // だけを見ていた：隠しを断るか決めていなかったため）。既定値の行の右から見える外の仮引数は、前の仮引数まで（lambdaScopes）。
 function checkParamNames(lines, F) {
-  // 今見ている行（R127）。知らせ name-shadow はこの行を持つ。断りは inRowLine と下の catch が持たせる（同じ行になる）。
+  // 今見ている行（R127）。知らせ name-shadow はこの行を持つ。断りは inRowLine と下の catch が持たせる（同じ行になる）。行頭の `?` の行の本体の中は
+  // `?` の行で、書いた行を木から引けない断り（R134・param-not-name・name-duplicate）はこの行を直に持つ。
   let at;
   const inRow = (row, f) =>
     inRowLine(row, () => {
@@ -1084,9 +1142,10 @@ function checkParamNames(lines, F) {
         at = prev;
       }
     });
-  const reportShadow = (name, hid) => {
+  // rl は仮引数を書いた行（仮引数のブロックの名前の行。R127 の書いた行、2026-11-06 の寄せ5）。無ければ今見ている行。
+  const reportShadow = (name, hid, rl) => {
     pushDiag(F, "name-shadow", name, `仮引数 \`${name}\` は${hid} \`${name}\` を隠します。この関数の中の \`${name}\` は仮引数です（内側が勝つ。§4 R133）。`);
-    withLine(F.diag[F.diag.length - 1], at);
+    withLine(F.diag[F.diag.length - 1], rl ?? at);
   };
   // place は木の置き場（R134、2026-11-06 の寄せ5）：def（名前の定義の右辺。ファイルの定義と構造体の欄）・body（関数の本体）・branch（枝の値。本体と枝の値のブロックの
   // `:` の行の右）・default（仮引数のブロックの既定値の値）。字下げのブロックの本体と枝の値は、行ごとに置き場を決める（`:` の行の右は枝の値、ほかの行は本体）。
@@ -1119,7 +1178,8 @@ function checkParamNames(lines, F) {
           "§4 R119"
         );
         // 仮引数のブロックの行なら、その行（R127。2026-11-03 の片イの再確かめの直し：前は `p :` の定義の行を指し、同じブロックの既定値の行の断りと割れた）。
-        throw withLine(e, bad.row ? rowTreeLine.get(bad.row) : undefined);
+        // ほかは今見ている行（行頭の `?` の行の本体の中なら、その `?` の行。2026-11-06 の寄せ5 の確かめの直し）。
+        throw withLine(e, bad.row ? rowTreeLine.get(bad.row) : at);
       }
       // R131（2026-11-04 の寄せ2）：仮引数の括り（参照の口）に既定値は書けない。綴りに依らず、読む段でファイルごと止めて、既定値の行を名指す（R127 の行）。
       // P2 より前に見るので、括りの綴りのまま書いた name-duplicate・既定値の中の param-not-name・export-mark-position より先に当たる（この `?` の name-shadow の知らせも出ない）。
@@ -1127,15 +1187,26 @@ function checkParamNames(lines, F) {
       if (dflt) throw withLine(refuseBracketDefault(dflt, who, F.namedLambdas.has(t) ? F.namedLambdas.get(t).name : null), rowTreeLine.get(dflt.row));
       const seen = new Set();
       const { names } = parseParams(t.left);
-      for (const { name } of names) {
-        if (seen.has(name)) throw nameError("name-duplicate", `仮引数 \`${name}\` が同じ関数に2つあります。`);
+      // 同名は2つ目の名前を書いた行、隠しはその名前を書いた行（仮引数のブロックの名前の行。R127、2026-11-06 の寄せ5。前は `p :` の定義の行）。
+      // 行の無い名前は今見ている行（行頭の `?` の行の本体の中なら、その `?` の行。2026-11-06 の寄せ5 の確かめの直し）。
+      for (const { name, row } of names) {
+        const rl = row ? rowTreeLine.get(row) : undefined;
+        if (seen.has(name)) throw withLine(nameError("name-duplicate", `仮引数 \`${name}\` が同じ関数に2つあります。`), rl ?? at);
         seen.add(name);
         // R133：内側が勝つ。近い方（外の関数の仮引数）を名指す。
         const hid = outer.has(name) ? "外の関数の仮引数" : F.defs.has(name) ? "ファイルの定義" : null;
-        if (hid) reportShadow(name, hid);
+        if (hid) reportShadow(name, hid, rl);
       }
       visitDefaults(t, outer);
-      return visitTree(t.right, new Set([...outer, ...seen]), "body");
+      // 行頭の `?` の行に書いた本体（bodyLine）は、見る間、今見ている行をその `?` の行にする（R127。解く段の resolveBody と同じ行。2026-11-06 の寄せ5 の確かめの直し：
+      // 前は定義の書き始めの行）。中の括りとブロックの行は、inRow がその行にする。
+      const bl = bodyLine.get(t.right), prevAt = at;
+      if (bl !== undefined) at = bl;
+      try {
+        return visitTree(t.right, new Set([...outer, ...seen]), "body");
+      } finally {
+        at = prevAt;
+      }
     }
     visitTree(t.left, outer);
     visitTree(t.right, outer, t.sym === ":" ? "def" : undefined);
@@ -2221,8 +2292,11 @@ const DIAG_SEVERITY = {
   // 「…断りは information に下げる。」）。
   "name-shadow": "information",
 };
-function pushDiag(ctx, reason, name, message) {
-  ctx.diag.push({ severity: DIAG_SEVERITY[reason], reason, name, message });
+// 知らせは書いた行を持つ（R127、2026-11-06 の寄せ5、§5 Q85 (n)）：at が行の木ならその行、無ければ出した時の読む段の今の行（F.line。atRow・resolveTree が
+// 解いている行の木の行にする）。どちらも無い物には、行のループの終わりにいちばん外の行を付ける。
+function pushDiag(ctx, reason, name, message, at) {
+  const l = (at && typeof at === "object" ? rowTreeLine.get(at) : undefined) ?? (ctx.F ? ctx.F.line : undefined);
+  ctx.diag.push({ severity: DIAG_SEVERITY[reason], reason, name, message, ...(l !== undefined ? { line: l } : {}) });
 }
 
 function reportUndefined(name, ctx) {
@@ -2309,7 +2383,7 @@ function guardAgain(F, count, label) {
     `${label} の種類を、仮置きが外れたので ${count} 回解き直しました（枠を積んだ記録の数 ${F.frameKeys.size} を超えました）。解き直しが終わるかを決めないので、読みを決めません（§3.4）。`,
     { spec: `${SPEC} §3.4`, reason: "resolve-again-limit" }
   );
-  withLine(e, F.line); // 解いていた行（R127）
+  withLine(e, F.outerLine ?? F.line); // 解いていたいちばん外の行（R127。計算の量の上限なので、寄せ5 の後も今のまま）
   F.againRefused = F.againRefused || e; // namesPattern が握りつぶしても、resolve の最後に断る
   throw e;
 }
@@ -2838,8 +2912,9 @@ function bodyRootOf(F, lambdaOp) {
 // 1. 根の種類（instRootOf）：再帰は A と仮置きして一巡し、食い違えば未知（§3.4・R24）。門に当たれば未知にして
 //    止めない。仮置きの上で解いた木は、仮置きが外れると黙って違う木になるので、ここでは木を残さない。
 // 2. 木（materialize）：解いている途中の種類が無い（F.stack が空）ときに、仮置きの済んだ答えで本体をもう一度解き、
-//    木か門を残す。門に当たった実体は、呼んだ行で断る（R25）。呼んだ所が別の実体の本体の中なら、その実体も同じ門で
-//    失敗し、いちばん外の呼んだ行で1回だけ、関数の名前と形を足して投げ直す。
+//    木か門を残す。門に当たった実体は、呼んだ行を解く時に断る（R25）。呼んだ所が別の実体の本体の中なら、その実体も同じ門で
+//    失敗し、いちばん外の呼んだ行で1回だけ、関数の名前と形を足して投げ直す。断りの行は、2026-11-06 の寄せ5 から門に当たった
+//    本体の書いた行（R127。前は呼んだ行）。
 //    分け合った実体を、まだ歩いていない物（callIdent）で呼んだら、本体をその物で歩き直して記録だけを足す（walkCalls）。
 //
 // 定義の行の木（`(inst 形 本体)` の並び）は、ファイルの全部の行を解き終えてから埋める（resolve の最後）。だから
@@ -3154,7 +3229,8 @@ function guardRefusal(F, kind, label, op, plain = false) {
   e.label = label;
   e.instance = { fn: label, shape: "" }; // 名指しは `?` の名前だけ（形は言わない）
   e.instances = [e.instance];
-  withLine(e, F.line); // 守りに当たった時に解いていた行（R127）
+  // 守りに当たった時に解いていたいちばん外の行（R127。計算の量の上限は、2026-11-06 の寄せ5 の後も今のまま、いちばん外の行。F.outerLine）
+  withLine(e, F.outerLine ?? F.line);
   const old = F.guards[kind];
   if (!old || label < old.label) F.guards[kind] = e;
   if (!F.guardStops.has(op)) F.guardStops.set(op, e); // この `?` では新しい実体を作らない（instantiate）
@@ -3665,13 +3741,19 @@ function materialize(F, inst, scopeOf) {
   inst.walked.add(scope.ident);
   inst.materializing = true;
   F.matStack.push(inst);
+  // 実体の本体の知らせと門は、本体の書いた行（R127、2026-11-06 の寄せ5）。1行の本体は `?` の行、字下げの本体はその中の行の木（resolveTree・atRow）。
+  const lamLine = opLine.get(inst.lambda);
+  const prevLine = F.line;
+  if (lamLine !== undefined) F.line = lamLine;
   try {
     const body = resolveBody(inst.lambda.right, { F, scope, diag: F.diag });
     inst.tree = body.tree;
   } catch (e) {
+    if (lamLine !== undefined) withLine(e, lamLine);
     if (!isGate(e)) throw e;
     inst.error = e;
   } finally {
+    F.line = prevLine;
     leaveNest(F, inst);
     F.matStack.pop();
     inst.materializing = false;
@@ -3700,7 +3782,8 @@ function failDependents(inst) {
   }
 }
 
-// 呼んだ行で断る（R25）。門の番号と reason は本体で当たった門のまま、言い分に関数の名前と形を足す。label は呼んだ行で
+// 呼ばれた時に断る（R25）。行は、2026-11-06 の寄せ5 から本体の書いた行（R127、e0.line。前は呼んだ行）。門の番号と reason は本体で当たった門のまま、
+// 言い分に関数の名前と形を足す。label は呼んだ行で
 // 使った関数の名前（実体は同じ綴りの関数で共有するので、実体を作った関数の名前ではない）。実体の本体の中で別の括りの
 // 関数を呼んで門に当たったなら、通った実体を呼んだ順に並べる（e.instance はいちばん外、e.instances は全部）。
 function instanceError(inst, label) {
@@ -3722,11 +3805,12 @@ function instanceError(inst, label) {
   const what = inst.plain ? "素の関数（印のある実引数で実体を作る所、R81）" : "括りの関数";
   // R109（2026-10-28 の片9、§5 Q75 (f) の答え）は、空の List（形 `A[]`）を受けた実体の本体の根に関数が残った G16（`fold $add []`・`k2 []`）に、空を `_` と書く
   // 案内を足していた。片イ（R125）で G16 を廃止し、その所は `_` と bare-function-return の知らせになったので、案内を足す断りが無くなった（知らせに添えるかは §5 Q85）。
-  const e = new OperationError(`${what} ${named}呼んだ実体の本体が、門に当たりました（R25：呼んだ行で断る）。${e0.message}`, {
+  const e = new OperationError(`${what} ${named}呼んだ実体の本体が、門に当たりました（R25：呼ばれた時に断る。行は本体の書いた行、R127）。${e0.message}`, {
     spec: e0.spec,
     reason: e0.reason,
   });
   e.gate = e0.gate;
+  if (e0.line !== undefined) e.line = e0.line; // 本体の書いた行（R127、2026-11-06 の寄せ5。前は呼んだ行）
   e.guard = e0.guard; // 守りの断りから来た物か（refusalOf）
   e.instance = chain[0];
   e.instances = chain;
@@ -4614,6 +4698,9 @@ function liftRingRefusal(F, e, site) {
     "name-cycle",
     `${e.message}輪は持ち上げ（\`$\`）を通りますが、${where}、定義の時に下ろす所 \`${site.text}\`（持ち上げの外の \`@\`・\`' i\`）があり、下ろす物が輪の持ち上げを運びうる（輪へ届く定義の名前か、関数の本体の中の仮引数・局所の名前を含む）ので、下ろす所を通る輪と同じく断ります（§4 R103）。持ち上げた物の印は関数の返値を通ると落ちるので、運びうるかは書いた綴りで見て断る側に倒しています（§5 Q78 (h)）。`
   );
+  // 行は、言い分が名指しする輪の定義の行（e の行、cycleError。R127 の「今のまま」。2026-11-06 の寄せ5 の確かめの直し：行を持たずに投げると、下ろす所を
+  // 書いた行の atRow が行を持たせて、`v : f9 1` ⏎ `f9 : x ? @[$v]` が `f9` の行を指した）。
+  if (e.line !== undefined) r.line = e.line;
   r.cycle = e.cycle;
   r.cycleFrom = e.cycleFrom;
   r.cycleDefs = e.cycleDefs;
@@ -5578,7 +5665,8 @@ function litDesc(core) {
 function bracketInfo(core, ctx, delayed = false) {
   if (core.rows.length === 0) return { desc: { k: "A", elements: [] }, trees: [], isQ: false };
   if (core.rows.length === 1) {
-    const pf = pointfreeOf(core.rows[0], ctx);
+    // 行を跨いで書いた1行の点なし（`[` ⏎ `+ yy` ⏎ `]`）も、その行で知らせ・断る（R127。2026-11-06 の寄せ5 の確かめの直し）。
+    const pf = atRow(ctx.F, core.rows[0], () => pointfreeOf(core.rows[0], ctx));
     if (pf) return { desc: pf, trees: [], isQ: false };
   }
   return rowsInfo(core.rows, ctx, delayed);
@@ -5668,7 +5756,8 @@ function reportErasedField(row, rows, erased, ctx) {
   if (rows.some((r) => !erased.has(r) && singleBareName(r.left) === name)) return;
   if (paramInChain(ctx.scope, name) || ctx.F.defs.has(name) || !localInChain(ctx.scope, name)) return;
   ctx.F.reportedErased.add(row);
-  pushDiag(ctx, "erased-unit-shadow", name, `構造体の欄 \`${name} : _\` は書かなかったのと同じ（右辺が書いた \`_\` だけの欄は席を取りません）なので、括りの中の \`${name}\` は外の \`${name}\`（外の局所の名前）を指します。外の \`${name}\` を隠すつもりなら、別の名前を使います（§4 R113）。`);
+  // 行は消した欄を書いた行（R127、2026-11-06 の寄せ5。行の木を解く前に出るので row で渡す）。
+  pushDiag(ctx, "erased-unit-shadow", name, `構造体の欄 \`${name} : _\` は書かなかったのと同じ（右辺が書いた \`_\` だけの欄は席を取りません）なので、括りの中の \`${name}\` は外の \`${name}\`（外の局所の名前）を指します。外の \`${name}\` を隠すつもりなら、別の名前を使います（§4 R113）。`, row);
 }
 function blockScope(rows, ctx) {
   // field は、この範囲の局所の名前を `$` の先で局所の定義と読まない印（R54。括りは器で、行は欄かもしれない。dollarNameTarget の "local-field"、§5 Q10）。
@@ -5916,7 +6005,23 @@ function mouthsOf(fn) {
 // 行を解く（P3）
 // ---------------------------------------------------------------------------
 
+// 行の木（括りとブロックの中の行も）なら、解く間、読む段の今の行（F.line）をその行にし、断りにその行を持たせる（R127 の書いた行、2026-11-06 の寄せ5。
+// 前は F.line がいちばん外の行か前もって解く定義の行のままだった）。スタックのため閉包を作らずに書く。
 function resolveTree(tree, ctx) {
+  const l = tree && ctx && ctx.F ? rowTreeLine.get(tree) : undefined;
+  if (l === undefined) return resolveTreeIn(tree, ctx);
+  const F = ctx.F;
+  const prev = F.line;
+  F.line = l;
+  try {
+    return resolveTreeIn(tree, ctx);
+  } catch (e) {
+    throw withLine(e, l);
+  } finally {
+    F.line = prev;
+  }
+}
+function resolveTreeIn(tree, ctx) {
   if (tree === null) return null;
   if (tree.type === "seq") return resolveSeq(tree.terms, ctx);
   switch (tree.sym) {
@@ -6148,8 +6253,10 @@ const isColonRow = (r) => !!r && r.type !== "seq" && r.sym === ":";
 // 同じ日の R59（§5 Q53 の答え）から、中身の項の中（入れ子の括り・囲み・欄・`?` の本体）で余るラムダがあれば、知らせて通すのではなく G20 で断る
 // （classifyDollar の受け皿 dead）。中身の並びそのもの（この印が効く所）の値と関数の積み上げは、今までどおり判定せず種類を決めない構築（未知）で、
 // R60（値の先も通す）の後も、種類が未知なので G20（`$[5 inc]`）。
+// 並びの行も resolveTree を通す（中身は resolveSeq で同じ木と種類。複数行の `$[…]` の行に、`[…]` の行と同じく書いた行を持たせる、R127。
+// 2026-11-06 の寄せ5 の確かめの直し：前は resolveSeq を直に呼び、`$[` の行の断りと知らせは括りを開いた行を指した）。
 function resolveDelayed(row, ctx) {
-  if (row && row.type === "seq") return resolveSeq(row.terms, { ...ctx, delayed: true });
+  if (row && row.type === "seq") return resolveTree(row, { ...ctx, delayed: true });
   if (row && row.sym === ",") return resolveTree(row, { ...ctx, delayed: true });
   return resolveTree(row, ctx);
 }
@@ -6240,7 +6347,7 @@ function peekDefaults(op, ctx) {
     if (part.body) continue;
     const scope = part.bound.length ? { parent: ctx.scope, params: new Map(part.bound.map((n) => [n, "other"])), locals: new Set(), key: ctx.scope.key } : ctx.scope;
     const found = peekUnreadNames({ ...ctx, scope }, (visitTree) => visitTree(part.tree), true);
-    if (found) return found;
+    if (found) return { label: found, row: part.row }; // row：断りはこの既定値の行（R127、2026-11-06 の寄せ5）
   }
   return null;
 }
@@ -6562,7 +6669,7 @@ function bareReturnUnit(tree, ctx, at, goesOn = false) {
     const what = goesOn
       ? `本体の最後でない枝の値に裸の関数 \`${name}\` が残ったので、その値は \`_\` で、この枝は消えて次へ進みます（§4 R125・R129。前は G16 で断っていた）`
       : `本体の返す所に裸の関数 \`${name}\` が残ったので、関数は \`_\` を返します（§4 R125。前は G16 で断っていた）`;
-    pushDiag(ctx, "bare-function-return", name, `${what}。${advice}。`);
+    pushDiag(ctx, "bare-function-return", name, `${what}。${advice}。`, at); // 行は枝の行か返す行（R127。行を全部解いた後に出るので at で渡す）
   }
   return { t: "unit", inner: tree, kind: A() };
 }
@@ -6596,10 +6703,11 @@ function resolveLambda(op, ctx) {
   // 仮引数の裸の `~xs` は、定義の所で断る（R67、G22。呼ばれない定義でも断る：綴りそのものが廃止）。
   const bare = bareRestParam(op.left);
   const label = () => (ctx.F.namedLambdas.has(op) ? `関数 \`${ctx.F.namedLambdas.get(op).name}\` ` : `関数 \`[${cutShape(writeTree(op))}]\` `);
-  if (bare) throw refuseBareRest(bare, label());
+  // 行は仮引数のブロックのその行（R127、2026-11-06 の寄せ5。前は定義の行）。
+  if (bare) throw withLine(refuseBareRest(bare, label()), bare.row ? rowTreeLine.get(bare.row) : undefined);
   // 既定値が書いた `_` の仮引数（`[y : _]`・仮引数のブロックの `y : _` の行）も、定義の所で断る（R114、G22。2026-10-28 の片9b）。
   const unitDefault = unitDefaultParam(op.left, ctx);
-  if (unitDefault) throw refuseUnitDefault(unitDefault, label());
+  if (unitDefault) throw withLine(refuseUnitDefault(unitDefault, label()), unitDefault.row ? rowTreeLine.get(unitDefault.row) : undefined);
   const pattern = patternParamsOf(op.left);
   if (pattern) {
     // 括りの関数の本体は解かない（R25）が、本体の中の G22 と字下げのブロックの位置は定義の所で止める（R119、refuseDeferredSpelling）。
@@ -6609,9 +6717,12 @@ function resolveLambda(op, ctx) {
   // 既定値の中で括りの関数を呼べば、実体が作れないので名指しで断る（F3 と同じ穴の G7、peekDefaults。§5 Q85 (j)）。
   const inDefault = peekDefaults(op, ctx);
   if (inDefault) {
-    throw gate(
-      "G7",
-      `仮引数の既定値の中で括りの関数 \`${inDefault}\` を呼んでいます。\`?\` の左は解かない（P3）ので、ここで呼んでも実体が作れず、本体の読みが決まりません（R25、§5 Q85 (j)）。`
+    throw withLine(
+      gate(
+        "G7",
+        `仮引数の既定値の中で括りの関数 \`${inDefault.label}\` を呼んでいます。\`?\` の左は解かない（P3）ので、ここで呼んでも実体が作れず、本体の読みが決まりません（R25、§5 Q85 (j)）。`
+      ),
+      inDefault.row ? rowTreeLine.get(inDefault.row) : undefined
     );
   }
   const lam = makeLambda(op, ctx);
@@ -6656,12 +6767,15 @@ function refuseDeferredSpelling(op, ctx, owner) {
     if (!isBlockSeq(right)) return visitTree(right, cx);
     const rows = right.terms[0].core.rows;
     if (rows.some(isColonRow)) refuseBareRowBetween(rows);
+    // 断りは本体の書いた行（R127、2026-11-06 の寄せ5。前は定義の行）。止める時は今のまま定義の所。
     for (const row of rows) {
-      if (!isColonRow(row)) visitTree(row, cx);
-      else {
-        visitTree(row.left, cx);
-        visitBody(row.right, cx);
-      }
+      inRowLine(row, () => {
+        if (!isColonRow(row)) visitTree(row, cx);
+        else {
+          visitTree(row.left, cx);
+          visitBody(row.right, cx);
+        }
+      });
     }
   };
   const visitTree = (t, cx) => {
@@ -6674,9 +6788,9 @@ function refuseDeferredSpelling(op, ctx, owner) {
       if (isSection(t)) return visitTree(t.right, cx);
       const label = `${owner}の本体の関数 \`[${cutShape(writeTree(t))}]\` `;
       const bare = bareRestParam(t.left);
-      if (bare) throw refuseBareRest(bare, label);
+      if (bare) throw withLine(refuseBareRest(bare, label), bare.row ? rowTreeLine.get(bare.row) : undefined);
       const unitDefault = unitDefaultParam(t.left, cx);
-      if (unitDefault) throw refuseUnitDefault(unitDefault, label);
+      if (unitDefault) throw withLine(refuseUnitDefault(unitDefault, label), unitDefault.row ? rowTreeLine.get(unitDefault.row) : undefined);
       return visitBody(t.right, { ...cx, scope: makeLambda(t, cx).scope });
     }
     if (t.sym === ":") {
@@ -6695,7 +6809,7 @@ function refuseDeferredSpelling(op, ctx, owner) {
       visitTerm(term.right, cx);
     } else if (term.core.rows) {
       const scope = blockScope(term.core.rows, cx);
-      term.core.rows.forEach((r) => visitTree(r, scope ? { ...cx, scope } : cx));
+      term.core.rows.forEach((r) => inRowLine(r, () => visitTree(r, scope ? { ...cx, scope } : cx)));
     }
   };
   visitBody(op.right, { ...ctx, scope: makeLambda(op, ctx).scope });
@@ -6726,7 +6840,23 @@ function patternNode(op, pattern, ctx) {
 // 関数の本体を解く。返す物は {tree, rootKind}。字下げのブロックの本体は、全部の行（枝なら値の側）の根が A の
 // ときだけ A（§3.4）。本体の根（字下げの本体なら返す所：1行だけの手続きの行・枝の値・枝の後の既定の行）に裸の関数か区間の綴りが残れば `_`（R125、
 // bareReturnUnit。前は G16）。
+// 行頭の `?` の行に書いた本体（bodyLine）は、解く間、読む段の今の行をその `?` の行にし、断ればその行を持たせる（R127。2026-11-06 の寄せ5 の確かめの直し）。
 function resolveBody(right, ctx) {
+  const bl = right && ctx && ctx.F ? bodyLine.get(right) : undefined;
+  if (bl !== undefined && bl !== ctx.F.line) {
+    const F = ctx.F, prev = F.line;
+    F.line = bl;
+    try {
+      return resolveBodyIn(right, ctx);
+    } catch (e) {
+      throw withLine(e, bl);
+    } finally {
+      F.line = prev;
+    }
+  }
+  return resolveBodyIn(right, ctx);
+}
+function resolveBodyIn(right, ctx) {
   // 字下げの本体は resolveBlockBody（分けておくのは、本体を解く入れ子が深い鎖でこの関数の枠を小さく保つため。素の関数を挟む 300 個の鎖が JS のスタックの
   // 内に収まる、確かめ 2026-10-26）。
   if (right && right.type === "seq" && right.terms.length === 1 && isBareBlock(right.terms[0], "indent")) return resolveBlockBody(right, ctx);
@@ -6756,7 +6886,8 @@ function resolveBlockBody(right, ctx, notLast = false) {
   const returnsAt = (i) => !isColonRow(src[i]) && (branched ? i === src.length - 1 : src.length === 1);
   // 返す所の値が `_` なら消えて次の枝へ進むか（R129）：最後でない枝の値と、最後でない枝の値のブロックの中の返す所。
   const goesOn = (i) => notLast || (isColonRow(src[i]) && i !== src.length - 1);
-  const resolvedRows = src.map((r, i) => {
+  // 行ごとに、読む段の今の行をその行にする（R127 の書いた行。枝の行は resolveBranch が左右を解くので、行の木そのものは resolveTree を通らない）。
+  const resolvedRows = src.map((r, i) => atRow(ctx.F, r, () => {
     if (isColonRow(r)) return resolveBranch(r, ctx, goesOn(i));
     if (returnsAt(i)) return resolveTree(r, r && r.type === "seq" ? { ...ctx, bodyRoot: true } : ctx);
     if (r && r.type === "seq" && loneHole(r.terms, ctx)) throw refuseProcedureHole();
@@ -6767,13 +6898,14 @@ function resolveBlockBody(right, ctx, notLast = false) {
     // （HEAD からの穴。手続きの行の法則12 が X = `!_` で割れていた）。
     if (r && r.type !== "seq" && r.sym === "," && t && t.t === "leaf" && t.cat === "hole") throw refuseProcedureHole();
     return r && r.type !== "seq" && r.sym === "?" && t && t.kind.k === "L" ? leftoverUnit(t, ctx, r, "place") : t;
-  });
+  }));
   // 返す所（枝の値・返す行）に残った裸の関数・区間の綴りは `_`（R125）。最後でない枝の値なら、その枝は消えて次へ進む（R129）。
   const rows = resolvedRows.map((t, i) => {
     if (isColonRow(src[i])) return bareReturned(t.right) ? { ...t, right: bareReturnUnit(t.right, ctx, src[i], goesOn(i)) } : t;
     return returnsAt(i) && bareReturned(t) ? bareReturnUnit(t, ctx, src[i], goesOn(i)) : t;
   });
-  refuseReturnedAddress(rows);
+  // 返す番地の G21 は、その返す行（枝の行・返す行）で断る（R127。2026-11-06 の寄せ5 の確かめの直し：前は本体の書き始めの行（枝の値のブロックの中は、そのブロックを持つ枝の行）を指した）。
+  rows.forEach((t, i) => inRowLine(src[i], () => refuseReturnedAddress([t])));
   const k = blockBodyKind(rows);
   const term = right.terms[0];
   return { tree: { t: "leaf", term, cat: "plain", desc: { k }, kind: { k }, view: { v: "block", rows } }, rootKind: k };
@@ -6800,12 +6932,16 @@ function refuseBareRowBetween(src) {
 // instRootOf は "A"/"U"）ので、印を答えに持たせられない。HEAD（2026-10-26）は中の算術を G7 で断っていた。
 // 2026-10-26 の R80 から寄せ1（R128）までは、関数の本体の局所の定義の行（isQualifiedDef）を見なかった（局所の名前が右辺の desc を持った）。本体の行は今は何も
 // 定義しないので、`:` の行は全部、枝の値を見る。
+// 入れ子のブロック（`?` の行の下の2段の本体・2段の枝の値のブロック）へ降りる所は、その中の行ごとに元の行で包む（R127 の書いた行。2026-11-06 の寄せ5 の確かめの直し：
+// 前は外の行（定義の行・本体の書き始めの行・枝の行）を指した）。
 function refuseReturnedAddress(rows) {
   const valueSide = (t) => (t && t.t === "op" && t.sym === ":" ? t.right : t);
   for (const row of rows) {
     const v = valueSide(row);
     if (v && v.t === "leaf" && v.view && v.view.v === "block") {
-      refuseReturnedAddress(v.view.rows);
+      const srcRows = v.term && v.term.core && v.term.core.rows;
+      if (srcRows && srcRows.length === v.view.rows.length) v.view.rows.forEach((r, i) => inRowLine(srcRows[i], () => refuseReturnedAddress([r])));
+      else refuseReturnedAddress(v.view.rows);
       continue;
     }
     if (treeHasAddr(v)) throw refuseAddressDrop("return", cutShape(show(v)));
@@ -9071,10 +9207,12 @@ export function resolve(source) {
   try {
     const front = frontEnd(source);
     rowLineOf = front.lineOf;
+    qLinesOf = front.qLinesOf;
     try {
       lines = front.rows.map((words) => parseRow(words));
     } finally {
       rowLineOf = null;
+      qLinesOf = null;
     }
     lines.forEach((t, i) => rowLines.set(t, front.lineOf(front.rows[i])));
   } catch (e) {
@@ -9160,6 +9298,9 @@ export function resolve(source) {
     rowLines,
     defLines: new Map(),
     line: undefined,
+    // いちばん外の行（行のループの行か、前もって解く定義の行）。2026-11-06 の寄せ5（R127 の (n)）から F.line は字下げの行・実体の本体の書いた行へ動くので、
+    // 今のままいちばん外の行を指す断り（計算の量の上限：実体の総数・作った数・入れ子の数・解き直し）はこれを持つ。
+    outerLine: undefined,
   };
   resetIntern();
 
@@ -9232,7 +9373,7 @@ export function resolve(source) {
   // 当たったら止める（それを言うので。解き続けると、抜けた枠の解き直しで解き直しの守りに当たった）。
   const ahead = (def, f) => {
     F.lineTainted = false;
-    F.line = F.defLines.get(def);
+    F.line = F.outerLine = F.defLines.get(def);
     try {
       f();
     } catch (e) {
@@ -9249,8 +9390,9 @@ export function resolve(source) {
     trees = [];
     for (const line of lines) {
       F.lineTainted = false;
-      // R127：行の門は、その行（括りの関数の実体の中の門は呼んだ行）を持つ。この行で出た知らせも同じ行を持つ（下の finally）。
-      F.line = rowLines.get(line);
+      // R127：行の門は、その行を持つ。字下げの行・仮引数のブロックの行・括りの関数の実体の本体で当たった門は、2026-11-06 の寄せ5 から
+      // その書いた行（atRow・materialize。前は実体の中の門は呼んだ行）。知らせも、行を持たない物はこの行を持つ（下の finally）。
+      F.line = F.outerLine = rowLines.get(line);
       const diagFrom = diagnostics.length;
       try {
         // 評価する所（R42）は、定義でない行の根の並び（ここ）と、R76 で広げた比べ・論理の被演算子・字下げの本体の行（evaluatePlace）。`:` の右辺・`,` の辺・
@@ -9297,7 +9439,7 @@ export function resolve(source) {
 
   // 括りの関数の `?` の木を、ファイル全体で集めた実体で埋める（R25）。全部の行を解き終えてから埋めるので、呼ぶ行が
   // 定義の前でも後でも同じ木になる。並べるのは、その `?` を通って呼ばれ（recordCall）、木まで解けた実体だけ：門に
-  // 当たった実体は呼んだ行で断る（定義の行では断らず、描かない）。根の種類を出すときだけ仮に作った実体（仮置きの上で
+  // 当たった実体は呼んだ行を解く時に断る（定義の行を解く時には断らず、描かない。行は本体の書いた行、R127）。根の種類を出すときだけ仮に作った実体（仮置きの上で
   // 作った形）も、木まで解かれないので描かない。並び順は形の綴り、同じ綴りなら鍵（どちらも書いた物だけで決まる。
   // 鍵は canonKey なので、形を見た順に依らない）。
   for (const node of F.patternNodes) {

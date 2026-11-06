@@ -64,15 +64,23 @@ Line
 // この配列が Shunting Yard（演算子テーブル）への入力となる。
 // 意味解決（apply/compose/concat の区別）はこの後の意味論フェーズで行う。
 Expression
-  = head:Term tail:(__ @Term)* {
+  = head:TermAt tail:(__ @TermAt)* {
       // 【修正済み】soloかどうかに関わらず常にflat()する（Termの返り値のwrapルールと対にするため。
       // 以前はsolo時にflat()をスキップしており、Blockが唯一の項の場合とそうでない場合とで
       // 結果の構造が一貫しなかった）。
-      const row = [head, ...tail].flat();
+      const items = [head, ...tail];
+      const row = items.map((x) => x[0]).flat();
       // 行の書き始めの位置（resolve.js が断りに元のソースの行を持たせる、R127）。渡さない呼び手（前段だけの試験）には何もしない。
       if (options.rowAt) options.rowAt.set(row, offset());
+      // 行の中の `?` の語の位置（左から順）。resolve.js が、行頭の `?` の行（仮引数のブロックか定義の行の下の `?` の行）に書いた本体の行を引く（R127）。
+      if (options.qAt) {
+        const qs = items.filter((x) => x[0] === "?").map((x) => x[1]);
+        if (qs.length) options.qAt.set(row, qs);
+      }
       return row;
   }
+// 項とその書き始めの位置（Expression が `?` の語の位置を控える）。
+TermAt = t:Term { return [t, offset()]; }
 
 // --- 密着結合（Syntax = Type）の要 ---
 // スペースなし = 同一 Term 内 = 「密着」
