@@ -605,7 +605,8 @@ function evalInfix(cx, t, env, line) {
     return arith(cx, t.sym, a, b, line);
   }
   if (ORDER.has(t.sym)) {
-    // 括らない3項の連鎖（読む段が通すのは `a < b < c` と `a > b > c` だけ）：成り立てば真ん中、外れたら `_`（R119、U 11-04）。
+    // 括らない3項の連鎖（読む段が通すのは向きの揃った3項の範囲だけで、`<` と `<=`、`>` と `>=` は混ぜてもいい。2026-11-06 の寄せ5）：
+    // 成り立てば真ん中、外れたら `_`（R119、U 11-04。`0 <= 0 < 5` は 0、`0 <= 5 < 5` は `_`）。
     if (t.left.type === "infix" && ORDER.has(t.left.sym)) {
       const a = operand(t.left.left);
       const b = operand(t.left.right);
@@ -618,6 +619,14 @@ function evalInfix(cx, t, env, line) {
     // 成り立てば左、外れたら `_`（0/1 の例外なし、U 10-27 23:01・U〔答え〕23:5x）。どちらかが `_` なら `_`（U 11-04）。
     if (a === UNIT || b === UNIT) return UNIT;
     return holds(t.sym, a, b) ? a : UNIT;
+  }
+  if (t.sym === "=") {
+    // Int の `=`（2026-11-06 の寄せ5、R119・V6）：`==` と同じ値で、等しければ左、違えば `_`、どちらかが `_` なら `_`。
+    // 連鎖（`1 = 1 = 1`）は左の背骨の左畳みで、全部等しければ一番左、どこかが違えば `_`。並び・番地・文字の `=` は V12 のまま（並びは operandOf が止める）。
+    const a = operand(t.left);
+    const b = operand(t.right);
+    if (a === UNIT || b === UNIT) return UNIT;
+    return a === b ? a : UNIT;
   }
   throw notYet(`中置 \`${t.sym}\``, line);
 }
