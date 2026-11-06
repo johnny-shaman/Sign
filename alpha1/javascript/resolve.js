@@ -7286,7 +7286,8 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
   //    （R47：積まれた関数は後ろの項を右から受け、前の値は取らない）なので、手順2 の穴の規則も、その並びを頭 F の並びとして見る
   //    （subHole、2026-10-24 の確かめで直した。前は並び全体の頭だけを見ていて、`5 inc _ 7` が G5・`5 (inc _ 7)` が `5 (inc 7)`、
   //    `5 add 1 2 !_` が通り・`5 (add 1 2 !_)` が G13 と、括るかどうかで割れていた）。
-  const st = { stack: [], mark: null, items, topAt: null };
+  // topUnknown（2026-11-06 の寄せ5、R136）：いちばん上に積んだ関数の下が、関数でありうる項（種類の未知な項・関数を返しうる名前など、mayBeFunction）か。
+  const st = { stack: [], mark: null, items, topAt: null, topUnknown: false };
   const marked = suffixMarked(items);
   // 畳み込みの1歩は ctx を持たないので、知らせ（R64 の余った要素・R70 の空の流れ）を出す所をここで置く（foldCtx の注）。空の流れを閉じてよいかを
   // 見る並びの置き場（R70、foldSeq の注）も同じく置く。
@@ -7301,6 +7302,7 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
       const sub = i > 0 && marked[i] ? subHole(st, i, ctx) : null;
       if (sub) {
         st.stack.push(sub);
+        st.topUnknown = false; // R136：subHole は下が空か A の値のときだけ（下は関数でない）
         st.topAt = items[i].term || items[i]; // 穴の関数を積んだ項の書いた所（R52 の知らせ、手順7）
         break;
       }
@@ -7325,7 +7327,8 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
   const idleId = !closeIdle && trees.length >= 2 && isIdentityKind(trees[trees.length - 1].kind);
   const at = (closeIdle || idleId) && st.stack.length >= 2 ? st.topAt : null;
   if (!trees.length) return single(st.mark); // 書いた `_` だけの並び（R15。`_ _` は `_`）
-  return finishTrees(trees, evaluate, ctx, at);
+  // R136（2026-11-06 の寄せ5、§5 Q85 (l)）：余った関数の下が関数でありうる項なら、木の `(unit …)` は今のまま包むが、leftover-lambda を知らせない（予想の上の余り）。
+  return finishTrees(trees, evaluate, ctx, at, st.topUnknown);
 }
 
 // 手順2：穴 `!_`（§3.5、R16・R34）を、頭 items[0] の並びとして見る。読める並びなら、穴の関数（か、穴を埋めた適用）の木を返す。括りの関数の頭の口を
@@ -7390,15 +7393,16 @@ function subHole(st, i, ctx) {
 // 式で R52 の判定をしない）だけで、種類を決めない（未知）：値の並びの後ろに、まだ口の開いた関数が残った物（§5 Q38・Q52）。2026-10-24 の
 // §5 Q50 の答えまでは、左が名前1つの `:` の右辺の並び（`v : 5 inc`）もここだった。
 // 積み上げの中で口の開いた関数が残るのは、いちばん上だけである：積んだ関数は次の項を受けるか合成し（R47）、口が全部埋まれば値になる。
-function finishTrees(trees, evaluate, ctx, at = null) {
+// quiet（R136）：余った関数の下が関数でありうる項（reduceItems の st.topUnknown）。木は今のまま `(unit …)` で包み、leftover-lambda だけを知らせない。
+function finishTrees(trees, evaluate, ctx, at = null, quiet = false) {
   const last = trees.length - 1;
   if (trees[last].kind.k === "L") {
     // R76 で広げた評価する所（evaluate が {at, sym}）は、本体の行・被演算子が括りの関数の実体ごとに読み直されるので、書いた所ごとに1回だけ知らせる（R52 と同じ）。
-    if (evaluate === true) trees[last] = leftoverUnit(trees[last], ctx);
-    else if (at) trees[last] = leftoverUnit(trees[last], ctx, at);
+    if (evaluate === true) trees[last] = leftoverUnit(trees[last], ctx, null, null, quiet);
+    else if (at) trees[last] = leftoverUnit(trees[last], ctx, at, null, quiet);
     // `,` の辺（R121）が恒等射の葉1つに縮んだ並び（`_ i`・`!_ _`）は包まない：恒等射は `,` の単位で、辺ごと消える（R45。resolveProduct の isIdentity）。包むと `7 , _ i` が
     // `(, 7 (unit !_))`、`7 , !_ , _ i` が 7 と割れていた（法則12。R の所）。恒等射どうしの合成（`!_ i`）は resolveProduct が単位と見ないので、今までどおり包む。
-    else if (evaluate && !(evaluate.sym === "," && trees.length === 1 && isIdentity(trees[last]))) trees[last] = leftoverUnit(trees[last], ctx, evaluate.at, evaluate.sym === "==" || evaluate.sym === "!==" ? "place-cmp" : evaluate.sym === "#r" ? "place-write" : evaluate.sym === "," ? "place-comma" : "place");
+    else if (evaluate && !(evaluate.sym === "," && trees.length === 1 && isIdentity(trees[last]))) trees[last] = leftoverUnit(trees[last], ctx, evaluate.at, evaluate.sym === "==" || evaluate.sym === "!==" ? "place-cmp" : evaluate.sym === "#r" ? "place-write" : evaluate.sym === "," ? "place-comma" : "place", quiet);
   }
   if (trees.length === 1) return trees[0];
   const items = trees.flatMap((g) => (g.t === "construct" ? g.items : [g]));
@@ -7407,13 +7411,14 @@ function finishTrees(trees, evaluate, ctx, at = null) {
 
 // 評価する所の終わりに余った未評価のラムダ（R42）を `_` にした木 `(unit …)`。恒等射でなければ知らせる（R48）。
 // at は R52 で包んだときの、積まれた関数の書いた所（知らせるのは書いた所ごとに1回、reportLeftover）。評価する所（根）では null。
-function leftoverUnit(tree, ctx, at = null, why = null) {
+// quiet（2026-11-06 の寄せ5、R136）：下が関数でありうる項の上の余り（予想の上の余り）。包みと `$` の受け皿は今のままで、知らせだけを出さない。
+function leftoverUnit(tree, ctx, at = null, why = null, quiet = false) {
   // `$` の先を解いている所（受け皿 ctx.dead がある、R59）なら、余ったラムダを拾う（恒等射は落としても当てても値が同じなので拾わない）。
   // R76 で広げた評価する所に丸ごと残った関数（why が "place"・"place-cmp"）は拾わない：R59・R75 が断るのは、値の上に積まれて余る関数（`$[…]` の中身が2つの関数を
   // 括った形）で、比べ・論理の被演算子や手続きの行に丸ごと残った関数は、`$` の先を1つの関数と言い切れなくする物ではない（`$[x ? inc == x]` は1つの関数。
   // 確かめ 2026-10-26。前の版は拾って G20 にし、言い分も「値の上に積まれた」と事実と違っていた）。
   if (ctx && ctx.dead && !isIdentityKind(tree.kind) && why !== "place" && why !== "place-cmp" && why !== "place-write" && why !== "place-comma") ctx.dead.push(tree);
-  reportLeftover(tree, ctx, at, why);
+  if (!quiet) reportLeftover(tree, ctx, at, why);
   return { t: "unit", inner: tree, kind: A() };
 }
 
@@ -7520,11 +7525,11 @@ function foldStep(st, i) {
     if (x.writtenEmpty && valuePortOf(curStage(top))) throw new WrittenEmptyAtValue(x.writtenEmpty); // R94・R112：書いた `_` と同じに読み直す（reduceItems）
     // 撒く項は流れの1項で、関数の残りの口の数で受ける（R51）。書き下しか畳み込みで段が閉じ、全部閉じれば値。
     if (isSpreadNode(x) && streamStep(top, x)) {
-      if (entryDone(top)) stack[stack.length - 1] = renderEntry(top);
+      if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
       return;
     }
     feed(top, x);
-    if (entryDone(top)) stack[stack.length - 1] = renderEntry(top);
+    if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
     return;
   }
   // 種類の未知な項（片イ、R120。前は G7・G2(a)）：いちばん上が値か空なら積み、関数なら口に当てる。それが値か関数かで隣との結び方は変わるが、それは値の段が
@@ -7532,17 +7537,20 @@ function foldStep(st, i) {
   if (x.cat === "plain" && x.kind.k === "U") {
     if (!top || top.t !== "fn") return void stack.push(x);
     feed(top, x);
-    if (entryDone(top)) stack[stack.length - 1] = renderEntry(top);
+    if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
     return;
   }
   // x は関数（L）。いちばん上が空か値なら積む（R47）。種類の未知な値の後ろでも積む（片イ、R120。前は G2(a)、R40 の読み6）。
   // 関数の項を積んだ所（st.topAt）は、並びの終わりに値の上で口が開いたまま閉じたときの知らせの書いた所（R52、reduceItems の手順7）。
+  // R136（2026-11-06 の寄せ5）：積んだ関数の下が関数でありうる項なら、st.topUnknown を立てる（並びの終わりにその関数が余っても知らせない、finishTrees）。
   if (!top) {
     st.topAt = x.term || x;
+    st.topUnknown = false;
     return void stack.push(newEntry(x));
   }
   if (top.t !== "fn") {
     st.topAt = x.term || x;
+    st.topUnknown = mayBeFunction(top);
     stack.push(newEntry(x));
     return;
   }
@@ -7556,6 +7564,7 @@ function foldStep(st, i) {
   if (s && stageShape(s).unknown && s.recv.length) {
     stack[stack.length - 1] = closeEntry(top);
     st.topAt = x.term || x;
+    st.topUnknown = true; // 閉じた関数の答えは、アリティが分からないので関数でありうる（R136）
     stack.push(newEntry(x));
     return;
   }
@@ -7727,7 +7736,7 @@ function markStep(st, i, top) {
   const refPort = !!fn && (fn.type === "pattern" || (fn.type === "plain" && !!fn.rest));
   if (x.emptyFrom && refPort && streamMouths(s) === "whole" && s.recv.length === stageShape(s).fixed && argRun(st.items, i).end) {
     feed(top, x.emptyFrom);
-    if (entryDone(top)) st.stack[st.stack.length - 1] = renderEntry(top);
+    if (entryDone(top)) st.stack[st.stack.length - 1] = markSaturated(top, renderEntry(top));
     return;
   }
   // 2026-10-23 までは、主語の口が決まらない逆適用（§5 Q5）の後の `_` をここで先に見ていた（`5 f2 _` は R28 の終わりで A、ほかは G8）。
@@ -8006,7 +8015,10 @@ function closeEntry(e) {
   // ここで閉じた値は、その合成の流れとして後ろの関数に入る：閉じた値が未知でも G2(a)（次の項を当てるか積むかが決まらない、R40 の
   // 読み6）には当たらず、合成の中の未知として節ごと未知（法則1）。後ろの関数が点なしでも通る（`n 1 2 [+ 1]`）。木は入れ子の適用
   // （renderEntry。2026-10-23 までは、後ろの関数が並びから何も受けていなければ逆適用と同じ綴り `·rev` にしていた）。
-  return renderEntry(e);
+  // R136：口が可変長の `?` の関数（括りの関数。裸の残りの口は G22 で廃止）は、並びの終わりのここで閉じるので、ここでも呼び終えた答えに印 saturated を付ける
+  // （付けないと `h : [x] ? [,] x` の `(h 5) inc` が関数でありうる項に読まれ、素の関数の `h : x ? [,] x` と割れて warning が黙る。法則4）。
+  const tree = renderEntry(e);
+  return entryDone(e) ? markSaturated(e, tree) : tree;
 }
 
 // 関数の項の書いた順の形：合成の前に最初の組が受けたか（preG0）、合成の後に受けたか（postG0）、後ろの組が並びから受けたか（laterArgs）。
@@ -8859,6 +8871,57 @@ function entryFn(e) {
 // - 2026-10-23 までは、並びの項を全部書いた後に合成した後ろの組が並びから何も受けていない形（`n 1 2 inc`）と、値の後ろの逆適用が続く形
 //   （`5 inc inc`）を、逆適用の綴り `(apply inc (apply n (construct 1 2)) ·rev)`・`(apply (compose inc inc) 5 ·rev)` で書いていた
 //   （trailingFrom）。逆適用の廃止（R47）で `·rev` の綴りは無くなり、前の形は入れ子の適用で、後の形は `5` の後ろに積んだ `inc inc` になった。
+// R136（2026-11-06 の寄せ5、§5 Q85 (l)。出どころは coproduct_spec の R136：U 2026-11-05 16:14:46、文面の承認 U 2026-11-06 11:41:23）：口が全部埋まった `?` の関数（素の関数と括りの関数）の答えに印 saturated を付ける
+// （口の数の決まった段は foldStep で、口が可変長の段は並びの終わりの closeEntry で閉じた所）。
+// `?` の関数は本体の返す所の裸の関数を `_` にする（R125）ので、呼び終えた答えは関数でない（mayBeFunction）。
+function markSaturated(e, tree) {
+  const last = e.stages[e.stages.length - 1];
+  const t = last && last.fn && last.fn.type;
+  if ((t === "plain" || t === "pattern") && tree && typeof tree === "object" && tree.t !== "unit") tree.saturated = true;
+  return tree;
+}
+// R136：積み上げの項 item が関数でありうるか。中身の見えない A・呼び終えた `?` の答え（saturated）・`(unit …)`・論理・比べ・算術・ビット・範囲・`,` の答えと
+// 値の印（前置 `-`・`!!`・後置 `!`）の答え（R76・R87・R123 で、被演算子と印の核の関数は `_` になる）は関数でない。`'` と中置 `@` は引いた物が関数でありうる。
+// いちばん外の前置が `!` の否定（`!-(@f x)`・`!(@f x)!` も）・ノルム・絶対値も関数でありうる（値の印に数えない。R136 の R の所）。括り1つは中を見る。名前は、範囲の名前（種類の未知な仮引数。裸の仮引数・未定義の名前は A なので上で返る）なら関数でありうる、ファイルの関数ならありうる、
+// 値の定義なら右辺の根をたどる（輪は name-cycle で先に断られる。守りに訪ねた定義を覚える）。ほか（種類の未知な項）は関数でありうる。
+// 値の定義の右辺はファイルの範囲の式なので、右辺へ移ったら名前はファイルの範囲で引く（使う所の仮引数が同じ名前でも隠さない。R133 の隠しは関数の中だけ、
+// 法則47。aliasOfUndefined と同じ）。括りの中と右辺は、再帰でなく繰り返しでたどる（別名の鎖が長くても JS のスタックを使わない）。
+// 2026-11-06 の寄せ5 の確かめの直し：作る途中の版は右辺の名前も使う所の範囲で引き（`w : v` ⏎ `v : (5 < 3) & ([,] 2)` ⏎ `h : v ? w inc` の warning が黙った）、
+// 右辺を再帰でたどっていた（別名 10000 段で resolve-stack-limit）。
+function mayBeFunction(item) {
+  const seen = new Set();
+  let scope = foldCtx ? foldCtx.scope : null;
+  for (;;) {
+    if (!item) return true;
+    if (item.kind && item.kind.k === "A") return false;
+    if (item.saturated) return false;
+    if (item.t === "op") return item.sym === "'" || item.sym === "@";
+    if (item.t === "unit") return false;
+    // 値の印（前置 `-`・`!!`・後置 `!`、R87）の答えは値か `_`。いちばん外の前置が `!` の否定（`!-(@f x)`・`!(@f x)!` も。`!f` は §2 で未決）・ノルム（`||inc|| 5` は適用）・絶対値（Q22 で未決）は今のまま関数でありうる。
+    if (item.t === "leaf" && item.term && item.term.type === "atom" && ((item.term.pre.length && item.term.pre[0] !== "!" && VALUE_PREFIX.has(item.term.pre[0])) || (!item.term.pre.length && item.term.post.length && item.term.post[item.term.post.length - 1] === "!"))) return false;
+    // 中置の値の演算子（算術・比べ・ビット・範囲、R87）の答えは値か `_`。`'`・`@` は引いた物が関数でありうる（op の木にならず、ここに来る）。
+    if (item.t === "leaf" && item.term && item.term.type === "infix") return item.term.sym === "'" || item.term.sym === "@";
+    if (item.t === "leaf" && item.term && item.term.type === "atom" && !item.term.pre.length && !item.term.post.length) {
+      const inner = item.view && item.view.inner;
+      if (item.term.core.c === "bracket") {
+        if (!(Array.isArray(inner) && inner.length === 1)) return true;
+        item = inner[0];
+        continue;
+      }
+      if (item.term.core.c === "name" && foldCtx) {
+        const name = item.term.core.name;
+        for (let sc = scope; sc; sc = sc.parent) if ((sc.descs && sc.descs.has(name)) || (sc.params && sc.params.has(name)) || (sc.locals && sc.locals.has(name))) return true;
+        const def = foldCtx.F.defs.get(name);
+        if (!def || def.lambda || seen.has(def)) return true; // 輪は name-cycle で先に断られるので、seen に当たるのは守りだけ
+        seen.add(def);
+        item = foldCtx.F.defRoots.get(def);
+        scope = foldCtx.F.fileScope; // 値の定義の右辺の名前は、その定義の範囲（ファイル）で引く（法則47）
+        continue;
+      }
+    }
+    return true;
+  }
+}
 function renderEntry(e) {
   // 空の流れで閉じた関数の項（R70、closeEmpty）は、余ったラムダを `(unit …)` で包んだ `_`。
   if (e.emptyOut) return { t: "unit", inner: e.emptyOut, kind: A() };

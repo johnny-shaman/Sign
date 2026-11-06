@@ -452,10 +452,12 @@ const fixPasses = [
 	["本体 a : inc ⏎ a 5（a は仮引数）", std(["hh : a ?", "\ta : inc", "\ta 5"]), "(block (: a (unit inc)) (construct a 5))", null, { body: true, severities: ["information/bare-function-return"] }],
 	// 片イ（R120・R126、2026-11-03）から、下の fixRefused の G2(a) と種類の未知な項の G7 の行は通る。木は畳みの予想（R118）で、種類の未知な項の後ろの
 	// 項は積む予想、根に余った関数は `_`（R42・R48）。`[' 0] fs` は R123 で fs の要素が関数の番地（値）なので A。
-	["[,] 2 3 inc（前は [*] 2 3 inc）（前は G2(a)）", std("[,] 2 3 inc"), "(construct (apply [,] (construct 2 3)) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
+	// 下の `[,] 2 3 inc`・`[@ 0] fs inc`・`[@] fs 0 inc` の3行（間の `[' 0] fs inc` は A なので今のまま知らせる）と G2(a) の2行・恒等射の2行・R28 の1行は、2026-11-06 の寄せ5（R136）から leftover-lambda を知らせない：余った inc の下が種類の未知な項（点なしの
+	// `[,]`・`[@]` の答えは関数でありうる）で、予想の上の余り。木の `(unit inc)` は今のまま（前は leftoverDiag ["inc"]）。
+	["[,] 2 3 inc（前は [*] 2 3 inc）（前は G2(a)）", std("[,] 2 3 inc"), "(construct (apply [,] (construct 2 3)) (unit inc))", "未知", { leftoverDiag: [] }],
 	["[' 0] fs inc（片イの R123 で fs の要素は番地）（前は G2(a)）", std("[' 0] fs inc"), "(construct (apply [' 0] fs) (unit inc))", "A", { leftoverDiag: ["inc"] }],
-	["[@ 0] fs inc（前は G2(a)）", std("[@ 0] fs inc"), "(construct (apply [@ 0] fs) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
-	["[@] fs 0 inc（前は G2(a)）", std("[@] fs 0 inc"), "(construct (apply [@] (construct fs 0)) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
+	["[@ 0] fs inc（前は G2(a)）", std("[@ 0] fs inc"), "(construct (apply [@ 0] fs) (unit inc))", "未知", { leftoverDiag: [] }],
+	["[@] fs 0 inc（前は G2(a)）", std("[@] fs 0 inc"), "(construct (apply [@] (construct fs 0)) (unit inc))", "未知", { leftoverDiag: [] }],
 	["vs~ + 1 5（前は G7）", std("vs~ + 1 5"), "(construct (+ vs~ 1) 5)", "未知"],
 	["[+ vs~] 1（前は G7）", std("[+ vs~] 1"), "(construct [+ vs~] 1)", "未知"],
 	["q : uu 5 の後で q~ 5（前は q : use $inc 5）（前は G7）", std(["uu : x ? [,] x", "q : uu 5", "q~ 5"]), "(construct q~ 5)", "未知"],
@@ -1196,8 +1198,9 @@ const binPfPasses = [
 	["t : [y] ? [<<] y だけ（呼ばれない本体は information を出さない）", std("t : [y] ? [<<] y"), "(: t (? [[y]] (defer {[<<] y})))", null, { diagCount: 0 }],
 	// 片イ（R120、2026-11-03）：get・set の足りた適用（未知）の後ろの項は積む予想で通る（G2(a) は廃止）。
 	["G2(a) ['] fs 0 1（G12(b) → G2(a)、R40）（前は G2(a)）", std("['] fs 0 1"), "(construct (apply ['] (construct fs 0)) 1)", "未知", { pfInfo: "[']" }],
-	["G2(a) ['] fs 0 inc（前は G2(a)）", std("['] fs 0 inc"), "(construct (apply ['] (construct fs 0)) (unit inc))", "未知", { pfInfo: "[']", leftoverDiag: ["inc"] }],
-	["G2(a) [#] 1 2 inc（前は G2(a)）", std("[#] 1 2 inc"), "(construct (apply [#] (construct 1 2)) (unit inc))", "未知", { pfInfo: "[#]", leftoverDiag: ["inc"] }],
+	// 2026-11-06 の寄せ5（R136）から、この2行の余った inc は予想の上の余りで知らせない（前は leftoverDiag ["inc"]）。
+	["G2(a) ['] fs 0 inc（前は G2(a)）", std("['] fs 0 inc"), "(construct (apply ['] (construct fs 0)) (unit inc))", "未知", { pfInfo: "[']", leftoverDiag: [] }],
+	["G2(a) [#] 1 2 inc（前は G2(a)）", std("[#] 1 2 inc"), "(construct (apply [#] (construct 1 2)) (unit inc))", "未知", { pfInfo: "[#]", leftoverDiag: [] }],
 ];
 const binPfRefused = [
 	// 前の `G2(b) [<<] 5 g 3` と `G12(a) 1 [<<] 2 3 4` は、R36・R35 で通る側（上の binPfPasses）へ移した。2026-10-23 からは、`[<<]` が 1 を
@@ -3930,7 +3933,8 @@ const idFixPasses = [
 	["!_ 5 f2（前は G18、その前は行の終わりで `_`）", std("!_ 5 f2"), "(construct 5 (unit f2))", "A", { leftoverDiag: ["f2"] }],
 	["i 1 [* 2,] 2（単位律では `1 ([* 2,] 2)`）（前は G18）", std(["i : !_", "i 1 [* 2,] 2"]), "(construct 1 (apply [* 2,] 2))", "A", { leftoverDiag: [] }],
 	["inc !_ 5 inc（単位律の `inc 5 inc` は inc が余る）（前は G18）", std("inc !_ 5 inc"), "(construct (apply inc 5) (unit inc))", "A", { leftoverDiag: ["inc"] }],
-	["i [,] 5 inc（単位律の `[,] 5 inc`）（前は G2(a)、その前は G18）", std(["i : !_", "i [,] 5 inc"]), "(construct (apply [,] 5) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
+	// 2026-11-06 の寄せ5（R136）から、余った inc は予想の上の余りで知らせない（前は leftoverDiag ["inc"]）。
+	["i [,] 5 inc（単位律の `[,] 5 inc`）（前は G2(a)、その前は G18）", std(["i : !_", "i [,] 5 inc"]), "(construct (apply [,] 5) (unit inc))", "未知", { leftoverDiag: [] }],
 	["!_ 1 2 [* 2,]（単位律では `1 2 [* 2,]` で `[* 2,]` が余る）（前は G18）", std("!_ 1 2 [* 2,]"), "(construct 1 2 (unit [* 2,]))", "A", { leftoverDiag: ["[* 2,]"] }],
 	["i 1 2 [* 2,]（同じ）（前は G18）", std(["i : !_", "i 1 2 [* 2,]"]), "(construct 1 2 (unit [* 2,]))", "A", { leftoverDiag: ["[* 2,]"] }],
 	["5 !_ 6 [* 2,]（同じ）（前は G18）", std("5 !_ 6 [* 2,]"), "(construct 5 6 (unit [* 2,]))", "A", { leftoverDiag: ["[* 2,]"] }],
@@ -6015,7 +6019,8 @@ const r73Passes = [
 	["R74 i 5 inc（恒等射が受けた後に関数）（前は G18）", r73("i 5 inc"), "(construct 5 (unit inc))", "A", { leftoverDiag: ["inc"] }],
 	["R74 inc i double 1 2（合成の途中の恒等射）（前は G18）", r73("inc i double 1 2"), "(construct (apply (compose inc double) 1) 2)", "A", { leftoverDiag: [] }],
 	["R74 i 1 2 inc（前は G18）", r73("i 1 2 inc"), "(construct 1 2 (unit inc))", "A", { leftoverDiag: ["inc"] }],
-	["R74 i [,] 5 inc（`[,] 5 inc` と同じ）（前は G2(a)、その前は G18）", r73("i [,] 5 inc"), "(construct (apply [,] 5) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
+	// 2026-11-06 の寄せ5（R136）から、余った inc は予想の上の余りで知らせない（前は leftoverDiag ["inc"]）。
+	["R74 i [,] 5 inc（`[,] 5 inc` と同じ）（前は G2(a)、その前は G18）", r73("i [,] 5 inc"), "(construct (apply [,] 5) (unit inc))", "未知", { leftoverDiag: [] }],
 	// 片イ（R125）：G16 は廃止。本体の返す所（1行の本体の根・1行だけの本体の行・枝の値・枝の後の既定の行）に残った裸の関数は `(unit …)` と
 	// bare-function-return、恒等射は知らせない。括りの関数の実体（mp2 の `[@h,] _`・gi・AF1 の前の綴り）も同じ。
 	["R75 mp2 $[[x] ? x inc] []（写像は呼ばれず G20 ではない。片6 の R95 で本体 `[@h,] _`）（前は G16、その前は A）", r73("mp2 $[[x] ? x inc] []"), "(apply mp2 (construct $[[x] ? x inc] []))", "A", { severities: ["information/bare-function-return"] }],
@@ -6484,7 +6489,8 @@ const r28Passes = [
 	["R105 で通る i _ inc 5（恒等射。R74 で恒等射が消える。前は G5）", r28("i _ inc 5"), "(apply inc 5)", "A"],
 	// 片イ（R126）で G6 は廃止。`@f` の f は未定義で種類の未知な項、後ろの関数は積む予想で余ったラムダの `_`（R120・R42・R52。leftover-lambda を予想の上で出すかは
 	// §5 Q85 (l)）。`_` が消えて `@f inc` と同じ（前は G6、その前は G5）。
-	["@f _ inc は `@f inc` と同じ（前は G6、その前は G5）", r28("@f _ inc"), "(construct @f (unit inc))", "未知", { severities: ["information/undefined-name", "warning/leftover-lambda"] }],
+	// 2026-11-06 の寄せ5（R136）から、`@f` は関数でありうるので、その上に余った inc は知らせない（前は warning/leftover-lambda も出た）。
+	["@f _ inc は `@f inc` と同じ（前は G6、その前は G5）", r28("@f _ inc"), "(construct @f (unit inc))", "未知", { severities: ["information/undefined-name"] }],
 	// 片イ（R125）で G16 は廃止。末尾の `_` が消えて関数を返す本体は `_` と bare-function-return（下の4行。前は G16）。
 	["fz : x ? add x _ は本体の根が `add x`（前は G16、その前は終わりの A）", r28("fz : x ? add x _"), "(: fz (? [x] (unit (apply add x))))", "A", { severities: ["information/bare-function-return"] }],
 	["h : [f] ? f 1 _ ⏎ h [f : [f3 !_ !_ 3]] は実体の本体の根が `f 1`（前は G16、その前は終わりの A）", r28(["h : [f] ? f 1 _", "h [f : [f3 !_ !_ 3]]"]), "(apply h [f : [f3 !_ !_ 3]])", "A", { severities: ["information/bare-function-return"] }],
@@ -8764,6 +8770,77 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		const got = answerAt(s);
 		if (got === "ERR coproduct-unknown-kind G7 @2") ok("寄せ5 R127 実体の総数の上限は、前もって解く定義の行 → @2");
 		else fail("寄せ5 R127 実体の総数の上限は、前もって解く定義の行", `got: ${got}  want: ERR coproduct-unknown-kind G7 @2`);
+	}
+}
+// 寄せ5 R136（2026-11-06、§5 Q85 (l) を閉じた）：種類の未知な項（関数でありうる項）の上に積んで余った関数は、読む段の予想の木の上では leftover-lambda を
+// 知らせない（木の `(unit …)` は今のまま）。実体が当たれば、当たった方の知らせを1つ出す（`h $inc 5` は leftover-lambda、`h $add 5` は bare-function-return。
+// 行は本体の書いた行、R127）。関数になりえない答え（`?` を呼び終えた答え・中身の見えない値・論理・比べ・算術・ビット・範囲・`,` の答えと値の印（前置 `-`・`!!`・後置 `!`）の答え。いちばん外の前置が `!` の否定・ノルム・絶対値と `'`・中置 `@` は関数でありうる側、仕様 R136 の R の所）の上の余りは今のまま warning。
+// [名前, 源の行（頭に inc と add の定義を足す）, 最後の木, 種類, 診断（重さ/reason@行 の並び）]
+{
+	const PRE = ["inc : x ? x + 1", "add : x y ? x + y"];
+	const R136 = [
+		// 知らせない（前は warning/leftover-lambda も出た）
+		["`@f x` の上の inc は定義の行で何も言わない", ["h : f x ? @f x inc"], "(: h (? [f x] (construct (apply @f x) (unit inc))))", "A", []],
+		["h $inc 5 は実体の leftover-lambda だけ", ["h : f x ? @f x inc", "h $inc 5"], "(apply h (construct $inc 5))", "A", ["warning/leftover-lambda@3"]],
+		["h $add 5 は実体の bare-function-return だけ", ["h : f x ? @f x inc", "h $add 5"], "(apply h (construct $add 5))", "A", ["information/bare-function-return@3"]],
+		["印の無い値を渡す k 5 5 は実体を作らず、何も言わない", ["h : f x ? @f x inc", "k : g y ? h g y", "k 5 5"], "(apply k (construct 5 5))", "未知", []],
+		["既定値の口だけ開いた gq 1 の上の inc", ["gq :", "\t\tx", "\t\ty : 1", "\t? x + y", "", "gq 1 inc"], "(construct (apply gq 1) (unit inc))", "未知", []],
+		["点なし `[,] 2` の答えの上の inc", ["(5 < 3) | ([,] 2) inc"], "(| [5 < 3] (construct [[,] 2] (unit inc)))", "未知", []],
+		["外の値の定義 w を隠した仮引数（既定値 [,] 2）の上の inc は知らせない（範囲の名前を先に引く）", ["w : 1 , 2", "p :", "\t\tw : [,] 2", "\t? w inc"], "(: p (block (? [{w : [,] 2}] (construct w (unit inc)))))", "A", ["information/name-shadow@5"]],
+		["外の値の定義 w を隠した仮引数（既定値 [,] 2）を括った (w) の上の inc も知らせない（括りをほどいても使う所の範囲で引く）", ["w : 1 , 2", "p :", "\t\tw : [,] 2", "\t? (w) inc"], "(: p (block (? [{w : [,] 2}] (construct [w] (unit inc)))))", "A", ["information/name-shadow@5"]],
+		// `'` と中置 `@` は引いた物が関数でありうる。いちばん外の前置が `!` の否定は値の印に数えない（関数でありうる側）。2026-11-06 の寄せ5 の確かめの直しで足した境い目の守り
+		// （この4行と下の `!!`・後置 `!` の2行が無いと、境い目を1つずつ壊す変異が表を素通りした）
+		["`w : [,] 2` の引いた物 (w ' 1) の上の inc は知らせない（引いた物は関数でありうる）", ["w : [,] 2", "(w ' 1) inc"], "(construct [w ' 1] (unit inc))", "未知", []],
+		["`w : [,] 2` の中置 @ (w @ 1) の上の inc は知らせない", ["w : [,] 2", "(w @ 1) inc"], "(construct [w @ 1] (unit inc))", "未知", []],
+		["中置 `@` の `fs @ 0` の上の inc は知らせない", ["fs : $inc , 3", "fs @ 0 inc"], "(construct (@ fs 0) (unit inc))", "未知", []],
+		["前置 `!` だけの否定 !(@f x) の上の inc は知らせない（`!f` は §2 で未決）", ["h : f x ? !(@f x) inc"], "(: h (? [f x] (construct ![@f x] (unit inc))))", "A", []],
+		// 今のまま warning（関数になりえない答えの上）
+		["`?` を呼び終えた t 5 の上の inc", ["t : y ? y", "t 5 inc"], "(construct (apply t 5) (unit inc))", "A", ["warning/leftover-lambda@4"]],
+		// 口が可変長の括りの関数は並びの終わり（closeEntry）で閉じるので、そこでも呼び終えた印を付ける。寄せ5 の試験の一度目で法則4（括りの関数と素の関数は同じ読み）が
+		// 落ちて見つけた（作る途中の版は、この4行で知らせが黙った。寄せ5 の前と同じ warning）。
+		["括りの関数を呼び終えた (hb 5) の上の inc", ["hb : [x] ? [,] x", "(hb 5) inc"], "(construct [hb 5] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["括りの関数を呼び終えた値の定義 v : hb 5 の上の inc", ["hb : [x] ? [,] x", "v : hb 5", "v inc"], "(construct v (unit inc))", "未知", ["warning/leftover-lambda@5"]],
+		["残りの口のある括りの関数を呼び終えた (hr 5) の上の inc", ["hr : [x ~xs] ? [,] x", "(hr 5) inc"], "(construct [hr 5] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["裸の口と括りの口の関数を呼び終えた (hz 5 6) の上の inc", ["hz : x [y] ? [,] x", "(hz 5 6) inc"], "(construct [hz 5 6] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["値 5 の上の inc", ["5 inc"], "(construct 5 (unit inc))", "A", ["warning/leftover-lambda@3"]],
+		["値の定義 v : 5 の上の inc", ["v : 5", "v inc"], "(construct v (unit inc))", "A", ["warning/leftover-lambda@4"]],
+		["比べの答えの上の inc", ["(3 < 2) inc"], "(construct [3 < 2] (unit inc))", "A", ["warning/leftover-lambda@3"]],
+		["算術の答えの上の inc", ["(1 + 2) inc"], "(construct [1 + 2] (unit inc))", "A", ["warning/leftover-lambda@3"]],
+		["論理の答えの値の定義の上の inc", ["w : (5 < 3) & ([,] 2)", "w inc"], "(construct w (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["`,` の答えの値の定義の上の inc", ["v : 1 , 2", "v inc"], "(construct v (unit inc))", "A", ["warning/leftover-lambda@4"]],
+		["括った `?` の答え [uu 5] の上の inc", ["uu : x ? [,] x", "[uu 5] inc"], "(construct [uu 5] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["算術の被演算子 (t 1 inc) + 3 は黙らない", ["t : a ?", "\ta > 5", "\t[,] a", "", "(t 1 inc) + 3"], "(+ [t 1 inc] 3)", "未知", ["warning/leftover-lambda@7"]],
+		["`,` の辺 t 1 inc , 4 も黙らない", ["t : a ?", "\ta > 5", "\t[,] a", "", "t 1 inc , 4"], "(, (construct (apply t 1) (unit inc)) 4)", "A", ["warning/leftover-lambda@7"]],
+		["`w : [,] 2` の算術の答え (w + 1) の上の inc", ["w : [,] 2", "(w + 1) inc"], "(construct [w + 1] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["`w : [,] 2` の比べの答え (w < 1) の上の inc", ["w : [,] 2", "(w < 1) inc"], "(construct [w < 1] (unit inc))", "未知", ["warning/leftover-lambda@4"]],
+		["`@f x` の算術の答えの上の inc", ["h : f x ? (@f x) + 1 inc"], "(: h (? [f x] (construct (+ [@f x] 1) (unit inc))))", "A", ["warning/leftover-lambda@3"]],
+		["値の印 -(@f x) の答えの上の inc", ["h : f x ? -(@f x) inc"], "(: h (? [f x] (construct -[@f x] (unit inc))))", "A", ["warning/leftover-lambda@3"]],
+		["値の印 !!(@f x) の答えの上の inc", ["h : f x ? !!(@f x) inc"], "(: h (? [f x] (construct !![@f x] (unit inc))))", "A", ["warning/leftover-lambda@3"]],
+		["値の印 (@f x)! の答えの上の inc", ["h : f x ? (@f x)! inc"], "(: h (? [f x] (construct [@f x]! (unit inc))))", "A", ["warning/leftover-lambda@3"]],
+		["関数でありうる w の上で呼び終えた inc 5 の後ろの穴の関数 add 1 !_", ["w : [,] 2", "w inc 5 add 1 !_"], "(construct w (apply inc 5) (unit (? [$p0] (apply add (construct 1 $p0)))))", "未知", ["warning/leftover-lambda@4"]],
+		["論理の答えの別名を16段重ねた w16 の上の inc", ["w0 : (5 < 3) & ([,] 2)", ...Array.from({ length: 16 }, (_, i) => `w${i + 1} : w${i}`), "w16 inc"], "(construct w16 (unit inc))", "未知", ["warning/leftover-lambda@20"]],
+		// 値の定義の右辺の名前はファイルの範囲で引く（使う所の仮引数が同じ名前でも隠さない、R133・法則47。2026-11-06 の寄せ5 の確かめの直し：作る途中の版は
+		// 使う所の範囲で引き、この2行の warning が黙った）
+		["外の値の定義 v と同じ名前の仮引数があっても、w の右辺の v はファイルの v（法則47）", ["w : v", "v : (5 < 3) & ([,] 2)", "h : v ? w inc"], "(: h (? [v] (construct w (unit inc))))", "A", ["information/name-shadow@5", "warning/leftover-lambda@5"]],
+		["仮引数がファイルの値の定義 w0 を隠しても、別名 w1 の右辺の w0 はファイルの定義（論理の答え）を指す", ["w0 : (5 < 3) & ([,] 2)", "w1 : w0", "h : w0 ? w1 inc"], "(: h (? [w0] (construct w1 (unit inc))))", "A", ["information/name-shadow@5", "warning/leftover-lambda@5"]],
+	];
+	for (const [name, lines, want, kind, diags] of R136) {
+		total++;
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			fail(`寄せ5 R136 ${name}`, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
+		const problems = [];
+		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
+		if (problems.length) fail(`寄せ5 R136 ${name}`, ...problems);
+		else ok(`寄せ5 R136 ${name}`);
 	}
 }
 
