@@ -446,6 +446,8 @@ stops("寄せ2 R131 括りの既定値", ["gd : x [y : 1] ? x + y", "gd 1"], "pa
 // 寄せ1 の R130：枝のある本体で、最後でない裸の行は読む段で止め、その裸の行を名指す（枝の前・既定の行が2つ）。
 stops("寄せ1 R130 枝の前の裸の行", ["t : x ?", "\tx + 1", "\tx > 0 : 1", "\tx", "", "t 1"], "body-bare-row-between", N + 1);
 stops("寄せ1 R130 既定の行が2つ", ["t : x ?", "\tx > 0 : 1", "\tx + 1", "\tx", "", "t 1"], "body-bare-row-between", N + 2);
+// 寄せ5 の R135：括りの中の `?` で始まる行は前処理（読む段）で止め、その `?` の行を名指す（前は `[x ? x + 1] 5` と同じに読まれて 6）。
+stops("寄せ5 R135 括りの中の `?` の行（前は 6）", ["[", "\t\tx", "\t? x + 1", "] 5"], "param-block-bracket", N + 2);
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

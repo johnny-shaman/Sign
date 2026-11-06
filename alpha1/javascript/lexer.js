@@ -188,7 +188,7 @@ function bracketDelta(content) {
 //
 // 仮引数のブロックは2段、`?` は1段、本体をブロックで書くなら本体も2段（深さ k の定義なら k+2・k+1・k+2）。
 // 括りの仮引数のブロック（`[` … `]`）も同じ字下げで書き、`?` は閉じの次の行に置く。形は1つだけで、外れた形は
-// 名指しで断る。
+// 名指しで断る。括りの中に `?` の行は置けない（R135、下の refuseBracketQuestionRow）。
 //
 // `?` で始まる行は定義の行で前の行へつなぐので、置いた深さでどの行に付くかが決まる（下の markBlock）。深い TAB は揃えで
 // 今の行に付き、浅ければ閉じた段の先の行に付く。だから門は**書いた行**（続きの行でも括弧の中の行でもない行）の
@@ -215,8 +215,8 @@ function bracketDelta(content) {
 // `y : 3`⏎`\t\t? x + y` と1行に書いた `y : 3 ? x + y` が同じ木で届く。Sign 側の前処理
 // （preprocess.sn の `q_bad`）も同じ深さで同じ判定をする。
 //
-// 断らないもの：ファイルの最初の行の `? 5`（続ける行が無いので続きにならない）、括弧の中の `?`（括弧の中は
-// 字下げを数えない）。仮引数の行より1段深い `?` は、1行の仮引数の `?` と深さでは見分けられない——前の行が
+// 断らないもの：ファイルの最初の行の `? 5`（続ける行が無いので続きにならない）。括弧の中の `?` で始まる行は字下げを
+// 数えないのでこの門の外で、2026-11-06 の寄せ5 から TAB に依らず別の門で断る（R135、param-block-bracket）。仮引数の行より1段深い `?` は、1行の仮引数の `?` と深さでは見分けられない——前の行が
 // 定義の行か仮引数の行かは字句の段では決まらないので、ここでは断らない（未決、2026-10-05）。
 const QUESTION_ROW_RULE =
   "`?` で始まる行は、定義の行から1段だけ字下げします（仮引数のブロックは2段、`?` は1段、本体のブロックも2段。" +
@@ -363,6 +363,161 @@ function refuseQuestionAfterClose(content, q) {
   );
 }
 
+// **括りの中の `?` の行は断る**（R135、§5 Q87。U〔答え〕[2026-11-05 15:19 de332d62]「形ごと断る」、範囲は U [2026-11-06 11:41 de332d62]
+// 「括りが?から始まるのは本当に?なので / Bで入って！」）。括りの中は字下げを数えないので、`[` ⏎ `⇥⇥x` ⏎ `⇥? x + 1` ⏎ `]` の `?` の行は
+// 前の行へつながり、仮引数が1つなら `[x ? x + 1]`、2つなら器 `[x ⏎ y ? x + y]` に黙って化けていた（名前の無い関数に仮引数のブロックの綴りは無い、
+// R131 の帰結1）。断るのは TAB に依らず、括りの中で `?` から始まる行（行頭の空白の後の `?` も）の全部——TAB で断る・通すを決めると、
+// TAB を外すだけで断りを抜けて器に化ける（法則49 は括りの中の TAB を足し引きしても答えが同じ）。名指すのはこの `?` の行（R127 の前処理の断り）。
+//
+// 言い分のための控え（断る・通すには使わない）。frames は開いている括りの控え（外から順）：開いた行の TAB の数 k・中身 head・括りの位置 at・
+// その行が括りを開いたまま終わるか endsOpen・開いた行の置き場 place（書いた行の段の place、括りの中で開いたら "bracket"）・括りの中に書いた行 rows・
+// 開いた行で開いた内の括りが行を跨いで閉じた時の中身 more。
+function openFrames(frames, content, k, place) {
+  let i = 0;
+  let last = null;
+  while (i < content.length) {
+    const ch = content[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '`' || ch === '"') {
+      const close = content.indexOf(ch, i + 1);
+      if (close === -1) break;
+      i = close + 1;
+      continue;
+    }
+    if (ch === '[' || ch === '(' || ch === '{') {
+      last = { k, head: content, at: i, endsOpen: false, place: frames.length > 0 ? 'bracket' : place, rows: [], more: '' };
+      frames.push(last);
+    } else if (ch === ']' || ch === ')' || ch === '}') {
+      const done = frames.pop();
+      if (done === last) last = null;
+      // 行を跨いだ内の括りを閉じたら、その中身を外の括りの控えへ戻す（言い分の書き直し先を書ける形にする）。中身は、閉じた括り自身の more
+      // （同じ行で開いたさらに内の括りから戻った物）を先に、中に書いた行を後に並べる。
+      const parent = frames[frames.length - 1];
+      if (done && parent && (done.rows.length > 0 || done.more !== '')) {
+        const text = [done.more.trim(), ...done.rows.map((r) => r.c)].filter((t) => t !== '').join(' ');
+        if (parent.rows.length > 0) parent.rows[parent.rows.length - 1].c += ' ' + text;
+        else parent.more += ' ' + text;
+      }
+    }
+    i++;
+  }
+  if (last && frames[frames.length - 1] === last && content.slice(last.at + 1).trim() === '') last.endsOpen = true;
+}
+
+// 書いた行の段の置き場（R135 の言い分の出し分けだけに使う）。いちばん外は top。字下げを深くして開いた段は、上の行（続きの行をつないだもの）の
+// 最後の演算子と上の段の置き場で決まる：`?` の下は本体（枝の行）。`:` の下は、上の段が本体なら枝の値のブロック（その行も枝、R128）、上の段が
+// 仮引数なら、2段で既定値の値の関数の仮引数（param）、ほか（1段も3段以上も）は既定値の値のブロック（default）、上の段がいちばん外か
+// 欄なら1段で欄・2段で仮引数（3段以上は other）。3段以上跳んだ段は、上の `:` の行のブロックに `?` の行があれば、括りで書かなくても
+// question-row-indent で止まる形（`?` の行が無ければ入れ子のブロックとして通る）。
+// ほかの演算子の下と、跳んだ途中の段へ後から戻った段は other。
+function placeOfBlock(parent, depth, logical, opened) {
+  if (depth === 0) return 'top';
+  if (!opened || !parent) return 'other';
+  const words = separateInfix(logical).trimEnd().split(' ');
+  const op = words[words.length - 1];
+  if (op === '?') return 'body';
+  if (op !== ':') return 'other';
+  if (parent.place === 'body') return 'body';
+  if (parent.place === 'param') return depth - parent.depth === 2 ? 'param' : 'default';
+  if (parent.place !== 'top' && parent.place !== 'field') return 'other';
+  return depth - parent.depth === 1 ? 'field' : depth - parent.depth === 2 ? 'param' : 'other';
+}
+
+// 括りの閉じの手前まで（その括りより外へ出たら切る）。
+function cutAtClose(s) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '[' || ch === '(' || ch === '{') depth++;
+    else if (ch === ']' || ch === ')' || ch === '}') {
+      if (--depth < 0) return s.slice(0, i).trim();
+    }
+  }
+  return s.trim();
+}
+
+// 括りを開いた行で、その括り（位置 at）より前に、その括りを囲む所の `?` があるか（`f : x ? [m :`・`[x ? [m :`。閉じた括りの中の `?` は数えない）。
+function questionBeforeBracket(head, at) {
+  const open = [false];
+  for (let i = 0; i < at; i++) {
+    const ch = head[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '`' || ch === '"') {
+      const close = head.indexOf(ch, i + 1);
+      if (close === -1 || close >= at) break;
+      i = close;
+      continue;
+    }
+    if (ch === '[' || ch === '(' || ch === '{') open.push(false);
+    else if (ch === ']' || ch === ')' || ch === '}') {
+      // 前の行で開いた括りを閉じたら、それまでの `?` はその括りの中の物。
+      if (open.length > 1) open.pop();
+      else open[0] = false;
+    } else if (ch === '?') open[open.length - 1] = true;
+  }
+  return open.includes(true);
+}
+
+function refuseBracketQuestionRow(f, content, q) {
+  const body = cutAtClose(content.replace(/^ *\? */, ''));
+  const head = f ? f.head.trim() : '';
+  const tail = f ? cutAtClose(f.head.slice(f.at + 1) + f.more) : '';
+  const rows = [...(tail ? [tail] : []), ...(f ? f.rows.map((r) => cutAtClose(r.c)) : [])].filter((r) => r !== '');
+  const prev = rows.length > 0 ? rows[rows.length - 1] : '';
+  // 字下げの形（TAB で見る。言い分の出し分けだけに使う）：開いた行が括りで終わり、中の行が全部2段、`?` の行が1段。
+  const shape = !!f && f.endsOpen && f.rows.length >= 1 && f.rows.every((r) => r.t === f.k + 2) && q === f.k + 1;
+  const what =
+    `複数の行に書いた括り（\`${quoted(head)}\` の行で開いた括り）の中に、\`?\` で始まる行（TAB ${q} 個の \`${quoted(content.trim())}\`）があります。` +
+    '括りの中は字下げを数えないので、括りの中に `?` の行は置けません（名前の無い関数に仮引数のブロックの綴りは無い、§4 R131 の帰結1）。';
+  const end = '文法に無い形なので、読む段で止めます（§4 R135）。';
+  const refuse = (guide) => {
+    throw new OperationError(`${what}${guide}${end}`, { reason: 'param-block-bracket', spec: 'alpha1/docs/coproduct_spec.md §4 R135' });
+  };
+  const isDefRow = (r) => / : /.test(` ${r} `);
+  const block = (name, ps) =>
+    `\`${name} :\` ⏎ ${ps.map((r) => `\`⇥⇥${quoted(r)}\``).join(' ⏎ ')} ⏎ \`⇥?${body ? ` ${quoted(body)}` : ''}\`${body ? '' : ' ⏎ 枝の行'}`;
+  const choose = (oneLine, named, after, note = '') =>
+    refuse(
+      oneLine
+        ? `短ければ${oneLine}に、長いか既定値・行に割った枝を使うなら${named}${after}${note ? `（${note}）` : ''}。`
+        : `${named}${after}（既定値と、行に割った枝は名前の定義の物です${note ? `。${note}` : ''}）。`
+    );
+  // 仮引数の無い `?` の行（括りを開いた次の行など）。
+  if (rows.length === 0) refuse('仮引数を `?` の左に並べた1行の括り（`[x ? …]`）か、名前の定義にします。');
+  // 括りの中の欄の行 `m :` の下に仮引数を書いた形（括りで書いた構造体の欄）。欄の仮引数のブロックは字下げの構造体の物（§4 R134）。
+  // 括りが関数の本体の中（本体・枝の行で開いた括りか、括りを開いた行で括りより前に `?` がある `f : x ? [m :`）なら、本体に字下げで書いた `m :` の行は
+  // 枝（R128）なので、欄のブロックでなくファイルの名前の定義を案内する。R134 は名指さない（枝の値の中の構造体の欄は §5 Q88 (b)、括った本体は返す構造体の欄）。
+  const fieldAt = rows.findLastIndex((r) => /^#*[A-Za-z_][A-Za-z0-9_]* *:$/.test(r));
+  if (fieldAt >= 0 && fieldAt < rows.length - 1) {
+    const field = rows[fieldAt].replace(/ *:$/, '');
+    const ps = rows.slice(fieldAt + 1);
+    const oneLine = !ps.some(isDefRow) && body !== '' ? `欄の1行（\`${field} : ${quoted(ps.join(' '))} ? ${quoted(body)}\`）` : null;
+    const inBody = !!f && (f.place === 'body' || questionBeforeBracket(f.head, f.at));
+    if (inBody) choose(oneLine, `ファイルの名前の定義（${block('名前', ps)}）`, 'にして、ここではその名前を書きます');
+    choose(oneLine, `字下げの欄のブロック（${block(field, ps)}。字下げは欄の行から数え、括りで書いた構造体は字下げのブロックで書きます）`, 'にします');
+  }
+  // 前の行が定義の行（構造体の欄 `m : x` など）で、字下げが仮引数のブロックの形でなければ、`?` はその行の続き。
+  if (!shape && isDefRow(prev) && body !== '') refuse(`\`?\` は前の行の終わりに続けて書きます（\`${quoted(prev)} ? ${quoted(body)}\`）。`);
+  const oneLine = !rows.some(isDefRow) && body !== '' ? `1行の括り（\`[${quoted(rows.join(' '))} ? ${quoted(body)}]\`）` : null;
+  const mm = f ? f.head.match(/^(#*[A-Za-z_][A-Za-z0-9_]*) *: *\$?[[({]/) : null;
+  const m = mm && mm[0].length - 1 === f.at ? mm : null;
+  const place = f ? f.place : 'other';
+  if (place === 'top' && m) choose(oneLine, `名前の定義（${block(m[1], rows)}）`, 'にします');
+  if (place === 'field' && m) choose(oneLine, `字下げの欄のブロック（${block(m[1], rows)}。字下げは欄の行から数えます）`, 'にします');
+  const nested = place === 'body' || place === 'param' || place === 'default';
+  // 枝の値・既定値の値（括りが `:` の行の右）だけ R134 を言う。本体の行の実引数と仮引数の括りは R134 の置き場でない（本体の入れ子の `?` の右は §5 Q88）。
+  // 既定値の値のブロック（place 'default'）の `名前 :` の行は構造体の欄（§5 Q88 (b)）で、R134 の置き場でない。
+  const valueOfColon = !!f && f.place !== 'default' && / : *\$?$/.test(` ${f.head.slice(0, f.at)}`);
+  if (nested) choose(oneLine, `ファイルの名前の定義（${block('名前', rows)}）`, 'にして、ここではその名前を書きます', valueOfColon ? '枝の値・既定値の値に仮引数のブロックの関数は置けません、§4 R134' : '');
+  choose(oneLine, `ファイルの名前の定義（${block('名前', rows)}）`, 'にして、その名前を書きます');
+}
+
 // Indent・Dedentのマーキング関数。**入力は `classifyNewlines` を通したもの**で、処理行は CR で切る。
 // 行の中の LF は `\` と組んだ文字の改行であり、行の区切りではない（preprocessor.md §0）。
 //
@@ -401,6 +556,8 @@ function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] })
   // `opened` はその段を**その行が字下げを深くして開いた**か——跳んだ途中の段へ後から戻って書いた行（0 → 3 → 2 の
   // 2）や、閉じた段へ書いた行は開いていない。同じ深さの次の行はその段の印を変えない。
   const written = [];
+  // 開いている括りの控え（R135 の言い分だけに使う。openFrames）。
+  const frames = [];
   // 前の書いた行からこの行までに空行があったか（refuseMissingBlankLine）。
   let sawBlank = false;
   // 前の書いた行からこの行までにコメントの行があったか（式の途中にコメントは置けない）。
@@ -446,6 +603,10 @@ function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] })
     if (bracketDepth > 0) {
       // 複数の行に書いた括りを閉じた行の後ろの `?`（上の refuseMisplacedQuestionRow の注）。
       if (questionAfterClose(content, bracketDepth)) refuseQuestionAfterClose(content, leadingWs.length);
+      // 括りの中で `?` から始まる行（R135、上の refuseBracketQuestionRow の注）。TAB に依らず断る。
+      const frame = frames[frames.length - 1];
+      if (/^ *\?/.test(content)) refuseBracketQuestionRow(frame, content, leadingWs.length);
+      if (frame && !content.startsWith(' ')) frame.rows.push({ t: leadingWs.length, c: content });
       // **ブラケットの中ではタブ深さを INDENT/DEDENT に翻訳しない。** 見やすさのために
       // 中を深くインデントする書き方（function_guide.md の func_mixed 例）で、本来無い
       // インデントブロックが二重に差し込まれるのを防ぐ。行頭のタブだけ落として、
@@ -464,6 +625,8 @@ function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] })
       sawBlank = false;
       sawComment = false;
       bracketDepth += bracketDelta(content);
+      if (bracketDepth > 0) openFrames(frames, content, leadingWs.length, written.length > 0 ? written[written.length - 1].place : 'other');
+      else frames.length = 0;
       continue;
     }
 
@@ -492,7 +655,8 @@ function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] })
     if (isContinuation && /^ *\?/.test(content) && lastContentLineIdx !== -1) refuseMisplacedQuestionRow(content, currentIndent, depth, written);
     while (written.length > 0 && written[written.length - 1].depth > currentIndent) written.pop();
     if (!isContinuation && (written.length === 0 || written[written.length - 1].depth !== currentIndent)) {
-      written.push({ depth: currentIndent, opened: currentIndent > depth });
+      const opened = currentIndent > depth;
+      written.push({ depth: currentIndent, opened, place: placeOfBlock(written[written.length - 1], currentIndent, logical, opened) });
     }
 
     // インデントが浅くなった場合、戻った段の数だけ DEDENT マーカーを出力
@@ -548,6 +712,8 @@ function markBlock(input, commentLines = new Set(), track = { at: 0, segs: [] })
     sawBlank = false;
     sawComment = false;
     bracketDepth += bracketDelta(content);
+    frames.length = 0;
+    if (bracketDepth > 0) openFrames(frames, content, currentIndent, written.length > 0 ? written[written.length - 1].place : 'other');
   }
 
   // ファイル末尾に達した場合、残っているインデントをすべて（段の数だけ）閉じる

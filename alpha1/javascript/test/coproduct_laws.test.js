@@ -6354,5 +6354,85 @@ law("48 通る比べの連鎖どうしで記号を入れ替えても、木（記
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
+// ---------------------------------------------------------------------------
+// 法則49：複数の行に書いた括りの中の行の頭の TAB を足し引きしても、読む段の答えは同じ（R135、2026-11-06 の寄せ5）
+// ---------------------------------------------------------------------------
+//
+// 比べる綴り：行を跨ぐ括りのあるプログラム（括りの中に `?` で始まる行のある形・括った本体・括りの構造体・func_mixed・括りの仮引数・2行の括り・入れ子の括り）。
+// 括りの中の行（行の頭で括りが開いている行。空行とコメントの行は除く）の頭の TAB を、0・1・2・3 個に揃えて書き換える。
+// 何を同じと見るか：読む段（resolve.js）の全部の行の木と種類、知らせの reason と行、断れば reason・門・行（言い分は TAB の数を書くので比べない）。
+// なぜ同じか：括りの中は字下げを数えない（前処理の約束）。寄せ5 の §5 Q87 の範囲で、括りの中の `?` の行を TAB に依らず断ることにした（U [2026-11-06 11:41 de332d62]
+// 「括りが?から始まるのは本当に?なので / Bで入って！」）。答えの字面の形（2段の行の後に1段の `?` の行）だけを断ると、TAB を外すだけで断りを抜けて器に化け、
+// この法則が 14 の形で割れた（寄せ5 の試作）。
+const SHAPES49 = [
+	["[", "\t\tx", "\t? x + 1", "] 5"],
+	["[", "\t\tx", "\t\ty", "\t? x + y", "] 5 2"],
+	["g : [", "\t\tx", "\t\ty : 1", "\t? x + y", "]", "", "g 5"],
+	["[", "\t\tx", "\t?", "\t\tx > 0 : 1", "\t\t2", "] 5"],
+	["o :", "\tm : [", "\t\t\tx", "\t\t? x + 1", "\t]", "", "o ' m 4"],
+	["o : [", "\tm : x", "\t\t? x + 1", "]", "", "o ' m 4"],
+	["[x", "\t? x + 1] 5"],
+	["[", "\t[", "\t\t\tx", "\t\t? x + 1", "\t]", "]"],
+	["f : x y ? [", "\tx", "\ty", "]", "", "f 1 2"],
+	["Point : x y ? [", "\tx : x", "\ty : y", "]", "", "Point 1 2"],
+	["func_mixed :", "\t\t[", "\t\t\tx", "\t\t\t~z", "\t\t]", "\t? x", "", "func_mixed [5]"],
+	["gm : x [a", "\t\tb]", "\t? x", "", "gm 1 [2 3]"],
+	["g : [", "\t\tx", "\t\ty", "]", "\t? x + y", "", "g [5 2]"],
+	["[", "\tx ? x + 1", "] 5"],
+	["a : [", "\t1", "\t + 2", "]", "", "a"],
+	["y : (1", "+ 2) * 3"],
+	["regreet : [~this] ? [", "\tgreet : [", "\t\twelcome : `w`", "\t\t(this ' greet)~", "\t]", "\tworld : `m`", "\tthis~", "]", "", "regreet [greet : [hi : `h`]]"],
+	["t : y ?", "\tv : [1", "\t\t2]", "\tv ' 0", "", "t 1"],
+	["f : [x", "\ty] ? x + y", "", "f 1 2"],
+];
+law("49 複数の行に書いた括りの中の行の頭の TAB を足し引きしても、木・種類・知らせ・断りが同じ（R135、§5 Q87）", () => {
+	const problems = [];
+	const count = { 比べた組: 0, 通る組: 0, 断る組: 0 };
+	const answer = (lines) => {
+		try {
+			const r = resolve(lines.join("\n"));
+			return `通る ${r.trees.map((t) => `${show(t)} : ${kindOf(t)}`).join(" ⏎ ")} ／ ${r.diagnostics.map((d) => `${d.reason}@${d.line}`).join(" ")}`;
+		} catch (e) {
+			return e.reason ? `断り ${e.reason} ${e.gate || ""} @${e.line}` : `例外 ${e.name}: ${e.message}`;
+		}
+	};
+	const delta = (c) => {
+		let d = 0;
+		for (let i = 0; i < c.length; i++) {
+			const ch = c[i];
+			if (ch === "\\") i++;
+			else if (ch === "`" || ch === '"') {
+				const j = c.indexOf(ch, i + 1);
+				if (j < 0) break;
+				i = j;
+			} else if ("[({".includes(ch)) d++;
+			else if ("])}".includes(ch)) d--;
+		}
+		return d;
+	};
+	const retab = (lines, n) => {
+		let depth = 0;
+		return lines.map((l) => {
+			const c = l.replace(/^\t*/, "");
+			const out = depth > 0 && c.trim() !== "" ? "\t".repeat(n) + c : l;
+			depth = Math.max(0, depth + delta(c));
+			return out;
+		});
+	};
+	for (const lines of SHAPES49) {
+		const base = answer(lines);
+		const outs = [0, 1, 2, 3].map((n) => answer(retab(lines, n)));
+		count.比べた組++;
+		if ([base, ...outs].some((o) => o.startsWith("例外")) || outs.some((o) => o !== base)) {
+			problems.push(`${JSON.stringify(lines.join("⏎"))}：${base}  ⇔  ${outs.join("  ⇔  ")}`);
+			continue;
+		}
+		if (base.startsWith("断り")) count.断る組++;
+		else count.通る組++;
+	}
+	for (const [k, v] of Object.entries(count)) if (!v) problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
+});
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
