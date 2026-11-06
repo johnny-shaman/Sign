@@ -92,6 +92,8 @@
  * R131 は 2026-11-04 の寄せ2：仮引数の括り（参照の口）に既定値は書けず、括りの中に `:` のある仮引数と、仮引数のブロックの左に括りのある `:` の行は読む段で止める
  * （bracketDefault・refuseBracketDefault の param-default-bracket。checkParamNames）。既定値は字下げの仮引数のブロックの `名前 : 既定値` の行だけなので、
  * defaultsBare・defaultsSlots・defaultsArity・unitDefaultParam・bareRestParam・visitDefaults もブロックの行だけを見る、
+ * R134 は 2026-11-06 の寄せ5：字下げの仮引数のブロックで書いた関数は名前の定義（ファイルの定義と構造体の欄）の綴りで、枝の値と既定値の値に置いたら読む段で止める
+ * （paramBlockLambda・refuseParamBlockPlace の param-block-position。checkParamNames の置き場）、
  * §1.2 の P1〜P3、§2 の表の「する」の行）だけである。90% 以下の所は §6.2 の
  * 門（G1〜G22（G14 は 2026-10-21、G17 と G1 は 2026-10-22、G12 は 2026-10-23、G8 と G9 は 2026-10-24、G4 は 2026-10-27 に廃止。G19 は 2026-10-24 の R51（2026-10-25 に決定）、G20 は同じ日の R53。2026-10-25 に R54〜R57 で G20 の当たる形を直し、同じ日の R58〜R61 で G19・G20 の当たる形を直した。G21 は 2026-10-26 の R62、G22 は同じ日の R67）、P2 の門）で名指しで断る。決まっていない形を黙ってどれかの読みに倒すと、後で利用者の
  * 答えが出たときに、その形が黙った誤答として残るからである。断った形は、答えが出たら試験の「断られる」側から「通る」側へ移す。
@@ -1086,10 +1088,26 @@ function checkParamNames(lines, F) {
     pushDiag(F, "name-shadow", name, `仮引数 \`${name}\` は${hid} \`${name}\` を隠します。この関数の中の \`${name}\` は仮引数です（内側が勝つ。§4 R133）。`);
     withLine(F.diag[F.diag.length - 1], at);
   };
-  const visitTree = (t, outer) => {
+  // place は木の置き場（R134、2026-11-06 の寄せ5）：def（名前の定義の右辺。ファイルの定義と構造体の欄）・body（関数の本体）・branch（枝の値。本体と枝の値のブロックの
+  // `:` の行の右）・default（仮引数のブロックの既定値の値）。字下げのブロックの本体と枝の値は、行ごとに置き場を決める（`:` の行の右は枝の値、ほかの行は本体）。
+  // 1行のブロックは、その行の置き場のまま（名前の定義の右辺と既定値の値の `m :` ⏎ `⇥…` も、その行で見る）。括りの中の行は置き場を持たない（欄の右辺はまた def）。
+  const visitTree = (t, outer, place) => {
     if (!t) return;
-    if (t.type === "seq") return t.terms.forEach((term) => visitTerm(term, outer));
+    if (t.type === "seq") {
+      if (place && isBlockSeq(t)) {
+        const rows = t.terms[0].core.rows;
+        if (rows.length === 1 && !(place !== "def" && place !== "default" && isColonRow(rows[0]))) return inRow(rows[0], () => visitTree(rows[0], outer, place));
+        if (place === "branch" || place === "body") {
+          return rows.forEach((r) => inRow(r, () => (isColonRow(r) ? (visitTree(r.left, outer), visitTree(r.right, outer, "branch")) : visitTree(r, outer, "body"))));
+        }
+      }
+      return t.terms.forEach((term) => visitTerm(term, outer));
+    }
     if (t.sym === "?") {
+      // R134（2026-11-06 の寄せ5、§5 Q86 を閉じた）：字下げの仮引数のブロックで書いた関数は、名前の定義（ファイルの定義と構造体の欄）の綴り。枝の値（どの深さでも）と
+      // 既定値の値（どの関数でも）に置いたら、文法に無い形として読む段でファイルごと止め、そのブロックを持つ `:` の行を名指す（at。R127）。同じ `?` では R119・R131・P2 より先。
+      // 本体の入れ子の `?` の右（`f : x ?` ⏎ `⇥⇥y : 1` ⏎ `⇥? x + y`）は当てない（§5 Q88）。
+      if (paramBlockLambda(t) && (place === "branch" || place === "default")) throw withLine(refuseParamBlockPlace(t, place), at);
       // R119（2026-11-03 の片イ）：仮引数の並びに名前でない項（`g : x 3 ? x` の 3）があれば、文法に無い形なので読む段でファイルごと止める（問2 の答え、parseRow の注。R .92）。
       // 前は口の数の分からない関数（parseParams の other）として通った。括りの関数の本体の中の `?` も、ここで定義の所で止まる。
       const bad = nonNameParam(t.left);
@@ -1117,10 +1135,10 @@ function checkParamNames(lines, F) {
         if (hid) reportShadow(name, hid);
       }
       visitDefaults(t, outer);
-      return visitTree(t.right, new Set([...outer, ...seen]));
+      return visitTree(t.right, new Set([...outer, ...seen]), "body");
     }
     visitTree(t.left, outer);
-    visitTree(t.right, outer);
+    visitTree(t.right, outer, t.sym === ":" ? "def" : undefined);
   };
   const visitTerm = (term, outer) => {
     if (!term) return;
@@ -1133,7 +1151,7 @@ function checkParamNames(lines, F) {
   // 括りの中の既定値はこの上の bracketDefault が止めるので、括りの中へは降りない（前は括りの行の `:` の右も見ていた）。
   const visitDefaults = (op, outer) => {
     for (const part of lambdaScopes(op)) {
-      if (!part.body) inRow(part.row, () => visitTree(part.tree, part.bound.length ? new Set([...outer, ...part.bound]) : outer));
+      if (!part.body) inRow(part.row, () => visitTree(part.tree, part.bound.length ? new Set([...outer, ...part.bound]) : outer, "default"));
     }
   };
   for (const line of lines) {
@@ -1144,6 +1162,18 @@ function checkParamNames(lines, F) {
       throw withLine(e, F.rowLines.get(line)); // R127
     }
   }
+}
+// R134（2026-11-06 の寄せ5）：字下げの仮引数のブロックで書いた関数（`?` の左が字下げのブロック1つ）。checkParamNames が置き場を見て断る。
+function paramBlockLambda(t) {
+  return !!t && t.type !== "seq" && t.sym === "?" && !!t.left && t.left.type === "seq" && t.left.terms.length === 1 && isBareBlock(t.left.terms[0], "indent");
+}
+function refuseParamBlockPlace(t, place) {
+  const where = place === "branch" ? "枝の値" : "仮引数の既定値の値";
+  return shapeError(
+    "param-block-position",
+    `${where}に、字下げの仮引数のブロックで書いた関数 \`[${cutShape(writeTree(t))}]\` があります。仮引数のブロックは名前の定義（ファイルの定義と構造体の欄）の綴りです。関数をファイルの名前の定義にして、その名前を書きます（既定値が無ければ、1行の括り \`[x ? …]\` でも書けます）。文法に無い形なので、読む段で止めます（§4 R134）。`,
+    "§4 R134"
+  );
 }
 // 仮引数の並び（`?` の左）の、名前でない項（R119、checkParamNames）。名前・括り（中は見ない）・前置 `~` の項（括りの外の `~xs` は G22 が名指しする、R67）は当たらない。
 // 字下げの仮引数のブロックは、項の行の項と `名前 : 既定値` の行の左を見る。並びでない左（`x , y ? …`）は見ない。見つかれば {term, row}（row は仮引数のブロックの行、
@@ -1165,7 +1195,7 @@ function nonNameParam(left) {
 }
 
 // R131（2026-11-04 の寄せ2）：仮引数の括りに書いた既定値（checkParamNames）。既定値は字下げの仮引数のブロックの `名前 : 既定値` の行に書き（ファイルの名前の定義・
-// 構造体の欄・枝の値のブロック・仮引数のブロックの既定値の値の関数。枝の値の関数は返す所の裸の関数で `_`、R125。名前の定義でない3つを残すかは §5 Q86）、括りは
+// 構造体の欄。枝の値のブロックと仮引数のブロックの既定値の値の関数は、2026-11-06 の寄せ5（R134、§5 Q86 を閉じた）から読む段の param-block-position で止まる）、括りは
 // 参照の口（呼ぶ側の器を指す口）なので既定値を持たない。当てるのは2つ（並びでない左 `x , [y : 1]`・演算の行・前置の印の付いた括り・中置の項の中も、findTree が見る）：
 //  - inside：仮引数の括り（`[…]`・`(…)`。前置の印に依らない）の中のどこか（入れ子の括りも）に `:` がある。`?` の左の並びの項（1行の `gq : x [y : 1] ? x + y`・
 //    重ねた `[[y : 1]]`・丸い `([y : 1])`・`[~y : 5]`・`[#z : 1]`・`[y : _]`・名前の無い `[x [y : 1] ? x + y]`）と、仮引数のブロックの行の項（`⇥⇥[y : 1]`・複数行の括りの
@@ -1241,8 +1271,9 @@ function refuseBracketDefault(hit, who, name) {
   const row = cutShape(writeTree(hit.row));
   const slot = isColonRow(hit.row) ? singleBareName(hit.row.left) : null;
   // 書き直す先。既定値が `_` と書いた綴り（`[y : _]`・`[y] : _`。書いた `_`・単位律で `_` に縮む綴り）なら、既定値の行へ移しても R114（G22）が断るので、口の綴りを
-  // 見せる（§4 R114。寄せ2 の確かめの直し）。ファイルの名前の定義なら、その名前で書き直す先を見せる。`?` の左がもう字下げの仮引数のブロック（構造体の欄・枝の値の
-  // 関数、§5 Q86）なら、そのブロックの行を言う。ほか（括りの `?`・`$[…]`）は仮引数のブロックの綴りが無いので、名前の定義にするよう言う。
+  // 見せる（§4 R114。寄せ2 の確かめの直し）。ファイルの名前の定義なら、その名前で書き直す先を見せる。`?` の左がもう字下げの仮引数のブロック（構造体の欄と、
+  // R134 が当てない置き場（§5 Q88）。枝の値・既定値の値そのものの関数は、2026-11-06 の寄せ5 から同じ `?` で R134 の param-block-position が先に当たる）なら、
+  // そのブロックの行を言う。ほか（括りの `?`・`$[…]`）は仮引数のブロックの綴りが無いので、名前の定義にするよう言う。
   const unitRhs = isColonRow(hit.row) && (isUnitRhs(hit.row.right) || unitSpelled(hit.row.right));
   const where = unitRhs
     ? slot && hit.kind === "inside"
@@ -2417,7 +2448,9 @@ function chainFrom(F, i) {
 // 注の「単調」により未知のままなので、答えは変わらない（変わるのは、輪を見つけるかだけ）。
 // 2026-11-04 の寄せ2（R131）から、名前の無い関数（括りの `?`・`$[…]`）は既定値を持てない（`[[y : v 2] ? 5]` は読む段で止まる）。試験の dz の形（`dz :` ⏎
 // `⇥⇥y : v 2` ⏎ `⇥? 5` と `g : x ? dz x`）は同じ輪を断るが、dz の既定値を覗くのは dz の定義の行なので、例外で抜けた枠を通らない（この印を外す変異でも通る）。
-// この印を試すのは、枝の値のブロックに仮引数のブロックで書いた関数の行（`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`。§5 Q86）だけ（寄せ2 の確かめ）。
+// この印を試すのは、構造体の欄に仮引数のブロックで書いた関数（`g : x ? o` ⏎ `o :` ⏎ `⇥m :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5`）の形。寄せ2 の確かめでは、枝の値のブロックの
+// 形（`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`）で試していたが、2026-11-06 の寄せ5（R134）からその形は読む段で止まるので、欄の形に移した
+// （§5 Q86 は枝の値の形を「唯一の綴り」と書いていたが、欄の形も同じ所へ届いていた）。
 //
 // 残る割れ（§5 Q30 の未決、HEAD から）：輪を閉じる道が、仮置きの上でだけ通る形。`pb : [y ~ys] ? y + 1`・`g : x ? ⏎ ⇥pb [k x]
 // ⏎ ⇥ek`・`k : x ? pb [g x]`・`ek : k 1`・`pf : g 1` は、ek が先なら k の仮置き（A）の上で g の本体が行 `ek` まで進んで
@@ -6236,8 +6269,9 @@ function namesPattern(name, ctx, inDefault) {
     if (e.reason !== "name-cycle") return false; // 門は、その定義の行を解くときに出る
     // 名前の輪（§5 Q30）。既定値の中を覗いた所を通る輪（輪のいちばん下の枠が、覗く前から解いている途中）は、種類の輪では
     // ない。既定値は解かず（P3）、値の無で呼ばれたときにだけ評価する（§3.7）ので、値はできる（寄せ2 の前の `v : g 1`・`g : x ? [[y : v 2]
-    // ? 5] x` は v = 5。R131 から名前の無い関数は既定値を持てないので、今ここに届くのは枝の値のブロックの仮引数のブロックの関数の既定値
-    // （`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`、§5 Q86）だけ。名前の関数の既定値は、その定義の行（枠が空）でしか覗かない）。覗くのは G7（R25）を探すためだけで、行を解く段（枠が空）で、確定した種類でもう一度覗く。だから
+    // ? 5] x` は v = 5。R131 から名前の無い関数は既定値を持てないので、今ここに届くのは構造体の欄の仮引数のブロックの関数の既定値
+    // （`g : x ? o` ⏎ `o :` ⏎ `⇥m :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5`）など。枝の値のブロックの形（`g : x ?` ⏎ `⇥x > 0 :` ⏎ `⇥⇥⇥y : v 2` ⏎ `⇥⇥? 5` ⏎ `⇥0`）は、
+    // 2026-11-06 の寄せ5（R134）から読む段で止まる。§5 Q86 はそれを「唯一の綴り」と書いたが、欄の形も届いていた。名前の関数の既定値は、その定義の行（枠が空）でしか覗かない）。覗くのは G7（R25）を探すためだけで、行を解く段（枠が空）で、確定した種類でもう一度覗く。だから
     // 握りつぶして「括りの関数ではない」と読み、作った言い分（F.cycleRefused）も覗く前に戻す。前（2026-10-20 の作り直し）は
     // 投げ直していて、HEAD がどの並べ方でも通していた、値のできるプログラムを name-cycle で断った（確かめ 2026-10-20 の
     // Q30-V1・ADV-1）。
