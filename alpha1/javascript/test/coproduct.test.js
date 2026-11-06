@@ -8843,6 +8843,38 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		else ok(`寄せ5 R136 ${name}`);
 	}
 }
+// 寄せ5 の記録（2026-11-06、R105 の注）：参照の口（括りの仮引数 `[~t]`）では、書いた `_` は適用の単位で消え（`k3 _` は `k3` そのものが根に余る）、書いた `[]`・
+// `[]` の名前は空の器として席を取る（本体の `inc t~` に撒く物が無く、`[inc t~]` が本体の行 2 で余る）。計算の `_`・`_` の名前は種類の未知な実引数で、何も言わない。
+// 同じ記号の別の働き（探究の把手。U [2026-11-05 16:31:29 UTC de332d62]「一先ずそれで試そう。 / まだ試作のalpha1だ」）で、割れとは読まない。
+// [名前, 源の行（頭に inc と k3 の定義を足す）, 最後の木, 種類, 診断（重さ/reason@行 の並び）]
+{
+	const PRE = ["inc : x ? x + 1", "k3 : [~t] ? 5 + (inc t~)"];
+	const REF_UNIT = [
+		["書いた `_` は適用の単位で消え、k3 が根に余る", ["k3 _"], "(unit k3)", "A", ["warning/leftover-lambda@3"]],
+		["書いた `[]` は空の器として席を取り、本体の inc が余る", ["k3 []"], "(apply k3 [])", "A", ["warning/leftover-lambda@2"]],
+		["`[]` の名前も空の器として席を取る", ["e : []", "k3 e"], "(apply k3 e)", "A", ["warning/leftover-lambda@2"]],
+		["計算の `_`（1 / 0）は種類の未知な実引数で何も言わない", ["k3 (1 / 0)"], "(apply k3 [1 / 0])", "未知", []],
+		["`_` の名前も種類の未知な実引数で何も言わない", ["un : _", "k3 un"], "(apply k3 un)", "未知", []],
+	];
+	for (const [name, lines, want, kind, diags] of REF_UNIT) {
+		total++;
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			fail(`寄せ5 記録 参照の口の _ ${name}`, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
+		const problems = [];
+		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
+		if (problems.length) fail(`寄せ5 記録 参照の口の _ ${name}`, ...problems);
+		else ok(`寄せ5 記録 参照の口の _ ${name}`);
+	}
+}
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
