@@ -85,15 +85,23 @@ const SYSTEM = `あなたは Sign 言語のプログラムの値を当てる。S
 - __ は関数適用の吸収元。& と | は短絡評価。
 - 最後の式の値を、次の形だけで1行に答える：__ は __、器は [a b c]、文字列と数はそのまま。`;
 
+/** `--url` を検める：http(s) の明示的なホストのみ許す（SSRF対策。内部サービスやメタデータ宛てへの横流しを防ぐ）。 */
+function endpointUrl(raw) {
+	const u = new URL(String(raw).replace(/\/$/, "") + "/v1/chat/completions");
+	if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error(`--url は http/https のみ対応: ${raw}`);
+	return u.href;
+}
+
 async function ask(args) {
 	const rows = fs.readFileSync(OUT, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 	const pick = args.limit ? rows.slice(0, Number(args.limit)) : rows;
 	fs.mkdirSync(RUNS, { recursive: true });
 	const label = `values-${args.label || args.model || "local"}`;
 	const log = path.join(RUNS, `${label}.jsonl`);
+	const endpoint = endpointUrl(args.url);
 	let ok = 0;
 	for (const r of pick) {
-		const res = await fetch(String(args.url).replace(/\/$/, "") + "/v1/chat/completions", {
+		const res = await fetch(endpoint, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
