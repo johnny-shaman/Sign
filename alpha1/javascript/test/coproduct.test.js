@@ -3262,7 +3262,9 @@ const BARE_PASSES = [
 	["今は 区間を欄に入れて引いて返す h の行（k が先）（前は `(unit …)` 無し）", src(["k : x ? h x", "h : x ? [s : [+ [k x]]] ' s", "k 1"]), "(: h (? [x] (unit (' [s : [+ [k x]]] s))))", null, { at: 1 }],
 	// - 1行の条件の値が関数（段4〜8 の中置は、被演算子が全部 A でなければ未知。§2）。2026-10-26 の R76（§5 Q37 の答え：論理の被演算子は評価する所）で、
 	//   被演算子の丸ごとの関数は `_` になって知らせる（前は `(| (& (= x 0) inc) double)` で未知）。
-	["R76 1行の条件の値が関数 q : x ? x = 0 & inc | double（前は被演算子が L のまま）", src([INC, DOUBLE, "q : x ? x = 0 & inc | double"]), "(: q (? [x] (| (& (= x 0) (unit inc)) (unit double))))", null, { leftoverDiag: ["inc", "double"] }],
+	//   2026-11-07 の R137（§5 Q91 の答え）から、左の `x = 0 & inc` は inc が `_` で片側が `_` の `&` なので `|` の単位で消え、double が本体の返す所に残る（R125 の
+	//   bare-function-return、information）。前は `(| (& (= x 0) (unit inc)) (unit double))` で leftover-lambda が inc と double の2つ。
+	["R76 1行の条件の値が関数 q : x ? x = 0 & inc | double（R137。前は `(| (& (= x 0) (unit inc)) (unit double))`、その前は被演算子が L のまま）", src([INC, DOUBLE, "q : x ? x = 0 & inc | double"]), "(: q (? [x] (unit double)))", null, { leftoverDiag: ["inc"], severities: ["information/bare-function-return", "warning/leftover-lambda"] }],
 	// - 関数を並べた器を返す（`,` は A。D type_system.md は止める側、U 2026-10-18 は構造体に入った関数を「完全な裸」と分ける）。
 	// 片イ（R123）：`,` の被演算子に丸ごと残った関数は `_`（木は `(unit …)`）と leftover-lambda（前は `(, inc double)`）。
 	["今は 関数を並べた器を返す q : x ? inc , double（前は `(, inc double)`）", src([INC, DOUBLE, "q : x ? inc , double"]), "(: q (? [x] (, (unit inc) (unit double))))", null, { leftoverDiag: ["inc", "double"] }],
@@ -4937,6 +4939,10 @@ const oneFnPasses = [
 	["寄せ1 枝のある本体で sq x（sq は未定義の名前。前は G7）", trial(["tt : x ?", "\tx > 0 : 1", "\tsq : z ? z * z", "\tsq x"]), "(: tt (? [x] (block (: (> x 0) 1) (: sq (unit (? [z] (* z z)))) (construct sq x))))", null],
 	// 片イ（R125）：実体の `@f` が関数として開き、本体の返す所に残った裸の関数は `_` と bare-function-return（前は G16）。
 	["R55 p : inc ⏎ tw : f [~r] ? @f ⏎ tw $p vs（`tw $inc vs` と同じ）（前は G16、その前は通る・未知）", trial(["p : inc", "tw : f [~r] ? @f", "tw $p vs"]), "(apply tw (construct $p vs))", "A", { severities: ["information/bare-function-return"] }],
+	// 2026-11-07 の R137（§5 Q91 の答え）：未定義の名前 sq・zz は `_` と分かる値で、その上に積んだ double は並置の単位で残る（`$[sq double]` は double の番地）。
+	// 前は値 `_` の上に積まれて余った double で R59 の G20（下の oneFnRefused にあった）。知らせは undefined-name と、枝の値の bare-function-return（どれも information）。
+	["R137 同じ条件 sq の枝2つの後の $[sq double]（前は R59 の G20、その前は G7）", trial(["tt : x ?", "\tsq : z ? z * z", "\tsq : inc", "\t$[sq double]"]), "(: tt (? [x] (block (: sq (unit (? [z] (* z z)))) (: sq (unit inc)) $[sq double])))", "A", { severities: ["information/bare-function-return", "information/bare-function-return", "information/undefined-name"] }],
+	["R137 その比べの相手（ファイルの $[zz double]、zz は未定義の名前。前は R59 の G20）", trial("$[zz double]"), "$[zz double]", "A", { diag: "zz", severities: ["information/undefined-name"] }],
 ];
 const oneFnRefused = [
 	// R57：後置の印の付いた形（R53 では `$inc~`・`$inc!`・`$fs~` は未知で、根・`,` の辺・`:` の右辺では通っていた）
@@ -4982,9 +4988,8 @@ const oneFnRefused = [
 	["w : [sq : z ? w ⏎ $sq]（値を含む輪。HEAD から同じ）", std(["w : [sq : z ? w", "$sq]"]), "name-cycle"],
 	// 2026-10-26 の R80（§5 Q10 の答え）で、枝の無い本体の局所の関数を裸で書いた所（`sq x`・`$[sq double]`）は右辺の種類で通った（いちばん後ろの「R80〜R82」の節）。
 	// 局所の定義として読めない所（枝のある本体・同じ範囲に2つ）は未知で G7 だった。寄せ1（R128）から sq は未定義の名前（`_`）で、枝のある本体の `sq x` は通る
-	// （上の oneFnPasses）。`$[sq double]` は値 `_` の上に積まれて余った double で、ファイルに書いた `$[zz double]`（zz は未定義の名前）と同じ R59 の G20。
-	["寄せ1 同じ条件 sq の枝2つの後の $[sq double]（ファイルの `$[zz double]` と同じ R59 の G20。前は G7）", trial(["tt : x ?", "\tsq : z ? z * z", "\tsq : inc", "\t$[sq double]"]), "G20"],
-	["寄せ1 その比べの相手（ファイルの $[zz double]、zz は未定義の名前）", trial("$[zz double]"), "G20"],
+	// （上の oneFnPasses）。`$[sq double]` は値 `_` の上に積まれて余った double で、ファイルに書いた `$[zz double]`（zz は未定義の名前）と同じ R59 の G20 だった。
+	// 2026-11-07 の R137（§5 Q91 の答え）から、`_` と分かる sq・zz は並置の単位で消えて `$[sq double]` は double の番地になり、通る（上の oneFnPasses の終わり）。
 	// 2引数の局所の関数を map に渡すのは、ファイルの `map $add vs` と同じく実体の `[@f,]` で G7（R50）
 	// 片イ（R120）で、この行は上の oneFnPasses へ移した。
 ];
@@ -5189,8 +5194,9 @@ const r61Passes = [
 	["R61 inc 1 , _（前は G3）", std("inc 1 , _"), "(apply inc 1)", "A"],
 	["R61 v : 5 , _ ⏎ v 3（名前の右辺の `,` も）", std(["v : 5 , _", "v 3"]), "(construct v 3)", "A"],
 	// 消えるのは書いた `_`（印）だけで、名前や括りを通した `_` は閉じた1つの項（R56 の R の所の並びの中と同じ）。
-	["R61 un : _ ⏎ un , 5（名前の `_` は消えない）", std(["un : _", "un , 5"]), "(, un 5)", "A"],
-	["R61 (_) , 5（括った `_` は消えない）", std("(_) , 5"), "(, [_] 5)", "A"],
+	// 2026-11-07 の R137（§5 Q91 の答え）から、`_` と分かる名前と括り（R112 の印）も消える（前は `(, un 5)`・`(, [_] 5)`）。
+	["R61 un : _ ⏎ un , 5（R137 で名前の `_` も消える。前は `(, un 5)`）", std(["un : _", "un , 5"]), "5", "A"],
+	["R61 (_) , 5（R137 で括った `_` も消える。前は `(, [_] 5)`）", std("(_) , 5"), "5", "A"],
 	["R61 $[_ _]（中の行が `_` に縮む。零射、R56）", std("$[_ _]"), "$[_ _]", "A"],
 	["R61 $[_ , _]（同じ）", std("$[_ , _]"), "$[_ , _]", "A"],
 	// 片イ（R121）で G3 は廃止：`2 , _ , inc 1` は `2 , inc 1` と同じく左から畳んで通る（前は G3）。
@@ -5275,8 +5281,8 @@ const reviewPasses = [
 	["確かめ p : $sq ⏎ sq : x ? use p x ⏎ sq 1（`$` で自分を指す表を持つ再帰。前の版は name-cycle。R81 で A、前は未知）", std(["p : $sq", "sq : x ? use p x", "sq 1"]), "(apply sq 1)", "A"],
 	["確かめ sq : x ? use p x ⏎ p : $sq ⏎ sq 1（並べ方を替えても同じ）", std(["sq : x ? use p x", "p : $sq", "sq 1"]), "(apply sq 1)", "A"],
 	["確かめ hs : $h1 , 3 ⏎ h1 : x ? use (hs ' 1) x ⏎ h1 2（関数の表。前の版は name-cycle）", std(["hs : $h1 , 3", "h1 : x ? use (hs ' 1) x", "h1 2"]), "(apply h1 2)", "未知"],
-	// 名前を通した `_` は、並びの中と同じく閉じた1つの項（R61 の R の所、R56 の「顔が位置で違う」）。今のまま。
-	["確かめ un : _ ⏎ un , 5（今のまま、R61 の R の所）", std(["un : _", "un , 5"]), "(, un 5)", "A"],
+	// 名前を通した `_` は、並びの中と同じく閉じた1つの項（R61 の R の所、R56 の「顔が位置で違う」）。2026-11-07 の R137 から、`,` の被演算子では消える。
+	["確かめ un : _ ⏎ un , 5（R137 で消える。前は `(, un 5)`）", std(["un : _", "un , 5"]), "5", "A"],
 	["確かめ un : _ ⏎ $[un , !_]（恒等射が消えて un、`$un` と同じ零射。今のまま）", std(["un : _", "$[un , !_]"]), "$[un , !_]", "A"],
 	["確かめ add inc vs~（木と種類は前の版と同じ。値 8 は評価の段で決まる、§3.7）", trial("add inc vs~"), "(apply (compose add inc) vs~)", "A"],
 	["確かめ [+] $5（畳む点なしに1項だけは演算を当てない、R31）", std("[+] $5"), "(apply [+] $5)", "未知"],
@@ -5941,7 +5947,8 @@ const r73Passes = [
 	["R76 5 == inc（右の被演算子も）", std("5 == inc"), "(== 5 (unit inc))", "A", { leftoverDiag: ["inc"] }],
 	["R76 inc add 5 == 5（並び全体が1つの関数）", std("inc add 5 == 5"), "(== (unit (apply (compose inc add) 5)) 5)", "A", { leftoverDiag: ["(apply (compose inc add) 5)"] }],
 	["R76 (inc add 5) == 5（被演算子の括りも丸ごとの関数）", std("(inc add 5) == 5"), "(== (unit [inc add 5]) 5)", "A", { leftoverDiag: ["[inc add 5]"] }],
-	["R76 1 & inc | double（論理の被演算子）", std("1 & inc | double"), "(| (& 1 (unit inc)) (unit double))", "A", { leftoverDiag: ["inc", "double"] }],
+	// 2026-11-07 の R137：`1 & inc` は inc が評価する所で `_` なので片側が `_` の `&` で、`|` の単位で消える。根に残った double が `_`（知らせは inc と double の2つで、前と同じ数）。
+	["R76 1 & inc | double（論理の被演算子。R137 で `(unit double)`、前は `(| (& 1 (unit inc)) (unit double))`）", std("1 & inc | double"), "(unit double)", "A", { leftoverDiag: ["inc", "double"] }],
 	["R76 i == 1（恒等射は知らせない）", r73("i == 1"), "(== (unit i) 1)", "A", { diagCount: 0 }],
 	["R76 inc []~ == 1（2026-10-27 の R84 で `inc _ == 1` と同じ木。前は R70 の `(unit (apply inc []~))`、その前は G19）", std("inc []~ == 1"), "(== (unit inc) 1)", "A", { leftoverDiag: ["inc"] }],
 	["R76 [inc == 2] 5（括りの中の比べ。前は G7）", std("[inc == 2] 5"), "(construct [inc == 2] 5)", "A", { leftoverDiag: ["inc"] }],
@@ -6233,6 +6240,9 @@ const r80Passes = [
 	["R80 局所の定義の覚えは解き直しで消す（p が先）（前は G7）", src(["uu : x ? [,] x", "p : [k] ?", "\tv : h 1", "\tv", "", "h : x ? uu (p [x])", "p [zz]"]), "(apply p [zz])", "A", { severities: ["information/undefined-name", "information/undefined-name"] }],
 	["R80 局所の定義の覚えは解き直しで消す（h が先）（前は G7）", src(["uu : x ? [,] x", "h : x ? uu (p [x])", "p : [k] ?", "\tv : h 1", "\tv", "", "p [zz]"]), "(apply p [zz])", "A", { severities: ["information/undefined-name", "information/undefined-name"] }],
 	// 片イ（R125）：実体の本体の根の `@f x`（add の部分適用）は `_` と bare-function-return（R125 の文面の `use $add 5 3` の例と同じ。前は G16）。
+	// 2026-11-07 の R137（§5 Q91 の答え）：未定義の名前 sq は `_` と分かる値で、その上に積んだ double は並置の単位で残る（ファイルの `$[zz double]` と同じ）。
+	// 前は値 `_` の上に積まれて余った double で R59 の G20（下の r80Refused にあった）。知らせは undefined-name と、枝の値の bare-function-return（どれも information）。
+	["R137 $[sq double]（前は R59 の G20、その前は R80 で A）", trial(["tt : x ?", "\tsq : z ? z * z", "\t$[sq double]"]), "(: tt (? [x] (block (: sq (unit (? [z] (* z z)))) $[sq double])))", "A", { severities: ["information/bare-function-return", "information/undefined-name"] }],
 	["R81 use $add 5（実体の本体の根が口の開いた関数、括りの関数の実体と同じ）（前は G16、その前は未知の根）", std("use $add 5"), "(apply use (construct $add 5))", "A", { severities: ["information/bare-function-return"] }],
 ];
 const r80Refused = [
@@ -6243,8 +6253,8 @@ const r80Refused = [
 	["R80 局所のずらした点 ww : $vs + 0x10 ⏎ ww + 1（寄せ1 から枝の値の点が関数の答えに落ちる G21）", std(["t : y ?", "\tww : $vs + 0x10", "\tww + 1"]), "G21"],
 	// 寄せ1（R130）：使う行を枝の前に置いた本体は、枝の前の裸の行でファイルごと止める（前は R80 で「順序非依存」として通った）。
 	["寄せ1 使う行 sq x を枝 sq : z ? z * z の前に置く（R130。前は R80 で順序非依存）", trial(["tt : x ?", "\tsq x", "\tsq : z ? z * z", "", "tt 3"]), "body-bare-row-between"],
-	// 寄せ1（R128）から sq は未定義の名前で、`$[sq double]` は値 `_` の上に積まれて余った double（ファイルの `$[zz double]` と同じ R59 の G20。前は R80 で A、その前は G7）。
-	["寄せ1 $[sq double]（R59 の G20。前は R80 で A）", trial(["tt : x ?", "\tsq : z ? z * z", "\t$[sq double]"]), "G20"],
+	// 寄せ1（R128）から sq は未定義の名前で、`$[sq double]` は値 `_` の上に積まれて余った double（ファイルの `$[zz double]` と同じ R59 の G20。前は R80 で A、その前は G7）だった。
+	// 2026-11-07 の R137 から、sq は `_` と分かる値で並置の単位で消え、通る（上の r80Passes の終わりへ移した）。
 	// 番地の字面の n9 とずらした点の ww は、寄せ1 から未定義の名前（`_`）で、ファイルに書いた `($vs + zz) == $vs`・`(zz - $vs) == ($vs - $vs)` と同じ G21（右か左が
 	// 点か差か数か分からない値。前は R80 の局所の定義の右辺の顔で通った）。
 	["寄せ1 n9 : 0x10 ⏎ ($vs + n9) == $vs（n9 は未定義の名前で G21。前は R80 で通った）", std(["t : y ?", "\tn9 : 0x10", "\t($vs + n9) == $vs", "", "t 1"]), "G21"],
@@ -7263,6 +7273,10 @@ const r99Passes = [
 	// 2026-11-04 の寄せ1（R128）：本体の `⇥p : 1 , $[p + 1]` は条件 p（未定義の名前）の枝で、持ち上げの中の p も未定義の名前なので輪は無い（前は局所の定義の輪で
 	// G20、下の r99Refused にあった。§5 Q78 (b) の本体の分は消えた）。
 	["確かめ R103 t : y ? ⏎ ⇥p : 1 , $[p + 1] ⏎ ⇥p（寄せ1 から輪でない。前は局所の定義の輪で G20）", std(["t : y ?", "\tp : 1 , $[p + 1]", "\tp", "", "t 1"]), "(apply t 1)", "A", { diag: "p" }],
+	// 2026-11-07 の R137（§5 Q91 の答え）：括った `(inc , double)` は、R123 で両方の辺が `_` の `,`（`_ , _`）を括った物で、`_` と分かる値として `,` の単位で消える。
+	// `$` の先は five で、値の持ち上げの警告（`un : _` ⏎ `$[un , 5]` と同じ）。前は R101 の G20 で `[$five , [$inc , $double]]` を案内していた（下の r99Messages にあった）。
+	// 括らない `$[inc , double]` は今のまま G20（`,` の被演算子の丸ごとの関数は R123 の `(unit …)` で、`,` は消えない）。
+	["R137 $[five , (inc , double)] は $five と同じ（前は R101 の G20）", r99("$[five , (inc , double)]"), "$[five , [inc , double]]", "A", { leftoverDiag: ["inc", "double"], severities: ["warning/dollar-non-function", "warning/leftover-lambda", "warning/leftover-lambda"] }],
 ];
 const r99Refused = [
 	// R101：書いた `,` の積の `$`（前は値を読む参照で通った）
@@ -7332,7 +7346,8 @@ const r99Messages = [
 	["R57 後置の印の G20 は持ち上げで言う", std("$vs~"), "G20", ["持ち上げる物が1つに決まりません", "§4 R57・R99"], ["1つの Reader"]],
 	// 2026-10-28 の確かめの直し：案内した綴りがそれ自体断られない（要素の積は要素ごとに持ち上げた括り・後置の印の付いた要素はそのまま・単位律で消えた要素は書かない）
 	["確かめ R101 `$[(five , 1) , 2]` は `[[$five , 1] , 2]` を案内する", r99("$[(five , 1) , 2]"), "G20", ["`[[$five , 1] , 2]`"], ["`[$[five , 1] , 2]`"]],
-	["確かめ R101 `$[five , (inc , double)]` は `[$five , [$inc , $double]]`", r99("$[five , (inc , double)]"), "G20", ["`[$five , [$inc , $double]]`"], []],
+	// 「確かめ R101 `$[five , (inc , double)]` は `[$five , [$inc , $double]]`」は、2026-11-07 の R137 で通る側へ移した（上の r99Passes の終わり。`(inc , double)` は
+	// R123 で両方の辺が `_` の `,` を括った物で、`_` と分かる値として `,` の単位で消える）。
 	["確かめ R101 `$[five , vs~]` は `[$five , vs~]`", r99("$[five , vs~]"), "G20", ["`[$five , vs~]`"], ["$[vs~]"]],
 	["確かめ R101 `$[five , i , 1]` は `[$five , 1]`", r99("$[five , i , 1]"), "G20", ["`[$five , 1]`"], ["$i"]],
 	["確かめ R103 関数の返値を下ろす輪は下ろす所を名指しする", r99(["wk : r ? $[g9 r]", "v : 1 , @(wk $v)", "v"]), "P2", ["定義の時に下ろす所 `@[wk $v]`", "§4 R103", "§5 Q78 (h)"], []],
@@ -7606,7 +7621,8 @@ const r111Passes = [
 	// 値の口でない所は今のまま（§5 Q83）
 	["R112 の外：参照の口の fq no は `fq un` と同じ A（R90）", r111("fq no"), "(apply fq no)", "A", { diag: "no" }],
 	["R112 の外：参照の口の pb2 no 1 は a が no で席を取る（R65・R90）", r111("pb2 no 1"), "(apply pb2 (construct no 1))", "A", { diag: "no" }],
-	["R112 の外：`,` の被演算子の no , 5（R61 の R の所、§5 Q83）", r111("no , 5"), "(, no 5)", "A", { diag: "no" }],
+	// 2026-11-07 の R137 で `,` の被演算子は閉じた（§5 Q83 の1つ目の箇条）：未定義の名前は `,` の単位で消える。
+	["R137 `,` の被演算子の no , 5 は 5（前は R112 の外で `(, no 5)`、§5 Q83）", r111("no , 5"), "5", "A", { diag: "no" }],
 	["R112 の外：括りの中の値の隣 [no 5]（§5 Q83）", r111("[no 5]"), "[no 5]", "A", { diag: "no" }],
 	["R112 の外：名前の右辺の値の隣 w : no 5（§5 Q83）", r111(["w : no 5", "w"]), "(: w (construct no 5))", "A", { diag: "no", at: -2 }],
 	// R111：`$no`・撒く所
@@ -7731,7 +7747,7 @@ const fix9bPasses = [
 	["確かめ Q84 の外：`,` に入れた既定値の y : no , _ は今のまま（同上）", r111(["gz :", "\t\tx", "\t\ty : no , _", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 _))", "未知", { diagCount: 0 }],
 	["確かめ Q84 の外：計算の式の既定値の y : no ' s は今のまま（P3）", r111(["gz :", "\t\tx", "\t\ty : no ' s", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 _))", "未知", { diagCount: 0 }],
 	// 2026-11-06 の寄せ5 の確かめの直し：綴りと名前の表（名前1つと、`_` だけで書いた綴りしか見ない）に掛からない形も、今のまま通ることを押さえる（G22 に変える変異が
-	// 素通りしていた）。名前を挟んだ `w : no , _` は木が `w : no` と同じ `(: w no)` なのに通り、`w : no` なら G22（下の fix9bRefused）で、単位律で割れる所。
+	// 素通りしていた）。名前を挟んだ `w : no , _` は木が `w : no` と同じ `(: w no)`（2026-11-07 の R137 の後は、両側とも `_` と分かるので書いた `_` の側が残る `(: w _)`）なのに通り、`w : no` なら G22（下の fix9bRefused）で、単位律で割れる所。
 	["確かめ Q84 の外：前置の ~ の既定値の y : ~no は今のまま（§4 R114 の寄せ5 の段、綴りと名前の表の外）", r111(["gz :", "\t\tx", "\t\ty : ~no", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 _))", "未知", { diagCount: 0 }],
 	["確かめ Q84 の外：後置の ~ の既定値の y : no~ は今のまま（同上）", r111(["gz :", "\t\tx", "\t\ty : no~", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 _))", "未知", { diagCount: 0 }],
 	["確かめ Q84 の外：書いた `_` の隣の既定値の y : _ no は今のまま（同上）", r111(["gz :", "\t\tx", "\t\ty : _ no", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 _))", "未知", { diagCount: 0 }],
@@ -8873,6 +8889,105 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
 		if (problems.length) fail(`寄せ5 記録 参照の口の _ ${name}`, ...problems);
 		else ok(`寄せ5 記録 参照の口の _ ${name}`);
+	}
+}
+// 黙った誤答の組の片5（2026-11-07、R137。§5 Q91 の答え：主の Claude の問い [2026-11-06 23:25:16 UTC de332d62]「読む段の木も単位律に揃えて、偽の leftover-lambda を
+// 消す？」に U〔答え〕[2026-11-07 00:35:43 de332d62]「揃える」）：読む段の木も、綴りで `_` と分かる辺（書いた `_`・`_ _`・R112 の印の付いた名前と括り・R123 の解なし）を
+// `,`・`|`・`;`・並置の単位で消す。値の段（value_spec V4・V7）が消す所で木も消す。今のままの所（計算の `_`・`[]` と `[]` の名前・恒等射の `|`・`;`・番地の断り）も守る。
+// 消えた `|`・`;` の残った辺は行の置かれた所のまま解く：根なら根の `,` と同じく既定値の口を埋め（`gq 1 | _`）、評価する所の被演算子・手続きの行・書き込む値なら
+// そこで丸ごとの関数が `_` になって知らせる（`(_ | inc ; double) 5`・手続きの行の `_ | inc`・`pp # _ | inc` は、`|` を消す前と同じ知らせ）。
+// [名前, 源の行（頭に inc・double・add・f3・lz の定義を足す）, 最後の木（`G…` なら断りの門）, 種類, 診断（重さ/reason@行 の並び）]
+{
+	const PRE = ["inc : x ? x + 1", "double : x ? x * 2", "add : x y ? x + y", "f3 : a b c ? a + b + c", "lz : n ? n < 0"];
+	const GQ = ["gq :", "\t\tx", "\t\ty : 1", "\t? x + y", ""];
+	const ADDR = ["vs : 1 , 2 , 3", "five : 5"];
+	const R137 = [
+		// 偽の leftover-lambda が消える（値は 6・6・6・10・6）
+		["(inc , nope) 5 は apply（知らせは nope の undefined-name だけ。前は construct と leftover-lambda）", ["(inc , nope) 5"], "(apply [inc , nope] 5)", "A", ["information/undefined-name@6"]],
+		["(_ | inc) 5 は apply（前は construct と leftover-lambda）", ["(_ | inc) 5"], "(apply [_ | inc] 5)", "A", []],
+		["(nope inc) 5 は apply（並置の単位。前は construct と leftover-lambda）", ["(nope inc) 5"], "(apply [nope inc] 5)", "A", ["information/undefined-name@6"]],
+		["(1 & inc | double) 5 は apply（知らせは inc の1つ。前は2つ）", ["(1 & inc | double) 5"], "(apply [1 & inc | double] 5)", "A", ["warning/leftover-lambda@6"]],
+		["(add 1 , nope) 5 は apply（前は construct と leftover-lambda）", ["(add 1 , nope) 5"], "(apply [add 1 , nope] 5)", "A", ["information/undefined-name@6"]],
+		// 本体の返す所の裸の関数（R136 の書き換え、R125）
+		["h : y ? zz inc は (unit inc) で information の bare-function-return（前は warning の leftover-lambda）", ["h : y ? zz inc"], "(: h (? [y] (unit inc)))", "A", ["information/bare-function-return@6", "information/undefined-name@6"]],
+		// `$` の先（R59・R99）
+		["w : inc , nope ⏎ $w は inc の番地（dollar-non-function も leftover-lambda も消える）", ["w : inc , nope", "$w"], "$w", "A", ["information/undefined-name@6"]],
+		["un : _ ⏎ $[un , 5] は $5 と同じ値の持ち上げの警告（前は G20）", ["un : _", "$[un , 5]"], "$[un , 5]", "A", ["warning/dollar-non-function@7"]],
+		["$[inc , nope] は通る（前は G20）", ["$[inc , nope]"], "$[inc , nope]", "A", ["information/undefined-name@6"]],
+		["$[_ | double] は double の番地で知らせ無し（前は leftover-lambda と dollar-non-function）", ["$[_ | double]"], "$[_ | double]", "A", []],
+		// 今のまま：計算の `_` は予想のまま（§5 Q95）、`[]` と `[]` の名前は揃えの外（§5 Q93）、`(add 1 , inc)` は R121・R123
+		["今のまま (inc , (3 < 2)) 5 は construct と leftover-lambda（計算の `_`、値は 6）", ["(inc , (3 < 2)) 5"], "(construct [inc , [3 < 2]] 5)", "A", ["warning/leftover-lambda@6"]],
+		["今のまま ((3 < 2) inc) 5 は construct と leftover-lambda（計算の `_`、値は 6）", ["((3 < 2) inc) 5"], "(construct [[3 < 2] inc] 5)", "A", ["warning/leftover-lambda@6"]],
+		["今のまま (add 1 , inc) 5 は construct（両側とも関数、R121・R123）", ["(add 1 , inc) 5"], "(construct [add 1 , inc] 5)", "A", ["warning/leftover-lambda@6", "warning/leftover-lambda@6"]],
+		["今のまま (inc , []) 5 は construct（書いた `[]`、§5 Q93）", ["(inc , []) 5"], "(construct [inc , []] 5)", "A", ["warning/leftover-lambda@6"]],
+		["今のまま e9 : [] ⏎ (inc , e9) 5 は construct（`[]` の名前、§5 Q93）", ["e9 : []", "(inc , e9) 5"], "(construct [inc , e9] 5)", "A", ["warning/leftover-lambda@7"]],
+		// 根の埋め（根の `,` と同じ R107）
+		["根の gq 1 | _ は gq 1 と同じく埋める", [...GQ, "gq 1 | _"], "(apply gq (construct 1 _))", "未知", []],
+		["根の gq 1 ; _ も同じ", [...GQ, "gq 1 ; _"], "(apply gq (construct 1 _))", "未知", []],
+		["根の 1 & inc | gq 1 も、左が `_` と分かって消えた後の gq 1 を埋める", [...GQ, "1 & inc | gq 1"], "(apply gq (construct 1 _))", "未知", ["warning/leftover-lambda@11"]],
+		// 残った辺が `,` でも根の `,` の行と同じ道（確かめの直し。前は `_ | gq 1 , _` が `(apply gq 1)` で埋まらず、根の `gq 1 , _` と割れた。法則50）
+		["根の _ | gq 1 , _ は根の gq 1 , _ と同じく埋める", [...GQ, "_ | gq 1 , _"], "(apply gq (construct 1 _))", "未知", []],
+		["根の gq 1 , _ | _ も同じ", [...GQ, "gq 1 , _ | _"], "(apply gq (construct 1 _))", "未知", []],
+		["根の 1 & inc | gq 1 , _ も同じ", [...GQ, "1 & inc | gq 1 , _"], "(apply gq (construct 1 _))", "未知", ["warning/leftover-lambda@11"]],
+		["根の gq 1 , nope | _ も同じ（nope は `,` の単位）", [...GQ, "gq 1 , nope | _"], "(apply gq (construct 1 _))", "未知", ["information/undefined-name@11"]],
+		["根の _ , !_ | _ は根の _ , !_ と同じ _（残る並びが単位の綴りなら `,` として解く、R71）", ["_ , !_ | _"], "_", "A", []],
+		// 右が解いて `_` と分かり、左が評価する所で `(unit X)` にした丸ごとの関数なら、左は余らないので X を残して左の知らせを捨てる（R137 の 2 の右）
+		["(inc | 1 & _) 5 は apply（右の 1 & _ が `_` と分かる）", ["(inc | 1 & _) 5"], "(apply [inc | 1 & _] 5)", "A", []],
+		["(add 1 | 1 & _) 5 も apply", ["(add 1 | 1 & _) 5"], "(apply [add 1 | 1 & _] 5)", "A", []],
+		["h : y ? inc | 1 & _ は (unit inc) で bare-function-return だけ", ["h : y ? inc | 1 & _"], "(: h (? [y] (unit inc)))", "A", ["information/bare-function-return@6"]],
+		["根の inc | 1 & _ は (unit inc)", ["inc | 1 & _"], "(unit inc)", "A", ["warning/leftover-lambda@6"]],
+		// 入れ子の後回しは外の後回しへ渡す（知らせは1つ）
+		["h : y ? inc | 1 & _ | 1 & _ も bare-function-return だけ", ["h : y ? inc | 1 & _ | 1 & _"], "(: h (? [y] (unit inc)))", "A", ["information/bare-function-return@6"]],
+		["(inc | 1 & _ | 1 & _) 5 は apply", ["(inc | 1 & _ | 1 & _) 5"], "(apply [inc | 1 & _ | 1 & _] 5)", "A", []],
+		["根の inc | 1 & _ | 1 & _ は (unit inc) で知らせは1つ", ["inc | 1 & _ | 1 & _"], "(unit inc)", "A", ["warning/leftover-lambda@6"]],
+		// 並置の下を落とすのは下が全部 `_` と分かる時だけ。片側だけ `_` と分かる `|` は `_` と分からない
+		["今のまま (5 nope inc) 5 は construct（値と値の並びは §5 Q83 のまま）", ["(5 nope inc) 5"], "(construct [5 nope inc] 5)", "A", ["information/undefined-name@6", "warning/leftover-lambda@6"]],
+		["今のまま (5 | 1 & _) , 3 は `,` のまま（片側だけ `_` と分かる `|`）", ["(5 | 1 & _) , 3"], "(, [5 | 1 & _] 3)", "A", []],
+		// `,` の両側が `_` と分かれば書いた `_` の側が残る（`|`・`;` と同じ）
+		["un : _ ⏎ un , _ は _", ["un : _", "un , _"], "_", "A", []],
+		["nope , _ は _", ["nope , _"], "_", "A", ["information/undefined-name@6"]],
+		// `_` が消えて残った辺が `!_` 1つなら、行 `!_` と同じ `(unit !_)`（法則50 の X が `!_` の組。`!_` が `_` でない相手と並ぶ `!_ | 5` は下の G7 のまま）
+		["_ | !_ は行 !_ と同じ (unit !_)", ["_ | !_"], "(unit !_)", "A", []],
+		// 手続きの行でも、`_` が消えて `!_` だけが残れば行 `!_` と同じ G7（確かめの直し。前は `(block !_ y)` で黙って通った）
+		["手続きの行の _ | !_ は行の !_ と同じ G7", ["t : y ?", "\t_ | !_", "\ty", "", "t 3"], "G7"],
+		["手続きの行の !_ ; _ も G7", ["t : y ?", "\t!_ ; _", "\ty", "", "t 3"], "G7"],
+		// 残った辺は行の置かれた所のまま（評価する所の被演算子・手続きの行・書き込む値は、消す前と同じ知らせ）
+		["(_ | inc ; double) 5 の inc は `;` の被演算子で `_`（`(inc ; double) 5` と同じ知らせ）", ["(_ | inc ; double) 5"], "(construct [_ | inc ; double] 5)", "A", ["warning/leftover-lambda@6", "warning/leftover-lambda@6"]],
+		["手続きの行の _ | inc は、行の inc と同じく `_` で知らせる（値は `_`）", ["t : y ?", "\t_ | inc", "\ty", "", "t 3"], "(apply t 3)", "A", ["warning/leftover-lambda@7"]],
+		["書き込む値の _ | inc は `pp # inc` と同じく `_` で知らせる", ["box : 0", "pp : $box", "pp # _ | inc"], "(# pp (unit inc))", "A", ["warning/dollar-non-function@7", "warning/leftover-lambda@8"]],
+		// 両側とも `_` と分かれば、`,` と同じく書いた `_` の側が残る（法則50 の X が `_` の組）
+		["un : _ ⏎ _ | un は _（書いた `_` の側が残る）", ["un : _", "_ | un"], "_", "A", []],
+		["un : _ ⏎ un ; _ も _", ["un : _", "un ; _"], "_", "A", []],
+		// 断り
+		["w : inc , nope ⏎ w~ は `w : inc , _` と同じ G7（前は通った）", ["w : inc , nope", "w~"], "G7"],
+		["今のまま !_ | 5 は G7（恒等射は `|` の単位でない、§5 Q15）", ["!_ | 5"], "G7"],
+		["今のまま (_ | ($vs - $five)) + 1 は G21", [...ADDR, "(_ | ($vs - $five)) + 1"], "G21"],
+		["_ | ($vs - $five) は `_` が消えても番地の断りを残す（R62 の G21、§5 Q94）", [...ADDR, "_ | ($vs - $five)"], "G21"],
+		["($vs - $five) ; nope も同じ G21", [...ADDR, "($vs - $five) ; nope"], "G21"],
+	];
+	for (const [name, lines, want, kind, diags] of R137) {
+		total++;
+		const label = `黙った誤答の組 R137 ${name}`;
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			if (/^G/.test(want) && e.reason === GATE_REASON[want] && e.gate === want) ok(`${label} → ${want}`);
+			else fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		if (/^G/.test(want)) {
+			fail(label, `断るはずが通った: ${show(t)}`);
+			continue;
+		}
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
+		const problems = [];
+		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
 	}
 }
 

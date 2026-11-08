@@ -6032,13 +6032,25 @@ function resolveTreeIn(tree, ctx) {
     case ",":
       return resolveProduct(tree, ctx);
     default: {
+      // R137（2026-11-07、§5 Q91 の答え）：`|`・`;` は単位律を先に見る（下の「`|`・`;` の単位律」の節）。綴りで `_` と分かる辺があれば、演算子ごと消して残った辺を解く
+      // （logicSide・logicRest）。無ければ左右を評価する所で解き、余りの知らせを後回しにして（印 deferLeft）、解いた辺で `_` と分かれば消す（logicLeftUnit・logicOp）。
+      // 字下げのブロックの辺は今のまま下で読む。左右はここで直に解く（別の関数で包むと1段ごとに枠が1つ増え、`|` の鎖の届く所が 1874 項から 1249 項に縮んだ）。
+      const logic = (tree.sym === "|" || tree.sym === ";") && !!tree.left && !!tree.right && !isBlockSeq(tree.left) && !isBlockSeq(tree.right);
+      if (logic) {
+        const rest = logicSide(tree, ctx);
+        if (rest) return logicRest(rest, tree, ctx);
+      }
       // 段4〜8：被演算子が全部 A なら A、そうでなければ未知（§2）。
       if (isBlockSeq(tree.left)) throw refuseIndentBlock(`\`${tree.sym}\` の左`);
       // R76（2026-10-26、§5 Q37 の答え）：比べと論理（段5〜8 の `;`・`|`・`&`・`==`・`!==`）の被演算子の並びは評価する所（evaluatePlace）。被演算子の `,` が
       // 恒等射か書いた `_` で消えて片方の並びだけが残れば、その並びも評価する所（resolveEvaluatedSide。2026-10-28 の片9 の確かめの直し、法則12）。
       // R116（2026-10-28 の片9b、§5 Q73 の `#` の答え）：書き込み `#` の右の被演算子（書き込む値）も評価する所（印 "#r"）。左（書き込む先）は今のまま。
-      const l = resolveEvaluatedSide(tree.left, tree.sym, ctx);
-      const r = resolveEvaluatedSide(tree.right, tree.sym === "#" ? "#r" : tree.sym, ctx);
+      const deferL = logic ? [] : null;
+      const l = resolveEvaluatedSide(tree.left, tree.sym, deferL ? { ...ctx, deferLeft: deferL } : ctx);
+      if (deferL && opKnownUnit(l) && l.t !== "unit") return logicLeftUnit(tree, ctx, deferL);
+      const deferR = logic ? [] : null;
+      const r = resolveEvaluatedSide(tree.right, tree.sym === "#" ? "#r" : tree.sym, deferR ? { ...ctx, deferLeft: deferR } : ctx);
+      if (deferR) return logicOp(tree, ctx, l, r, deferL, deferR);
       refuseOperandHole(l, tree.sym);
       refuseOperandHole(r, tree.sym);
       // 論理（段5〜7 の `;`・`|`・`&`）の被演算子と、書き込み（段4 の `#`）の被演算子に、番地の算術で作った点・差（R62）があれば断る（2026-10-26 の
@@ -6101,12 +6113,103 @@ function resolveTreeIn(tree, ctx) {
 // 2026-10-28 の片9 の確かめの直し：前は行の根でだけ解き直していて、`gq 1 , !_ == 2` が `(apply gq 1)`、`gq 1 == 2` が既定値を埋めた木と割れていた（余ったラムダの
 // `add 1 , !_ == 2` と `add 1 == 2` は HEAD から割れていた）。行の根は、単位になりうる綴り（名前1つも）の残りを `,` として解いてから余ったラムダを包み直す
 // （evaluated）が、被演算子には包み直しが無いので、名前1つの残り（`add , !_ == 7`）も、単位そのものでなければ解き直す（unitRest）。
+// R137（2026-11-07）：side が `|`・`;` なら、それが単位律で消えて残った辺も、この評価する所の並びとして解く（印 logicPlace、logicRest）。
 function resolveEvaluatedSide(side, sym, ctx) {
   if (side && side.type !== "seq" && side.sym === "," && sym !== "#" && !isBlockSeq(side.left)) {
     const rest = vanishedSeq(side, ctx);
     if (rest && rest !== side && rest.type === "seq" && !loneHole(rest.terms, ctx) && !unitRest(rest, ctx)) return resolveTree(rest, evaluatePlace(rest, sym, ctx));
   }
+  if (side && side.type !== "seq" && (side.sym === "|" || side.sym === ";") && sym !== "#") return resolveTree(side, { ...ctx, logicPlace: { tree: side, sym } });
   return resolveTree(side, evaluatePlace(side, sym, ctx));
+}
+
+// ---- `|`・`;` の単位律を読む段の木にも当てる（R137、2026-11-07。§5 Q91 の答え「揃える」） ----
+//
+// 値の段は `|`・`;` の `_` の辺を出どころに依らず単位で消す（value_spec V7、誤4）。読む段の木はその畳みの予想（R118）なので、綴りで `_` と分かる辺を同じ所で消す：
+// 1. 綴りで `_` と分かる辺（単位になりうる綴り mayBeUnit を解いて、書いた `_` か knownUnitValue）は、演算子ごと消え、もう片方の辺を行の置かれた所のまま解く
+//    （logicRest）。恒等射（`!_`・`i`）は `|`・`;` の単位に数えない（今のまま、§5 Q15）。`!_ | 5` は下の 3 で G7。
+// 2. 綴りで分からなければ、左を評価する所で解き（丸ごと余った関数の知らせは後回し、印 deferLeft）、左が `_` と分かれば（`1 & inc` は inc が評価する所で `_` なので
+//    `_`、opKnownUnit）、後回しの知らせを出して右を行の置かれた所のまま解く（`(1 & inc | double) 5` は `(apply [1 & inc | double] 5)`）。右も評価する所で解き、右が
+//    `_` と分かって左が評価する所で `_` にした丸ごとの関数（`(unit X)`、placeWrap）なら、左は余らないので後回しの知らせを捨てて X を残す。
+// 3. どちらでもなければ、後回しの知らせを出して今までどおり組む（被演算子の `!_` の G7・番地の G21 も今までどおり）。
+// 計算の `_`（`(3 < 2)`・`1 / 0`・`_` を返す呼び出し）は読む段には分からないので 3 で、隣の関数は予想のまま `(unit …)` と leftover-lambda（値の段は消す、§5 Q95）。
+// 1 は logicSide、2 の左は logicLeftUnit、2 の右と 3 は logicOp。左右を解くのは resolveTreeIn（スタックの深さのため）。
+// 1：綴りで `_` と分かる辺があれば、残る辺（左から見る）。無ければ null。両側とも `_` と分かれば、`,` と同じく書いた `_` の側を残す（resolveProduct の lu・ru。
+// `_ | un` も `un | _` も `_`。法則50 の X が `_` の組）。
+function logicSide(tree, ctx) {
+  const lu = spelledUnit(tree.left, ctx);
+  if (lu) {
+    const ru = spelledUnit(tree.right, ctx);
+    return ru === 2 && lu !== 2 ? tree.right : ru ? tree.left : tree.right;
+  }
+  if (spelledUnit(tree.right, ctx)) return tree.left;
+  return null;
+}
+// 2 の左：左が `_` と分かった（opKnownUnit）。後回しの知らせを出し、右を行の置かれた所のまま解く。
+function logicLeftUnit(tree, ctx, deferL) {
+  flushLeftovers(deferL);
+  return logicRest(tree.right, tree, ctx);
+}
+// 2 の右と 3。
+function logicOp(tree, ctx, l, r, deferL, deferR) {
+  if (opKnownUnit(r) && r.t !== "unit" && l && l.t === "unit" && l.placeWrap) {
+    flushLeftovers(deferR);
+    // 行が評価する所の被演算子か手続きの行なら、残った X もそこで `_`（左の `(unit X)` のまま。後回しの知らせは、外の `|`・`;` が後回しにしていればそこへ渡し、
+    // 無ければ出す）。根と、ほかの所は X（根は根の行の evaluated が包む）。
+    const at = logicPlaceOf(tree, ctx);
+    if (at && at !== "root") {
+      if (ctx.deferLeft) ctx.deferLeft.push(...deferL);
+      else flushLeftovers(deferL);
+      return logicRest(null, tree, ctx, l);
+    }
+    return logicRest(null, tree, ctx, l.inner);
+  }
+  flushLeftovers(deferL);
+  flushLeftovers(deferR);
+  refuseOperandHole(l, tree.sym);
+  refuseOperandHole(r, tree.sym);
+  // 論理の被演算子の番地の算術で作った点・差は断る（R62、resolveTreeIn の注）。
+  for (const x of [l, r]) if (treeHasAddr(x)) throw refuseAddressDrop("logic", writeTree(tree), { sym: tree.sym, operand: show(x) });
+  return { t: "op", sym: tree.sym, left: l, right: r, kind: l && r && l.kind.k === "A" && r.kind.k === "A" ? A() : U() };
+}
+// 辺 s が綴りで `_` と分かるか（R137 の 1）：単位になりうる綴り（mayBeUnit）だけを素の所で解いて見る（vanishedSeq の idOf と同じ）。断られたら分からない側。
+// 書いた `_`（印）なら 2、ほかの `_` と分かる値なら 1、分からなければ 0。
+function spelledUnit(s, ctx) {
+  if (!mayBeUnit(s)) return 0;
+  let u = null;
+  try {
+    u = resolveTree(s, { ...ctx, evaluate: false, delayed: false, bodyRoot: false });
+  } catch (e) {
+    if (!(e instanceof OperationError)) throw e;
+  }
+  return !u ? 0 : isMark(u) ? 2 : knownUnitValue(u) ? 1 : 0;
+}
+const flushLeftovers = (list) => {
+  for (const d of list) reportLeftover(d.tree, d.ctx, d.at, d.why);
+};
+// 行 tree の置かれた所の印（R137）：評価する所の被演算子・手続きの行なら置かれた所の sym（resolveEvaluatedSide が付ける）、根の行なら "root"、ほかは null（ctx が置かれた所）。
+const logicPlaceOf = (tree, ctx) => (ctx.logicPlace && ctx.logicPlace.tree === tree ? ctx.logicPlace.sym : null);
+// 消えた `|`・`;` の残った辺 o を、行 tree の置かれた所のまま解く（R137「残った辺は行の置かれた所のまま」）。置かれた所は ctx（括りの中・本体の返す所・`:` の右辺・
+// `$[…]` の中身）か、印 logicPlace（評価する所の被演算子・手続きの行は、残った辺をそこの評価する所として解く。`_ | inc ; double` の inc は `inc ; double` と同じく
+// `(unit inc)`）。根の行なら、根の `,`（R45・R107）と同じく、残った並びを行の根として評価する所で解く：既定値の口だけ開いた部分適用は埋める（`gq 1 | _` は `gq 1` と
+// 同じ `(apply gq (construct 1 _))`）。単位になりうる綴りの残り（名前1つ）は素の所で解き、根の evaluated が包む（`_ | inc` は根の `inc` と同じ `(unit inc)`）。
+// done は解いてある残り（2 の X）。残った辺に番地の算術で作った点・差があれば、`_` を消す前と同じく断る（R62 の G21。印を持ち越すかは R62・§5 Q66 で未決なので、
+// 断る側に倒す。§5 Q94）。
+function logicRest(o, tree, ctx, done = null) {
+  let v = done;
+  if (!v) {
+    const at = logicPlaceOf(tree, ctx);
+    if (at === "root") {
+      const logic = !!o && o.type !== "seq" && (o.sym === "|" || o.sym === ";");
+      // 残った辺が `,` なら、根の `,` の行と同じ道（R45・R107）：単位で消えて残る並びを行の根として評価する所で解く（`_ | gq 1 , _` は根の `gq 1 , _` と同じ
+      // `(apply gq (construct 1 _))`。法則50）。
+      const rest = !logic && !!o && o.type !== "seq" && o.sym === "," && !isBlockSeq(o.left) ? vanishedSeq(o, ctx) : null;
+      if (rest && rest !== o && rest.type === "seq" && !mayBeUnit(rest)) v = resolveTree(rest, { ...ctx, evaluate: true });
+      else v = resolveTree(o, logic ? { ...ctx, logicPlace: { tree: o, sym: "root" } } : o && o.type === "seq" && !mayBeUnit(o) ? { ...ctx, evaluate: true } : ctx);
+    } else v = at ? resolveEvaluatedSide(o, at, ctx) : resolveTree(o, ctx);
+  }
+  if (treeHasAddr(v)) throw refuseAddressDrop("logic", writeTree(tree), { sym: tree.sym, operand: show(v) });
+  return v;
 }
 // 残る並び rest が `,` の単位そのもの（恒等射か書いた `_`）か。単位になりうる綴り（mayBeUnit）だけを解いて見る（vanishedSeq の idOf と同じ）。解いて断られたら、
 // 今までどおり `,` として解く側（そこで同じ断りになる）。
@@ -6139,6 +6242,8 @@ function evaluatePlace(side, sym, ctx) {
   // 中置の被演算子の括らない `!_` 1つ（`!_ == 1`・`1 & !_`）は、今のまま G7（R44、§5 Q15：中置の被演算子の `!_` を恒等射と読むかは決まっていない。refuseOperandHole）。
   // 評価する所にすると `(unit !_)` になって G7 を素通りする。手続きの行の `!_` は、resolveBody が先に断る（refuseProcedureHole）。
   if (loneHole(side.terms, ctx)) return ctx;
+  // R137：`|`・`;` の辺（logicUnit の印 deferLeft）なら、丸ごと余った関数の知らせを後回しにする（finishTrees）。
+  if (ctx.deferLeft) return { ...ctx, evaluate: { at: side, sym, defer: ctx.deferLeft }, deferLeft: null };
   return { ...ctx, evaluate: { at: side, sym } };
 }
 const isHoleTerm = (t) => !!t && t.type === "atom" && t.pre.length === 1 && t.pre[0] === "!" && !t.post.length && t.core.c === "unit";
@@ -6513,9 +6618,10 @@ function resolveProduct(tree, ctx) {
   // 断る側の `!_` に揃える。
   if (isIdentity(left) && isIdentity(right)) return left.cat === "hole" ? left : right;
   // 書いた `_` も積の単位（R61）。両方とも `_` なら `_`、片方が恒等射なら `_` に落とす（R71、上の注、§5 Q61 の答え）。
-  const lu = isMark(left);
-  const ru = isMark(right);
-  if (lu && ru) return left;
+  // R137（2026-11-07）から、読む段で `_` と分かる値（`un`・`nope`・`(_)`・`_ _`、knownUnitValue）も消える。両方とも単位なら書いた `_`（印）の方を残す。
+  const lu = isMark(left) || knownUnitValue(left);
+  const ru = isMark(right) || knownUnitValue(right);
+  if (lu && ru) return isMark(right) && !isMark(left) ? right : left;
   if (lu && isIdentity(right)) return left;
   if (ru && isIdentity(left)) return right;
   if (lu || isIdentity(left)) return right;
@@ -6561,18 +6667,47 @@ function vanishedSeq(side, ctx) {
 function isIdentity(t) {
   return !!t && t.t === "leaf" && !!t.kind && t.kind.k === "L" && !!t.kind.fn && t.kind.fn.type === "id";
 }
-// `,` の単位の葉（R45・R61）：恒等射か、書いた `_`（印）。
+// `,` の単位の葉（R45・R61）：恒等射か、書いた `_`（印）。2026-11-07 の R137（§5 Q91 の答え）から、読む段で `_` と分かる値（knownUnitValue）も。
 function isUnitOperand(t) {
-  return isIdentity(t) || isMark(t);
+  return isIdentity(t) || isMark(t) || knownUnitValue(t);
 }
-// `,` の単位になりうる綴り（R45・R61）：恒等射になりうる綴り（mayBeIdentity）と、書いた `_` 1つ。それどうしの `,` も。
+// R137（2026-11-07、§5 Q91 の答え「揃える」）：読む段の木も単位律に揃える。綴りで `_` と分かる値は、値の段と同じ所（`,`・`|`・`;` の被演算子・並置でいちばん上が
+// 関数の時のその下）で単位として消える。木は値の段の畳みの予想（R118）なので、値が消す所で木も消す。
+// `_` と分かる葉：R112 の印（knownUnit）の付いた名前と括り（未定義の名前・`un : _` の un・`q : [_]` の q・`(nope)`）。書いた `[]` と右辺が `[]` の名前（`e0 : []`・
+// `e8 : ~[]`、desc が空の括り）は外す（§5 Q93）。書いた `[]` の印 writtenEmpty だけの葉も外す（`(_)`・`(_ _)` は下の括りの道で `_` と分かる）。
+function knownUnitLeaf(t) {
+  return !!t && t.t === "leaf" && !!t.kind && t.kind.k === "A" && !!t.knownUnit && !isEmptyBracket(t.desc);
+}
+// 読む段で `_` と分かる値：書いた `_`（印）、`_` と分かる葉、中が1つでそれが `_` と分かる括り（`(_)`・`(_ _)`・`(_ | _)`）。
+function knownUnitValue(t, depth = 0) {
+  if (!t || depth > 32) return false;
+  if (isMark(t) || knownUnitLeaf(t)) return true;
+  if (t.t === "leaf" && t.term && t.term.type === "atom" && !t.term.pre.length && !t.term.post.length && t.term.core.c === "bracket" && t.view && Array.isArray(t.view.inner) && t.view.inner.length === 1) return opKnownUnit(t.view.inner[0], depth + 1);
+  return false;
+}
+// 式の値が読む段で `_` と分かるか（括りの中・論理の被演算子）：`_` と分かる値、評価する所で `_` になった丸ごとの関数（`(unit …)`、R42・R76・R123）、全部の辺が
+// `_` と分かる `,`、片側が `_` と分かる `&`、両側が `_` と分かる `|`・`;`。計算の `_`（`(3 < 2)`・`1 / 0`・`_` を返す呼び出し）は読む段には分からないので数えない（§5 Q95）。
+function opKnownUnit(t, depth = 0) {
+  if (!t || depth > 32) return false;
+  if (t.t === "unit") return true;
+  if (knownUnitValue(t, depth + 1)) return true;
+  if (t.t !== "op") return false;
+  if (t.sym === ",") return commaAll(t).every((x) => opKnownUnit(x, depth + 1));
+  if (t.sym === "&") return opKnownUnit(t.left, depth + 1) || opKnownUnit(t.right, depth + 1);
+  if (t.sym === "|" || t.sym === ";") return opKnownUnit(t.left, depth + 1) && opKnownUnit(t.right, depth + 1);
+  return false;
+}
+// `,` の単位になりうる綴り（R45・R61）：恒等射になりうる綴り（mayBeIdentity）と、書いた `_` 1つ。それどうしの `,` も。R137 から、単位になりうる綴りの1行の括り
+// （`(_)`）と、書いた `_` だけの並び（`_ _`）も。
 function mayBeUnit(tree) {
   if (!tree) return false;
   if (tree.type !== "seq") return tree.sym === "," && mayBeUnit(tree.left) && mayBeUnit(tree.right);
   if (tree.terms.length === 1) {
     const t = tree.terms[0];
     if (t.type === "atom" && !t.pre.length && !t.post.length && t.core.c === "unit") return true;
+    if (t.type === "atom" && !t.pre.length && !t.post.length && t.core.c === "bracket" && t.core.rows.length === 1 && mayBeUnit(t.core.rows[0])) return true;
   }
+  if (tree.terms.length >= 2 && tree.terms.every(isUnitTerm)) return true;
   return mayBeIdentity(tree);
 }
 // 恒等射になりうる綴り（resolveProduct が、G3 の前に解いて見る物）：`!_`・裸の名前・それだけを1行で括った物・それどうしの `,`。
@@ -6892,11 +7027,13 @@ function resolveBlockBody(right, ctx, notLast = false) {
     if (returnsAt(i)) return resolveTree(r, r && r.type === "seq" ? { ...ctx, bodyRoot: true } : ctx);
     if (r && r.type === "seq" && loneHole(r.terms, ctx)) throw refuseProcedureHole();
     // 行が `,` で、恒等射か書いた `_` で消えて片方の並びだけが残れば、その並びも評価する所（resolveEvaluatedSide、2026-10-28 の片9 の確かめの直し）。
-    const t = r && r.type !== "seq" && r.sym === "," ? resolveEvaluatedSide(r, "row", ctx) : resolveTree(r, r && r.type === "seq" ? evaluatePlace(r, "row", ctx) : ctx);
+    // R137（2026-11-07）から、行が `|`・`;` で単位律で消えて残った辺も同じ（logicRest）。
+    const t = r && r.type !== "seq" && (r.sym === "," || r.sym === "|" || r.sym === ";") ? resolveEvaluatedSide(r, "row", ctx) : resolveTree(r, r && r.type === "seq" ? evaluatePlace(r, "row", ctx) : ctx);
     // 行の `,` が恒等射どうしで括らない `!_` 1つに縮んだ（`!_ , !_`・`i , !_`・`!_ , i`。resolveProduct が断る側の `!_` に揃える）なら、`!_` だけの行と同じ G7（中置 `&` の
     // 被演算子の `!_` と同じ所。`!_ , !_ & a` は refuseOperandHole の G7）。2026-10-28 の片9a の確かめの直し（片9b の確かめで見た）：前は `(block !_ a)` で黙って通っていた
-    // （HEAD からの穴。手続きの行の法則12 が X = `!_` で割れていた）。
-    if (r && r.type !== "seq" && r.sym === "," && t && t.t === "leaf" && t.cat === "hole") throw refuseProcedureHole();
+    // （HEAD からの穴。手続きの行の法則12 が X = `!_` で割れていた）。R137 の `|`・`;` の単位律で `_` が消えて `!_` だけが残った行（`_ | !_`・`!_ ; _`）も、
+    // 行 `!_` と同じ G7（法則50 の X が `!_` の組。2026-11-07 の確かめの直し：前は `(block !_ y)` で黙って通っていた。HEAD は中置の被演算子の `!_` で G7）。
+    if (r && r.type !== "seq" && (r.sym === "," || r.sym === "|" || r.sym === ";") && t && t.t === "leaf" && t.cat === "hole") throw refuseProcedureHole();
     return r && r.type !== "seq" && r.sym === "?" && t && t.kind.k === "L" ? leftoverUnit(t, ctx, r, "place") : t;
   }));
   // 返す所（枝の値・返す行）に残った裸の関数・区間の綴りは `_`（R125）。最後でない枝の値なら、その枝は消えて次へ進む（R129）。
@@ -7309,6 +7446,10 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
       foldStep(st, i);
     }
     if (evaluate) fillDefaults(st);
+    // R137（2026-11-07）：いちばん上の関数の下が全部 `_` と分かる値（knownUnitValue。`nope`・`un`・`(_)`）なら、空白の積の単位として消す（`(nope inc) 5` は
+    // `(_ inc) 5` と同じ `(apply [nope inc] 5)`、`h : y ? zz inc` の本体は `(unit inc)`）。計算の `_`（`((3 < 2) inc) 5`）は今のまま値の上の余り（R52、§5 Q95）。
+    // 値と値の並び（`[no 5]`）は今のまま（§5 Q83）。
+    if (st.stack.length >= 2 && st.stack[st.stack.length - 1].t === "fn" && st.stack.slice(0, -1).every((e) => e.t !== "fn" && knownUnitValue(e))) st.stack = [st.stack[st.stack.length - 1]];
     trees = st.stack.map((e) => (e.t === "fn" ? closeEntry(e) : e));
   } finally {
     foldCtx = outer;
@@ -7402,7 +7543,14 @@ function finishTrees(trees, evaluate, ctx, at = null, quiet = false) {
     else if (at) trees[last] = leftoverUnit(trees[last], ctx, at, null, quiet);
     // `,` の辺（R121）が恒等射の葉1つに縮んだ並び（`_ i`・`!_ _`）は包まない：恒等射は `,` の単位で、辺ごと消える（R45。resolveProduct の isIdentity）。包むと `7 , _ i` が
     // `(, 7 (unit !_))`、`7 , !_ , _ i` が 7 と割れていた（法則12。R の所）。恒等射どうしの合成（`!_ i`）は resolveProduct が単位と見ないので、今までどおり包む。
-    else if (evaluate && !(evaluate.sym === "," && trees.length === 1 && isIdentity(trees[last]))) trees[last] = leftoverUnit(trees[last], ctx, evaluate.at, evaluate.sym === "==" || evaluate.sym === "!==" ? "place-cmp" : evaluate.sym === "#r" ? "place-write" : evaluate.sym === "," ? "place-comma" : "place", quiet);
+    else if (evaluate && !(evaluate.sym === "," && trees.length === 1 && isIdentity(trees[last]))) {
+      const why = evaluate.sym === "==" || evaluate.sym === "!==" ? "place-cmp" : evaluate.sym === "#r" ? "place-write" : evaluate.sym === "," ? "place-comma" : "place";
+      // R137：`|`・`;` の辺（印 defer、logicUnit）で丸ごと余った関数は、包むが知らせを後回しにする（もう片方の辺が `_` と分かれば、この辺は余らずに残る。印 placeWrap）。
+      if (evaluate.defer && trees.length === 1) {
+        if (!quiet && !isIdentityKind(trees[last].kind)) evaluate.defer.push({ tree: trees[last], ctx, at: evaluate.at, why });
+        trees[last] = { ...leftoverUnit(trees[last], ctx, evaluate.at, why, true), placeWrap: true };
+      } else trees[last] = leftoverUnit(trees[last], ctx, evaluate.at, why, quiet);
+    }
   }
   if (trees.length === 1) return trees[0];
   const items = trees.flatMap((g) => (g.t === "construct" ? g.items : [g]));
@@ -9461,7 +9609,9 @@ export function resolve(source) {
         // 評価する所（R42）は、定義でない行の根の並び（ここ）と、R76 で広げた比べ・論理の被演算子・字下げの本体の行（evaluatePlace）。`:` の右辺・`,` の辺・
         // 括りの中は今のまま。根の `,` が恒等射で
         // 消えて片方の並びだけが残れば、その並びが行の根なので評価する所（R45、evaluated）。
-        const ctx0 = { F, scope: F.fileScope, diag: diagnostics, evaluate: !!line && line.type === "seq" };
+        // R137（2026-11-07）：根の `|`・`;` が単位律で消えて残った辺は行の根（印 logicPlace "root"、logicRest。R107 の既定値の口を埋めるのも根の `,` と同じ）。
+        const logicRow = !!line && line.type !== "seq" && (line.sym === "|" || line.sym === ";");
+        const ctx0 = { F, scope: F.fileScope, diag: diagnostics, evaluate: !!line && line.type === "seq", ...(logicRow ? { logicPlace: { tree: line, sym: "root" } } : {}) };
         // 2026-10-28 の R107 の片：根の `,` が恒等射か書いた `_` で消えて片方の並びだけが残る行（R45・R61）は、残る並びを行の根として評価する所で解く（R107 の既定値の
         // 口を埋めるのも、R110 も、並びを根に書いたときと同じにする。法則12）。前は `,` の辺として評価する所の外で解いてから、余ったラムダだけを包み直していた（evaluated）。
         const rest = !!line && line.type !== "seq" && line.sym === "," && !isBlockSeq(line.left) ? vanishedSeq(line, ctx0) : null;
@@ -9471,7 +9621,7 @@ export function resolve(source) {
           continue;
         }
         const t = resolveTree(line, ctx0);
-        const collapsed = !!line && line.type !== "seq" && line.sym === "," && !!t && !(t.t === "op" && t.sym === ",");
+        const collapsed = !!line && line.type !== "seq" && (line.sym === "," || logicRow) && !!t && !(t.t === "op" && t.sym === line.sym);
         trees.push(collapsed ? evaluated(t, { diag: diagnostics }) : t);
       } catch (e) {
         withLine(e, F.line);
