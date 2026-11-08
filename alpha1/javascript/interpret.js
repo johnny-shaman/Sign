@@ -42,12 +42,23 @@ export class Fn {
 }
 
 // 本体の返す所の、最後の1歩が呼び出しになる形（V10 の末尾呼び出し）。呼んだ側のループが受けて回す。
+// orElse は「呼んだ答えが `_` なら、この所の答えはこの関数」（括りの中の `,` で、単位律が関数1つを残す形。11-04、2026-11-07 の誤2）。
+// 残った関数が `_` になる所（"tail"）では要らないので evalRow が外し、callFn のループは見ない。後ろに項が続いて呼ぶ所（callPending）だけが当てる。
+// 当てるのは答えが `_` の時だけ。今は呼び出しの答えが関数になる形が無い（本体の返す所の関数は `_`、R125）ので、関数を返す呼び出しが入る片（ウの `$`・`@`）で
+// 「答えが関数なら `_`（R123）」の枝が要る。
 class TailCall {
-  constructor(f, args, line) {
+  constructor(f, args, line, orElse = null) {
     this.f = f;
     this.args = args;
     this.line = line;
+    this.orElse = orElse;
   }
+}
+
+// 取っておいた末尾呼び出しを、後ろに `_` でない物が来たので呼ぶ。
+function callPending(cx, tc) {
+  const r = callFn(cx, tc.f, tc.args, tc.line);
+  return r === UNIT && tc.orElse ? tc.orElse : r;
 }
 
 /** 値を書く。並びは空白でつなぎ、入れ子の並びは `[…]`、関数は `関数(名前)`。 */
@@ -254,13 +265,16 @@ function makeLambda(cx, op, env, name, line) {
  * - "keep"：定義の右辺と括りの中。1つだけ残った関数は関数のまま、値の上の関数は `_`（R52）。
  * - "tail"：本体の返す所。"eval" と同じで、行の答えが最後の呼び出しの答えそのものなら、呼ばずに TailCall を返す（V10）。
  * - "tailkeep"：返す所に置いた括りの中。"keep" と同じで、TailCall も返す。
- * 返す所かどうかは綴りでなく意味で決める：後ろの項が全部 `_` の呼び出し、括りの中、`&`・`|` の右、`,` の空の辺の隣も返す所。
+ * 返す所かどうかは綴りでなく意味で決める：後ろの項が全部 `_` の呼び出し、括りの中、`&`・`|` の右、`,` の辺の呼び出しで後ろの辺が全部 `_` の物
+ * （`_` は出どころに依らず消えるので、隣の辺が行の答え。11-04、2026-11-07 の誤2）も返す所。
  */
 function evalRow(cx, row, env, line, place) {
   if (!row) throw notYet("被演算子の欠けた行（点なし）", line);
   if (!enter(cx, line)) return [];
   try {
-    return rowOf(cx, row, env, line, place);
+    const r = rowOf(cx, row, env, line, place);
+    // "tail" は評価する所なので、残った関数は `_`（V4）。呼んだ答えが `_` の時の関数（orElse）は要らない（外さないと、`&` の右を通った括りの関数が残る）。
+    return r instanceof TailCall && r.orElse && place === "tail" ? new TailCall(r.f, r.args, r.line) : r;
   } finally {
     cx.nest--;
   }
@@ -307,6 +321,9 @@ function sideValue(cx, row, env, line) {
 }
 const spread = (v) => (v === UNIT ? [] : [v]);
 const isTail = (place) => place === "tail" || place === "tailkeep";
+const isKeep = (place) => place === "keep" || place === "tailkeep";
+// 辺を関数のまま（keep）読んだ並びが、丸ごとの関数1つか。
+const lone = (s) => Array.isArray(s) && s.length === 1 && s[0] instanceof Fn;
 
 // 答えが行の答えになる辺（`&`・`|` の右）。評価する所で、行が返す所なら辺も返す所。
 function sideRow(cx, row, env, line, place) {
@@ -314,17 +331,50 @@ function sideRow(cx, row, env, line, place) {
   return r instanceof TailCall ? r : spread(valueOf(r, line));
 }
 
-// `,` の積（V4）。辺も左から畳み（R121）、辺に丸ごと残った関数は `_`（R123）、`_` は積の単位（R61）。
-// 書いた `_` の辺は無いのと同じで、隣の辺は行の置かれた所のまま（`w : inc , _` は inc）。左が空なら右の答えが行の答え。
+// `,` の積（V4、2026-11-07 の誤2）。括らない `,` の鎖は1つの平らな積で、辺（因子。括った `(…)` は1つの因子）を左から、関数のまま（keep）読む（R121）。
+// 1. 単位律：`_` の辺は出どころ（書いた・名前・括り・計算・0 除算・`_` を返す呼び出し）に依らず消える（R61、U 11-04 04:26）。
+// 2. 1つだけ残った辺は行の置かれた所のまま（`w : inc , _` は inc、根では `_`）。
+// 3. 2つ以上残れば `,` が残るので、丸ごとの関数は `_`（R123）で、それも単位で消える（U〔答え〕11-04 06:04）。関数だけが3つ以上残る形は、括りの中と
+//    定義の右辺では仕様 §5 Q89 の答えまでまだ（V12）、評価する所ではどの読みでも `_`。
+// 返す所では、前の辺が関数だけ（2つまで）の辺の最後の呼び出しを取っておき（foldTerms の pending と同じ）、後ろの辺が全部 `_` ならそれが行の答え（V10）。
+// 前の関数が3つ以上なら取っておかずに読む（末尾の道が Q89 を黙って答えないように）。取っておいた呼び出しの中の括りが残す関数（orElse）も数える：
+// 返す所の括りの中で、それを足して3つ以上なら、取っておかずに呼んで下の規則（Q89 の門）に当てる（`(inc , double , (add 1 , lz n)) 5` は根と同じまだ）。
 function product(cx, row, env, line, place) {
-  if (isUnitRow(row.left)) return evalRow(cx, row.right, env, line, place);
-  if (isUnitRow(row.right)) return evalRow(cx, row.left, env, line, place);
-  const l = evalRow(cx, row.left, env, line, "eval");
-  if (!l.length) return evalRow(cx, row.right, env, line, isTail(place) ? "tail" : "eval");
-  const r = evalRow(cx, row.right, env, line, "eval");
-  if (!r.length) return l;
-  if ([...l, ...r].some((x) => x instanceof Seq)) throw notYet("並びを `,` の辺に置く形（器の片）", line);
-  return [...l, ...r];
+  const sides = [];
+  let r = row;
+  for (; isOp(r, ","); r = r.right) sides.push(r.left);
+  sides.push(r);
+  const kept = []; // 消えなかった辺（keep で読んだ並び）
+  let pending = null;
+  for (const side of sides) {
+    const tailHere = isTail(place) && !pending && kept.length < 3 && kept.every(lone);
+    const s = evalRow(cx, side, env, line, tailHere ? "tailkeep" : "keep");
+    if (s instanceof TailCall) {
+      pending = s;
+      continue;
+    }
+    if (!s.length) continue;
+    if (pending) {
+      const v = callPending(cx, pending);
+      pending = null;
+      if (v !== UNIT) kept.push([v]);
+    }
+    kept.push(s);
+  }
+  if (pending) {
+    // 後ろの辺は全部 `_`、前の辺は関数だけ。呼んだ答えが `_` でなければそれが答え（前の関数は R123 で消える）、`_` なら残るのは関数だけ。
+    const fns = [...kept.map((s) => s[0]), ...(pending.orElse ? [pending.orElse] : [])];
+    if (fns.length < 3 || !isKeep(place)) return fns.length === 0 ? pending : new TailCall(pending.f, pending.args, pending.line, fns.length === 1 ? fns[0] : null);
+    const v = callPending(cx, pending);
+    if (v !== UNIT) kept.push([v]);
+  }
+  if (kept.length <= 1) return close(kept[0] || [], place);
+  const vals = kept.filter((s) => !lone(s));
+  if (!vals.length && kept.length >= 3 && isKeep(place)) throw notYet("括らない `,` の鎖で関数だけが3つ以上残る形（仕様 §5 Q89）", line);
+  if (vals.length <= 1) return vals[0] || [];
+  if (vals.some((s) => s.some((x) => x instanceof Seq))) throw notYet("並びを `,` の辺に置く形（器の片）", line);
+  // 残った値の辺は今のまま平らにつなぐ（`,` の辺の2次元は誤3 の片）。
+  return vals.flat();
 }
 
 function close(stack, place) {
@@ -348,7 +398,7 @@ function foldTerms(cx, terms, env, line, place) {
     }
     if (v === UNIT) continue;
     if (pending) {
-      const r = callFn(cx, pending.f, pending.args, pending.line);
+      const r = callPending(cx, pending);
       pending = null;
       step(cx, stack, r, line);
     }
