@@ -4855,7 +4855,7 @@ alpha の値は利用者の値と合わないので、根拠にしない。
 | 本体 `mul x + 1 y` | `(apply mul (construct (+ x 1) y))` | A | — |
 | `inc 1 + 2` | `(apply inc (+ 1 2))` | A | 4 |
 | `` [* 2,] `ab` == `aabb` `` | ``(== (apply [* 2,] `ab`) `aabb`)`` | — | U 09-27 01:50 |
-| `1 2 , 3 4` | `(, (construct 1 2) (construct 3 4))` | — | — |
+| `1 2 , 3 4` | `(, (construct 1 2) (construct 3 4))` | — | 2次元（`[1 2]` と `[3 4]` の2行）。値の段は器の片で止める（value_spec V12） |
 | `vs~ 4` | `(construct vs~ 4)` | A | Q12 |
 | `5 inc` | `(construct 5 (unit inc))` | A（R47・R42：inc は 5 を取らずに積まれて余り、根で `_`。R48 で知らせる。前は逆適用の `(apply inc 5 ·rev)`） | 5（前は 6） |
 | `5 inc inc` | `(construct 5 (unit (compose inc inc)))` | A（R47。前は `(apply (compose inc inc) 5 ·rev)`） | 5（前は 7、D 33dbd424） |

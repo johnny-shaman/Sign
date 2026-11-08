@@ -373,8 +373,10 @@ function product(cx, row, env, line, place) {
   if (!vals.length && kept.length >= 3 && isKeep(place)) throw notYet("括らない `,` の鎖で関数だけが3つ以上残る形（仕様 §5 Q89）", line);
   if (vals.length <= 1) return vals[0] || [];
   if (vals.some((s) => s.some((x) => x instanceof Seq))) throw notYet("並びを `,` の辺に置く形（器の片）", line);
-  // 残った値の辺は今のまま平らにつなぐ（`,` の辺の2次元は誤3 の片）。
-  return vals.flat();
+  // 4. `,` は段を保つ（V4、2026-11-07 の誤3）。辺が2つ以上の値なら2次元（`1 2 , 3 4` は `[1 2] , [3 4]`）で器の片。門は単位律と R123 の後
+  //    （前に置くと `1 2 , _`・`1 2 , inc` が止まる）。辺がどれも1つの値なら1次元（`1 , 2 , 3` は `1 2 3`）。
+  if (vals.some((s) => s.length > 1)) throw notYet("2つ以上の値を `,` の辺に置く形（`,` は段を保つので2次元、器の片）", line);
+  return vals.map((s) => s[0]);
 }
 
 function close(stack, place) {
