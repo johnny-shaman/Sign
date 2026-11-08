@@ -7,11 +7,14 @@
  * 3. 突き合わせ：上の全部の行で、解決器の木の根が `(unit …)` か種類 L なら値は `_`（V1。解決器の種類は予想で、値を決めない）。
  * 4. 知らせ：`_` の生まれた行に information（V11）。計算の `_` が口をずらす所は知らせない。
  * 5. まだ：片1 で持っていない形は行を名指しして止まる（V12）。読む段の断りはファイルごと止まる（V1）。
+ * 6. 自前のスタック（V10、2026-11-07 の誤5）：駆動の輪の単体・yield の書き忘れの門・JS のスタックを半分にした子プロセス・読む段の stackRefusal。
  *
  * 実行: node test/interpret.test.js（`npm test` からも呼ばれる）
  */
-import { interpret, showValue, UNIT } from "../interpret.js";
-import { kindOf } from "../resolve.js";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { drive, interpret, showValue, UNIT } from "../interpret.js";
+import { kindOf, stackRefusal } from "../resolve.js";
 
 const STD = [
 	"inc : x ? x + 1",
@@ -34,8 +37,8 @@ function check(name, ok, detail) {
 
 // 走らせた結果を全部覚えて、最後に解決器と突き合わせる（3）。
 const seen = [];
-function run(lines, { std = true, workLimit } = {}) {
-	const r = interpret([...(std ? STD : []), ...[].concat(lines)].join("\n"), workLimit ? { workLimit } : {});
+function run(lines, { std = true, workLimit, nestLimit } = {}) {
+	const r = interpret([...(std ? STD : []), ...[].concat(lines)].join("\n"), { ...(workLimit ? { workLimit } : {}), ...(nestLimit ? { nestLimit } : {}) });
 	seen.push(r);
 	return r;
 }
@@ -440,14 +443,15 @@ const PR2 = ["p2 : x ?", "\tx > 0", "\tx < 9", "\tx * 3", ""];
 const PCH = ["q2 : x ? (x > 0) & (x < 9) & (x * 3)"];
 for (const x of ["0", "5", "12"]) same(`手続き ≡ & (${x})`, [...PR2, ...PCH, `p2 ${x}`], [...PR2, ...PCH, `q2 ${x}`]);
 // 末尾呼び出しのループは値を変えない（V10）。返す所は綴りでなく意味で決まる：括った呼び出し・後ろが `_` の呼び出し・`|` の右も末尾で、
-// 深さの上限（1200）を越えても値が同じ。
+// 小さい上限（1200）で、上限を越える n でも値が同じ（2026-11-07 の誤5：上限を越える n を確かに作るため、小さい上限を渡す）。
 const LOOP2 = ["lp : n acc ?", "\tn < 1 : acc", "\t(lp (n - 1) (acc + n))", ""];
 const LOOP3 = ["lu : n acc ?", "\tn < 1 : acc", "\tlu (n - 1) (acc + n) _", ""];
 const LOOP4 = ["lc : n acc ? ((n < 1) & acc) | (lc (n - 1) (acc + n))"];
+const SMALL = { nestLimit: 1200 };
 for (const n of ["0", "1", "10", "50", "5000"]) {
-	same(`末尾呼び出し・括り (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP2, `lp ${n} 0`]);
-	same(`末尾呼び出し・後ろの \`_\` (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP3, `lu ${n} 0`]);
-	same(`末尾呼び出し・\`|\` の右 (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP4, `lc ${n} 0`]);
+	same(`末尾呼び出し・括り (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP2, `lp ${n} 0`], SMALL);
+	same(`末尾呼び出し・後ろの \`_\` (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP3, `lu ${n} 0`], SMALL);
+	same(`末尾呼び出し・\`|\` の右 (${n})`, [...LOOP, `loop ${n} 0`], [...LOOP4, `lc ${n} 0`], SMALL);
 }
 // 2026-11-07 の誤2（V10）：`,` の辺の呼び出しは、後ろの辺が全部 `_`（出どころに依らない）なら返す所。書いた `_` の lw と同じ値（9）で、深さの上限を越えても同じ。
 // 後ろの辺が読んで初めて `_` と分かる lc・la・lb は、呼ばずに取っておいて後ろを先に読む（11-04 に閉じた帰結。前は lc 300 が深さの上限の `_`）。
@@ -565,13 +569,29 @@ check("消えた枝の 0 除算の知らせは枝の行に", noticesOf(run(["t :
 check("引かれない定義の知らせ", noticesOf(run(["z : 7 / 0", "1"], { std: false })) === "zero-division@1");
 {
 	// 深さの上限で欠けた値は覚えない：深い所で先に引かれた定義も、後の行では本当の値（V10）。底の深さが上限を跨ぐ n を全部試す。
+	// 上限は 1200 にして確かめる（跨ぐのは n = 235 のあたり。既定の上限 10,000 だと跨ぐ n が大きくなり、1本ずつが重い。2026-11-07 の誤5）。
 	const DK = (n) => ["dk : n ?", "\tn < 1 : k", "\t0 + (dk (n - 1))", "", `dk ${n}`, "k", "k : ((((((((((100 + 200))))))))))"];
 	let bad = [];
 	for (let n = 100; n <= 400; n++) {
-		const got = show(DK(n), { std: false });
+		const got = show(DK(n), { std: false, nestLimit: 1200 });
 		if (got !== "300") bad.push(`${n}:${got}`);
 	}
 	check("深さの上限で欠けた値は覚えない", bad.length === 0, bad.slice(0, 5).join(" "));
+}
+// 2026-11-07 の誤5（V10）：解釈器の再帰は自前のスタックに載るので、上限の手前の深い再帰は本当の値（前は約 240 段・200 段で上限の `_`、冷えたプロセスでは
+// 最後でない枝の再帰で生の RangeError。U [2026-11-07 02:22:51 f1bbb920]「やってみるか。 / 載せ替えてみよう。 / 無理なら引き返していい。」）。
+check("誤5 深い再帰の値（上限の手前）", show(["deep : n ?", "\tn < 1 : 0", "\t1 + (deep (n - 1))", "", "deep 1500"], { std: false }) === "1500");
+check("誤5 深い再帰の値（1行の本体）", show(["d1 : n ? (n < 1 & 0) | 1 + (d1 (n - 1))", "", "d1 1500"], { std: false }) === "1500");
+// 途中の呼び出しの鍵は実引数の全部（R）：1つ目の実引数が変わらない末尾でない再帰を、同じ実引数の輪と取り違えない。
+check("誤5 2引数の鍵（1つ目が同じ末尾でない再帰）", show(["h : a b ?", "\tb > 3 : 0", "\t1 + (h a (b + 1))", "", "h 1 0"], { std: false }) === "4");
+// 速道は引く前の定義を値と見ない（R）：後ろの定義を中置の被演算子に置く形（前の速道の誤りでは `+` が TypeError、`=` が黙って `_`）。
+check("誤5 後ろの定義を中置の被演算子に置く形", show(["y : x + 1", "x : 5", "y"], { std: false }) === "6");
+check("誤5 後ろの定義を `=` の被演算子に置く形", show(["z : x = 5", "x : 5", "z"], { std: false }) === "5");
+// 入れ子の数え方の釘（R）：上限 400 で `lp 200 0` は 20094 と resource-depth（速道の enter を外すと 20097 になる）。
+{
+	const r = run(["lp : n acc ?", "\tn > 0 : lp (n - 1) (acc + n)", "\tacc", "", "lp 200 0"], { std: false, nestLimit: 400 });
+	const got = `${showValue(lastValue(r))} ${noticesOf(r)}`;
+	check("誤5 入れ子の数え方（上限 400）", got === "20094 resource-depth@2", got);
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +760,170 @@ stops("寄せ1 R130 枝の前の裸の行", ["t : x ?", "\tx + 1", "\tx > 0 : 1"
 stops("寄せ1 R130 既定の行が2つ", ["t : x ?", "\tx > 0 : 1", "\tx + 1", "\tx", "", "t 1"], "body-bare-row-between", N + 2);
 // 寄せ5 の R135：括りの中の `?` で始まる行は前処理（読む段）で止め、その `?` の行を名指す（前は `[x ? x + 1] 5` と同じに読まれて 6）。
 stops("寄せ5 R135 括りの中の `?` の行（前は 6）", ["[", "\t\tx", "\t? x + 1", "] 5"], "param-block-bracket", N + 2);
+
+// ---------------------------------------------------------------------------
+// 6. 自前のスタック（V10、2026-11-07 の誤5）
+// ---------------------------------------------------------------------------
+
+{
+	// 駆動の輪（drive）の単体：作り物の生成器で、答えの受け渡し・例外の道・finally を確かめる（解釈器の試験は投げる道の後片付けを外から見られないので）。
+	const D = 5000; // 駆動のスタックの深さ
+	{
+		// 答えの受け渡し：どの深さでも子の答えがそのまま親の yield の値になる。`_` の答えも。
+		const trace = [];
+		function* g(d) {
+			if (d > 0) {
+				const c = yield g(d - 1);
+				trace.push(`${d}:${String(c)}`);
+			}
+			return d % 3 === 0 ? UNIT : BigInt(d);
+		}
+		const r = drive(g(D));
+		const want = [];
+		for (let d = 1; d <= D; d++) want.push(`${d}:${String((d - 1) % 3 === 0 ? UNIT : BigInt(d - 1))}`);
+		check("誤5 drive 答えの受け渡し（深さ 5000、`_` も混ぜる）", r === (D % 3 === 0 ? UNIT : BigInt(D)) && trace.join(",") === want.join(","), `${trace.length}/${want.length}`);
+	}
+	{
+		// 1つの生成器が子を何度も頼む（並べた子の答えが順に届く）。
+		function* leaf(v) {
+			return v;
+		}
+		function* many(k) {
+			let s = 0n;
+			for (let i = 0; i < k; i++) s += yield leaf(BigInt(i));
+			return s;
+		}
+		check("誤5 drive 子を何度も頼む", drive(many(1000)) === 499500n);
+	}
+	{
+		// 例外の道：いちばん深い所で投げた物が、同じ物のまま外へ出る。途中の finally は内から外へ全部走る。
+		const log = [];
+		const err = Object.assign(new Error("まだ"), { reason: "interpret-not-yet", line: 7 });
+		function* t(d) {
+			try {
+				if (d === 0) throw err;
+				yield t(d - 1);
+				log.push(`after${d}`); // 来てはいけない
+			} finally {
+				log.push(d);
+			}
+		}
+		let got = null;
+		try {
+			drive(t(D));
+		} catch (e) {
+			got = e;
+		}
+		check("誤5 drive 例外は同じ物で外へ", got === err);
+		check("誤5 drive finally は内から外へ全部", log.join(",") === Array.from({ length: D + 1 }, (_, i) => i).join(","), `${log.length} 個`);
+	}
+	{
+		// 捕まえる所：途中の生成器が catch したら、その答えが親に届き、外へは出ない。
+		const err = new Error("x");
+		function* t(d) {
+			if (d === 0) throw err;
+			if (d === 10) {
+				try {
+					yield t(d - 1);
+				} catch (e) {
+					return e === err ? 100n : -1n;
+				}
+			}
+			return (yield t(d - 1)) + 1n;
+		}
+		let r;
+		try {
+			r = drive(t(D));
+		} catch (e) {
+			r = e;
+		}
+		check("誤5 drive 途中で捕まえた答えが親へ", r === 100n + BigInt(D - 10), String(r));
+	}
+	{
+		// finally の中で投げ直した物が勝つ（JS の try/finally と同じ）。
+		const a = new Error("a");
+		const b = new Error("b");
+		function* t(d) {
+			try {
+				if (d === 0) throw a;
+				yield t(d - 1);
+			} finally {
+				if (d === 3) throw b;
+			}
+		}
+		let got = null;
+		try {
+			drive(t(D));
+		} catch (e) {
+			got = e;
+		}
+		check("誤5 drive finally で投げた物が勝つ", got === b);
+	}
+}
+{
+	// yield の書き忘れの門：輪の関数（生成器）を呼ぶ所は、どれも `yield` か `drive(` を通る（書き忘れると生成器の物が値に入り、黙った誤答になりうる）。
+	const src = readFileSync(new URL("../interpret.js", import.meta.url), "utf8")
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/(^|\s)\/\/.*$/gm, "$1");
+	const names = [...src.matchAll(/function\*\s+(\w+)\s*\(/g)].map((m) => m[1]);
+	const bad = [];
+	for (const name of names)
+		for (const m of src.matchAll(new RegExp(`(?<![\\w$.])${name}\\s*\\(`, "g"))) {
+			const before = src.slice(Math.max(0, m.index - 16), m.index);
+			if (!/(?:yield\s+|drive\(|function\*\s+)$/.test(before)) bad.push(`${name}@${src.slice(0, m.index).split("\n").length}`);
+		}
+	check(`誤5 yield の書き忘れの門（輪の関数 ${names.length} 個）`, names.length >= 10 && bad.length === 0, bad.join(" "));
+	// drive を呼ぶのは interpret の2か所だけ（規則 D：生成器の中で drive を呼ぶと JS のスタックに積む。上の門は `drive(` を通すので、数で押さえる）。
+	const drives = [...src.matchAll(/(?<![\w$.])drive\s*\(/g)].length - 1; // 定義の `function drive(` を引く
+	check("誤5 drive を呼ぶのは2か所", drives === 2, `${drives} か所`);
+}
+{
+	// 形ごとの子プロセス（1形1本）で JS のスタックを半分（--stack-size=492）にしても、生の RangeError が出ない（値か resource-depth か読む段の resolve-stack-limit）。
+	const url = new URL("../interpret.js", import.meta.url).href;
+	const script = [
+		`import { interpret, showValue } from ${JSON.stringify(url)};`,
+		"let out;",
+		"try {",
+		"  const r = interpret(process.env.SIGN_SRC);",
+		'  out = r.notices.some((n) => n.reason === "resource-depth") ? "depth" : "ok " + r.values.map((v) => showValue(v.value)).join(" | ");',
+		"} catch (e) {",
+		'  out = (e instanceof RangeError ? "RangeError " : "stop ") + (e.reason || e.name);',
+		"}",
+		"console.log(out);",
+	].join("\n");
+	const SHAPES = {
+		"最後でない枝の再帰 tv": "tv : n ?\n\tn > 0 : tv (n - 1)\n\t0\n\ntv 5100",
+		"最後でない枝の再帰 lp": "lp : n acc ?\n\tn > 0 : lp (n - 1) (acc + n)\n\tacc\n\nlp 1000 0",
+		"既定の行の再帰 deep": "deep : n ?\n\tn < 1 : 0\n\t1 + (deep (n - 1))\n\ndeep 2100",
+		"1行の本体の再帰 d1": "d1 : n ? (n < 1 & 0) | 1 + (d1 (n - 1))\n\nd1 1700",
+		"1000 項の和": Array(1000).fill("1").join(" + "),
+		"800 項の `&`": Array(800).fill("1").join(" & "),
+		"括り 300 段": "(".repeat(300) + "1" + ")".repeat(300),
+		"最後でない枝の `,`": "tv : n ?\n\tn > 0 : (tv (n - 1) , _)\n\t0\n\ntv 5100",
+		"最後でない枝の `|`": "inc : x ? x + 1\ntv : n ?\n\tn > 0 : (inc | tv (n - 1))\n\t0\n\ntv 5100",
+		"最後でない枝の `;`": "inc : x ? x + 1\ntv : n ?\n\tn > 0 : (inc ; tv (n - 1))\n\t0\n\ntv 5100",
+	};
+	for (const [name, src] of Object.entries(SHAPES)) {
+		const p = spawnSync(process.execPath, ["--stack-size=492", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, SIGN_SRC: src } });
+		const out = (p.stdout || "").trim();
+		const ok = p.status === 0 && (out.startsWith("ok ") || out === "depth" || out === "stop resolve-stack-limit");
+		check(`誤5 JS のスタックを半分にしても生の RangeError が出ない（${name}）`, ok, `status ${p.status}: ${out} ${(p.stderr || "").trim().slice(0, 200)}`);
+	}
+	// 1000 項の和・800 項の `&`・括り 300 段は、半分のスタックでは読む段が先に resolve-stack-limit で止まり、値の段を見ない。読む段が通り、載せ替える前の値の段なら
+	// 溢れる 640 項の和で値の段の答えを見る（R。この機械の Node 24 で、前の値の段は約 550 項から RangeError、読む段は約 750 項から resolve-stack-limit）。
+	const p = spawnSync(process.execPath, ["--stack-size=492", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, SIGN_SRC: Array(640).fill("1").join(" + ") } });
+	const out = (p.stdout || "").trim();
+	check("誤5 JS のスタックを半分にしても値の段が答える（640 項の和）", p.status === 0 && out === "ok 640", `status ${p.status}: ${out}`);
+}
+{
+	// 読む段：V8 は正規表現の中のスタック溢れを SyntaxError で出す（1620 項の `&` の鎖で、8 回中 3 回が内部の例外のまま漏れた）。溢れる所は揺れるので、
+	// 作った例外を stackRefusal に渡して確かめる（R）。
+	const se = stackRefusal(new SyntaxError("Invalid regular expression: /^[0-9]+x[0-9a-fA-F]+$/: Stack overflow"));
+	check("誤5 読む段 正規表現の中のスタック溢れ（SyntaxError）は resolve-stack-limit", !!se && se.reason === "resolve-stack-limit", se ? se.reason : "null");
+	const re = stackRefusal(new RangeError("Maximum call stack size exceeded"));
+	check("誤5 読む段 JS のスタック溢れ（RangeError）は resolve-stack-limit", !!re && re.reason === "resolve-stack-limit", re ? re.reason : "null");
+	check("誤5 読む段 溢れでない SyntaxError は断りにしない", stackRefusal(new SyntaxError("Invalid regular expression: /(/: Unterminated group")) === null);
+}
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

@@ -55,9 +55,9 @@ class TailCall {
   }
 }
 
-// 取っておいた末尾呼び出しを、後ろに `_` でない物が来たので呼ぶ。
-function callPending(cx, tc) {
-  const r = callFn(cx, tc.f, tc.args, tc.line);
+// 取っておいた末尾呼び出しを、後ろに `_` でない物が来たので呼ぶ。呼び手が3つ（evalRow の畳み・product・xorRow）なので溶かさず、生成器のまま呼ぶ（呼び手は yield で頼む）。
+function* callPending(cx, tc) {
+  const r = yield callFn(cx, tc.f, tc.args, tc.line);
   return r === UNIT && tc.orElse ? tc.orElse : r;
 }
 
@@ -77,14 +77,53 @@ export function showValue(v, top = true) {
 // 資源（V10）
 // ---------------------------------------------------------------------------
 
-// 評価の入れ子（末尾でない呼び出し・項・行）の深さの上限。JS のスタックの溢れに頼らない（V10）。呼び出しの深さだけを数えると、1段の呼び出しの中の括りと中置の
-// 入れ子の分だけ JS のスタックが伸びて先に溢れる（Node の既定のスタックで 1000 段に届かなかった）ので、入れ子を全部数える。Node の既定のスタック（約 1 MB）で
-// 溢れる手前の入れ子は、本体の形で 2381〜3456 だった（2026-11-04 に測った。手続きの本体がいちばん浅い）。その最小のほぼ半分に置く。
-const NEST_LIMIT = 1200;
+// 評価の入れ子（末尾でない呼び出し・項・行）の深さの上限。JS のスタックの溢れに頼らない（V10）。評価の入れ子は JS のスタックに積まず、ヒープ上の配列に積む
+// （drive）ので、届く深さは JS のスタックの大きさに依らず、この上限とメモリで決まる。数えるのは前と同じ所（enter）。1段の重さはその段で読んでいる行の項の数に
+// ほぼ比例し、ヒープが溢れるとプロセスごと落ちて catch できないので、ふつうの幅の行が小さいヒープでも収まる所に置く（V10 の注、2026-11-07 の誤5）。
+// `interpret(source, { nestLimit })` で変えられる（試験が小さくして確かめる）。
+const NEST_LIMIT = 10_000;
 // 1行（ファイルのいちばん外の行）の計算の量の上限。入れ子に入った回数で数え、行ごとに数え直す（問16「行は別々」）。止まらない輪のうち、同じ状態へ戻る物は
 // 輪として止める（callFn）が、戻らない物（`f : x ? f (x + 1)`）はここで止める。解釈器の都合なので `_` にせず、行を名指しして止める（V10）。
 // 既定の 2000 万回は、この機械で数秒にあたる。
 const WORK_LIMIT = 20_000_000;
+
+// ---------------------------------------------------------------------------
+// 駆動（V10、2026-11-07 の誤5）：評価の入れ子を JS のスタックでなく、ヒープ上の配列に積む
+// ---------------------------------------------------------------------------
+
+// 評価を呼び返す関数は生成器で、子の評価は `yield 子の生成器` で頼む。ここが子を走らせ、答えを .next(答え) で親へ返す。子が投げた例外は
+// .throw(例外) で親へ渡す（親が捕まえなければ、親も終わって更に上へ）。どの生成器も、終わるか例外を受けるまで積まれているので、finally は元と同じに走る。
+// 輪の外から呼ぶのは interpret の2か所だけで、drive の中で drive は呼ばない（JS のスタックの深さは drive＋生成器1つ＋書いた形の深さで抑えられる葉で頭打ち）。
+// export は試験の口（interpret.test.js が作り物の生成器で駆動の輪だけを確かめる）。入口は interpret の1つのまま（V1）。
+export function drive(root) {
+  const stack = [root];
+  let input;
+  let error;
+  let failed = false;
+  for (;;) {
+    const g = stack[stack.length - 1];
+    let r;
+    try {
+      r = failed ? g.throw(error) : g.next(input);
+    } catch (e) {
+      stack.pop();
+      if (!stack.length) throw e;
+      error = e;
+      failed = true;
+      continue;
+    }
+    failed = false;
+    error = undefined;
+    if (r.done) {
+      stack.pop();
+      if (!stack.length) return r.value;
+      input = r.value;
+    } else {
+      stack.push(r.value);
+      input = undefined;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // まだ（V12）と知らせ（V11）
@@ -100,7 +139,7 @@ const NOTICE_TEXT = {
   "zero-division": "0 で割ったので `_` です（V5）。",
   "int-overflow": "Int（64 bit）に入らないので `_` です（V5）。",
   "no-operation": "当たる演算が無いので `_` です（V5）。",
-  "resource-depth": `評価の入れ子（呼び出し・項・行）が深さの上限（${NEST_LIMIT}）に届いたので \`_\` です（V10）。`,
+  "resource-depth": (cx) => `評価の入れ子（呼び出し・項・行）が深さの上限（${cx.nestLimit}）に届いたので \`_\` です（V10）。`,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,13 +149,13 @@ const NOTICE_TEXT = {
 /**
  * ソースを読んで値の段で走らせる。
  * @param {string} source
- * @param {{ workLimit?: number }} [options] workLimit は1行の計算の量の上限（試験が小さくして確かめる）
+ * @param {{ workLimit?: number, nestLimit?: number }} [options] workLimit は1行の計算の量の上限、nestLimit は評価の入れ子の深さの上限（どちらも試験が小さくして確かめる）
  * @returns {{ values: { index: number, line: number|undefined, value: any }[], notices: object[], diagnostics: object[], trees: object[] }}
  */
-export function interpret(source, { workLimit = WORK_LIMIT } = {}) {
+export function interpret(source, { workLimit = WORK_LIMIT, nestLimit = NEST_LIMIT } = {}) {
   const { trees, diagnostics, rows, lineOf } = resolve(source);
   // exhausted は深さの上限に当たった回数（lookup が、上限で欠けた値を覚えないために見る）。frames は答えを出している途中の呼び出しを関数ごとに（callFn）。
-  const cx = { defs: new Map(), notices: [], noticed: new Set(), lineOf, nest: 0, work: 0, workLimit, exhausted: 0, frames: new Map() };
+  const cx = { defs: new Map(), notices: [], noticed: new Set(), lineOf, nest: 0, nestLimit, work: 0, workLimit, exhausted: 0, frames: new Map() };
 
   // ファイルのいちばん外の定義（順序に依らない。同じ名前の2つ目は読む段が name-duplicate で止める）。右辺が書いた `_` 1つの定義は書かなかったことと同じ（R113）。
   for (const row of rows) {
@@ -133,18 +172,18 @@ export function interpret(source, { workLimit = WORK_LIMIT } = {}) {
     const name = defName(row, line);
     if (name !== null) {
       // 定義は自分の行で1回走る。先に引かれていれば、その時に走っている（U〔答え〕10-31「引かれた時」）。
-      if (!isUnitRow(row.right)) lookup(cx, name, null, line);
+      if (!isUnitRow(row.right)) drive(lookup(cx, name, null, line));
       return;
     }
     if (isOp(row, ":")) throw notYet("左が名前1つでないファイルの `:` の行", line);
-    values.push({ index, line, value: valueOf(evalRow(cx, row, null, line, "eval"), line) });
+    values.push({ index, line, value: valueOf(drive(evalRow(cx, row, null, line, "eval")), line) });
   });
   return { values, notices: cx.notices, diagnostics, trees };
 }
 
 // 入れ子を1段入る。深さの上限なら知らせて false（その所は `_`、V10）。計算の量の上限なら止める。
 function enter(cx, line) {
-  if (cx.nest >= NEST_LIMIT) {
+  if (cx.nest >= cx.nestLimit) {
     notice(cx, "resource-depth", line);
     cx.exhausted++;
     return false;
@@ -169,7 +208,8 @@ function notice(cx, reason, line) {
   const key = `${reason}@${line}`;
   if (cx.noticed.has(key)) return;
   cx.noticed.add(key);
-  cx.notices.push({ severity: "information", reason, line, message: NOTICE_TEXT[reason] });
+  const text = NOTICE_TEXT[reason];
+  cx.notices.push({ severity: "information", reason, line, message: typeof text === "function" ? text(cx) : text });
 }
 
 // ---------------------------------------------------------------------------
@@ -208,18 +248,27 @@ function valueOf(stack, line) {
 // 名前と定義（V9）
 // ---------------------------------------------------------------------------
 
-function lookup(cx, name, env, line) {
+// 走らせずに分かる名前の値（仮引数・未定義・覚えた値）。定義を走らせる要る時は NEED（呼ぶ側が lookup で回す）。
+const NEED = Symbol("need");
+function known(cx, name, env) {
   for (let e = env; e; e = e.parent) if (e.vars.has(name)) return e.vars.get(name);
   const d = cx.defs.get(name);
   if (!d) return UNIT; // 未定義の名前は `_`（R111）。`x : _` の名前も（R113）
   if ("value" in d) return d.value;
+  return NEED;
+}
+
+function* lookup(cx, name, env, line) {
+  const k = known(cx, name, env);
+  if (k !== NEED) return k;
+  const d = cx.defs.get(name);
   if (d.busy) throw notYet("値の定義の輪", line);
   d.busy = true;
   const before = cx.exhausted;
   try {
     // 自分の行か、先に引かれた時に一度だけ走らせて覚える（U〔答え〕10-31「引かれた時」）。走っている間に深さの上限に当たった値は、その所の資源で欠けた値
     // なので覚えない（覚えると、後の行の値と「まだ」が前の行の深さで変わる）。
-    const v = defValue(cx, d);
+    const v = yield defValue(cx, d);
     if (cx.exhausted === before) d.value = v;
     return v;
   } finally {
@@ -227,14 +276,14 @@ function lookup(cx, name, env, line) {
   }
 }
 
-function defValue(cx, d) {
+function* defValue(cx, d) {
   const lam = lambdaOf(d.rhs);
   // 括りに包んだ関数は、括りをその場で書いた時と同じ点なしの門を通る（`f : [x ? x |]` ⏎ `f 5` は `[x ? x |] 5` と同じまだ。字下げの1行に置いた括りも。
   // 名前は右辺を閉じた1つの項、R42 の読み7。2026-11-07 の誤1）。括らない `f : x ? x |` は読む段が止めるので、ここへは来ない。
   if (lam && rowMissing(lam)) throw notYet("被演算子の欠けた行（点なし）", cx.lineOf(lam) ?? d.line);
   if (lam) return makeLambda(cx, lam, null, d.name, cx.lineOf(lam) ?? d.line);
   // 定義の右辺は評価する所ではない。1つだけ残った関数は関数のまま（`w : add 1`）、値の上の関数は `_`（R52）。
-  return valueOf(evalRow(cx, d.rhs, null, d.line, "keep"), d.line);
+  return valueOf(yield evalRow(cx, d.rhs, null, d.line, "keep"), d.line);
 }
 
 // 右辺が関数の綴りなら `?` の行。1行の括りに包んだ `?` も同じ（[x] ≅ x）。字下げの1行（仮引数のブロックの `?` の行）も剥がす（resolve の unwrapLambda と同じ）。
@@ -268,11 +317,35 @@ function makeLambda(cx, op, env, name, line) {
  * 返す所かどうかは綴りでなく意味で決める：後ろの項が全部 `_` の呼び出し、括りの中、`&`・`|` の右（`|` の左が丸ごとの関数でも）、`,`・`;` の辺の呼び出しで
  * 後ろの辺が全部 `_` の物（`;` は後ろの辺が丸ごとの関数でも。`_` は出どころに依らず消えるので、隣の辺が行の答え。11-04、2026-11-07 の誤2・誤4）も返す所。
  */
-function evalRow(cx, row, env, line, place) {
+function* evalRow(cx, row, env, line, place) {
   if (!row) throw notYet("被演算子の欠けた行（点なし）", line);
   if (!enter(cx, line)) return [];
   try {
-    const r = rowOf(cx, row, env, line, place);
+    let r;
+    if (row.type === "seq") {
+      // 書いた項の並びを左から2つずつ畳む（R40・R47・R120。前の foldTerms を溶かした）。
+      // 返す所では、並びを空にする最後の呼び出しを呼ばずに取っておき（pending）、後ろの項が全部 `_` ならそれを TailCall で返す。`_` でない項が来たら呼んで畳みを続ける。
+      const tail = isTail(place);
+      const stack = [];
+      let pending = null;
+      for (const t of row.terms) {
+        let v = termNow(cx, t, env, line);
+        if (v === NEED) v = yield evalTerm(cx, t, env, line, tail && !stack.length && !pending ? "tailkeep" : "keep");
+        if (v instanceof TailCall) {
+          pending = v; // 並びが空の所の括りの中の最後の呼び出し
+          continue;
+        }
+        if (v === UNIT) continue;
+        if (pending) {
+          const c = yield callPending(cx, pending);
+          pending = null;
+          if (stepNow(cx, stack, c, line) === NEED) yield applyStep(cx, stack, c, line, false);
+        }
+        pending = stepNow(cx, stack, v, line);
+        if (pending === NEED) pending = yield applyStep(cx, stack, v, line, tail);
+      }
+      r = pending || close(stack, place);
+    } else r = yield rowOf(cx, row, env, line, place);
     // "tail" は評価する所なので、残った関数は `_`（V4）。呼んだ答えが `_` の時の関数（orElse）は要らない（外さないと、`&` の右を通った括りの関数が残る）。
     return r instanceof TailCall && r.orElse && place === "tail" ? new TailCall(r.f, r.args, r.line) : r;
   } finally {
@@ -280,31 +353,31 @@ function evalRow(cx, row, env, line, place) {
   }
 }
 
-function rowOf(cx, row, env, line, place) {
-  if (row.type === "seq") return foldTerms(cx, row.terms, env, line, place);
+// 演算子の行（項の並びの行は evalRow が畳む）。
+function* rowOf(cx, row, env, line, place) {
   switch (row.sym) {
     case "?":
       return close([makeLambda(cx, row, env, null, line)], place);
     case ",":
-      return product(cx, row, env, line, place);
+      return yield product(cx, row, env, line, place);
     case "&": {
       // 左が `_` なら右を読まない（V7）。右の答えが行の答え。
-      const l = sideValue(cx, row.left, env, line);
-      return l === UNIT ? [] : sideRow(cx, row.right, env, line, place);
+      const l = valueOf(yield evalRow(cx, row.left, env, line, "eval"), line);
+      return l === UNIT ? [] : yield sideRow(cx, row.right, env, line, place);
     }
     case "|": {
       // 左が `_` でなければ右を読まない（V7）。右の答えが行の答え。
       // 評価する所・返す所では残った関数も `_` なので、左の関数は `_` と同じ（今のまま）。違うのは括りの中と定義の右辺だけ（orKeep、2026-11-07 の誤4）。
-      if (isKeep(place)) return orKeep(cx, row, env, line, place);
-      const l = sideValue(cx, row.left, env, line);
-      return l !== UNIT ? spread(l) : sideRow(cx, row.right, env, line, place);
+      if (isKeep(place)) return yield orKeep(cx, row, env, line, place);
+      const l = valueOf(yield evalRow(cx, row.left, env, line, "eval"), line);
+      return l !== UNIT ? spread(l) : yield sideRow(cx, row.right, env, line, place);
     }
     case ";":
-      return xorRow(cx, row, env, line, place);
+      return yield xorRow(cx, row, env, line, place);
     case "==": {
       // 深く比べて、等しければ左（U〔答え〕10-27 23:54）。どちらかが `_` なら `_`（U 11-04、R .8）。並びの比べは器の片（V12）。
-      const l = sideValue(cx, row.left, env, line);
-      const r = sideValue(cx, row.right, env, line);
+      const l = valueOf(yield evalRow(cx, row.left, env, line, "eval"), line);
+      const r = valueOf(yield evalRow(cx, row.right, env, line, "eval"), line);
       if (l instanceof Seq || r instanceof Seq) throw notYet("並びを `==` で比べる形（器の片）", line);
       return l === UNIT || r === UNIT || l !== r ? [] : spread(l);
     }
@@ -313,26 +386,23 @@ function rowOf(cx, row, env, line, place) {
   }
 }
 
-// 比べ・論理の被演算子は評価する所（R76）。
-function sideValue(cx, row, env, line) {
-  return valueOf(evalRow(cx, row, env, line, "eval"), line);
-}
+// 比べ・論理の被演算子は評価する所（R76）：呼ぶ所で `valueOf(yield evalRow(…, "eval"), line)`（前の sideValue。生成器を1つ減らすため開いた）。
 const spread = (v) => (v === UNIT ? [] : [v]);
 const isTail = (place) => place === "tail" || place === "tailkeep";
 const isKeep = (place) => place === "keep" || place === "tailkeep";
 // 辺を関数のまま（keep）読んだ並びが、丸ごとの関数1つか。
 const lone = (s) => Array.isArray(s) && s.length === 1 && s[0] instanceof Fn;
-// keep で読んだ辺の並びを、論理の辺の形（関数1つ・`_`・値1つ。2つ以上の値は並び）にする（sideValue と同じ形）。
+// keep で読んだ辺の並びを、論理の辺の形（関数1つ・`_`・値1つ。2つ以上の値は並び）にする（評価する所の `valueOf(yield evalRow(…, "eval"), line)` と同じ形）。
 const asSide = (s, line) => (s instanceof TailCall || lone(s) ? s : spread(valueOf(s, line)));
 
 // 括りの中・定義の右辺の `|`（V7、2026-11-07 の誤4。U〔答え〕11-04 05:34「6 に揃える」・06:04「消える」）。`_` は両側の単位で出どころに依らず先に消え、
 // 残った辺は行の置かれた所のまま。消えた後にも `|` が残れば丸ごとの関数は `_`（R123）で、それも単位で消える。左が値なら右を読まない（V7）。
-function orKeep(cx, row, env, line, place) {
-  const l = evalRow(cx, row.left, env, line, "keep");
-  if (!l.length) return asSide(evalRow(cx, row.right, env, line, place), line);
+function* orKeep(cx, row, env, line, place) {
+  const l = yield evalRow(cx, row.left, env, line, "keep");
+  if (!l.length) return asSide(yield evalRow(cx, row.right, env, line, place), line);
   if (!lone(l)) return asSide(l, line);
   // 左が関数：右が `_` なら左の関数だけが残り、右が値なら左の関数は `_`、右も関数なら両方 `_`。右が返す所の呼び出しなら、呼んだ答えが `_` の時に左の関数。
-  const r = evalRow(cx, row.right, env, line, place);
+  const r = yield evalRow(cx, row.right, env, line, place);
   if (r instanceof TailCall) return new TailCall(r.f, r.args, r.line, r.orElse ? null : l[0]);
   if (!r.length) return l;
   return lone(r) ? [] : asSide(r, line);
@@ -344,21 +414,21 @@ function orKeep(cx, row, env, line, place) {
 // 左が `_` か関数なら右を行の置かれた所のまま（返す所なら返す所）に読む。
 // 辺を関数のまま（keep）読むのは括りの中と定義の右辺だけ。評価する所・返す所の辺は評価する所のまま読む（keep で読むと、`inc , double , add 1 ; 7` の左が
 // Q89 の門に当たって、前は 7 だった答えがまだになる。V7「評価する所では…答えは前と同じ」）。
-function xorRow(cx, row, env, line, place) {
+function* xorRow(cx, row, env, line, place) {
   const side = isKeep(place) ? "keep" : "eval";
-  const l = evalRow(cx, row.left, env, line, isKeep(place) ? (isTail(place) ? "tailkeep" : "keep") : place);
+  const l = yield evalRow(cx, row.left, env, line, isKeep(place) ? (isTail(place) ? "tailkeep" : "keep") : place);
   if (l instanceof TailCall) {
-    const r = asSide(evalRow(cx, row.right, env, line, side), line);
+    const r = asSide(yield evalRow(cx, row.right, env, line, side), line);
     if (!r.length) return l;
     if (lone(r)) return new TailCall(l.f, l.args, l.line, l.orElse ? null : r[0]);
-    return close(xorOf(spread(callPending(cx, l)), r), place);
+    return close(xorOf(spread(yield callPending(cx, l)), r), place);
   }
   if (!l.length || lone(l)) {
-    const r = evalRow(cx, row.right, env, line, place);
+    const r = yield evalRow(cx, row.right, env, line, place);
     if (r instanceof TailCall) return lone(l) ? new TailCall(r.f, r.args, r.line, r.orElse ? null : l[0]) : r;
     return close(xorOf(l, asSide(r, line)), place);
   }
-  return close(xorOf(asSide(l, line), asSide(evalRow(cx, row.right, env, line, side), line)), place);
+  return close(xorOf(asSide(l, line), asSide(yield evalRow(cx, row.right, env, line, side), line)), place);
 }
 
 // `;` の2つの辺（`_`・関数1つ・値1つ）。
@@ -371,8 +441,8 @@ function xorOf(l, r) {
 }
 
 // 答えが行の答えになる辺（`&`・`|` の右）。評価する所で、行が返す所なら辺も返す所。
-function sideRow(cx, row, env, line, place) {
-  const r = evalRow(cx, row, env, line, isTail(place) ? "tail" : "eval");
+function* sideRow(cx, row, env, line, place) {
+  const r = yield evalRow(cx, row, env, line, isTail(place) ? "tail" : "eval");
   return r instanceof TailCall ? r : spread(valueOf(r, line));
 }
 
@@ -381,10 +451,10 @@ function sideRow(cx, row, env, line, place) {
 // 2. 1つだけ残った辺は行の置かれた所のまま（`w : inc , _` は inc、根では `_`）。
 // 3. 2つ以上残れば `,` が残るので、丸ごとの関数は `_`（R123）で、それも単位で消える（U〔答え〕11-04 06:04）。関数だけが3つ以上残る形は、括りの中と
 //    定義の右辺では仕様 §5 Q89 の答えまでまだ（V12）、評価する所ではどの読みでも `_`。
-// 返す所では、前の辺が関数だけ（2つまで）の辺の最後の呼び出しを取っておき（foldTerms の pending と同じ）、後ろの辺が全部 `_` ならそれが行の答え（V10）。
+// 返す所では、前の辺が関数だけ（2つまで）の辺の最後の呼び出しを取っておき（evalRow の畳みの pending と同じ）、後ろの辺が全部 `_` ならそれが行の答え（V10）。
 // 前の関数が3つ以上なら取っておかずに読む（末尾の道が Q89 を黙って答えないように）。取っておいた呼び出しの中の括りが残す関数（orElse）も数える：
 // 返す所の括りの中で、それを足して3つ以上なら、取っておかずに呼んで下の規則（Q89 の門）に当てる（`(inc , double , (add 1 , lz n)) 5` は根と同じまだ）。
-function product(cx, row, env, line, place) {
+function* product(cx, row, env, line, place) {
   const sides = [];
   let r = row;
   for (; isOp(r, ","); r = r.right) sides.push(r.left);
@@ -393,14 +463,14 @@ function product(cx, row, env, line, place) {
   let pending = null;
   for (const side of sides) {
     const tailHere = isTail(place) && !pending && kept.length < 3 && kept.every(lone);
-    const s = evalRow(cx, side, env, line, tailHere ? "tailkeep" : "keep");
+    const s = yield evalRow(cx, side, env, line, tailHere ? "tailkeep" : "keep");
     if (s instanceof TailCall) {
       pending = s;
       continue;
     }
     if (!s.length) continue;
     if (pending) {
-      const v = callPending(cx, pending);
+      const v = yield callPending(cx, pending);
       pending = null;
       if (v !== UNIT) kept.push([v]);
     }
@@ -410,7 +480,7 @@ function product(cx, row, env, line, place) {
     // 後ろの辺は全部 `_`、前の辺は関数だけ。呼んだ答えが `_` でなければそれが答え（前の関数は R123 で消える）、`_` なら残るのは関数だけ。
     const fns = [...kept.map((s) => s[0]), ...(pending.orElse ? [pending.orElse] : [])];
     if (fns.length < 3 || !isKeep(place)) return fns.length === 0 ? pending : new TailCall(pending.f, pending.args, pending.line, fns.length === 1 ? fns[0] : null);
-    const v = callPending(cx, pending);
+    const v = yield callPending(cx, pending);
     if (v !== UNIT) kept.push([v]);
   }
   if (kept.length <= 1) return close(kept[0] || [], place);
@@ -431,32 +501,9 @@ function close(stack, place) {
   return stack;
 }
 
-// 書いた項の並びを左から2つずつ畳む（R40・R47・R120）。
-// 返す所では、並びを空にする最後の呼び出しを呼ばずに取っておき（pending）、後ろの項が全部 `_` ならそれを TailCall で返す。`_` でない項が来たら呼んで畳みを続ける。
-function foldTerms(cx, terms, env, line, place) {
-  const tail = isTail(place);
-  const stack = [];
-  let pending = null;
-  for (const t of terms) {
-    const v = evalTerm(cx, t, env, line, tail && !stack.length && !pending ? "tailkeep" : "keep");
-    if (v instanceof TailCall) {
-      pending = v; // 並びが空の所の括りの中の最後の呼び出し
-      continue;
-    }
-    if (v === UNIT) continue;
-    if (pending) {
-      const r = callPending(cx, pending);
-      pending = null;
-      step(cx, stack, r, line);
-    }
-    pending = step(cx, stack, v, line, tail);
-  }
-  return pending || close(stack, place);
-}
-
 // 畳みの1歩（V3）：関数の後ろの値は適用、関数の後ろの関数は合成、ほかは積む。`_` は値の口でも並びでも消える。
-// tail なら、並びを空にする最後の呼び出しを呼ばずに TailCall で返す（ほかは null）。
-function step(cx, stack, v, line, tail = false) {
+// 適用でない1歩（`_`・合成・積む）はここで済ませて null、適用の1歩は何もせず NEED を返す（呼ぶ側が applyStep で回す。前の step を2つに分けた）。
+function stepNow(cx, stack, v, line) {
   if (v === UNIT) return null;
   const top = stack[stack.length - 1];
   if (top instanceof Fn) {
@@ -464,34 +511,46 @@ function step(cx, stack, v, line, tail = false) {
       stack[stack.length - 1] = new Fn([...top.stages, ...v.stages]);
       return null;
     }
-    stack.pop();
-    const { rest, outs, call } = feed(cx, top, v, line, tail && !stack.length);
-    if (call) return call;
-    if (rest) stack.push(rest);
-    for (const o of outs) step(cx, stack, o, line);
-    return null;
+    return NEED;
   }
   if ((v instanceof Seq && stack.length) || stack.some((x) => x instanceof Seq)) throw notYet("並びの隣に項を積む形（器の片）", line);
   stack.push(v);
   return null;
 }
 
-// 関数の値に値を1つ当てる。段の口が埋まれば呼び、答えは次の段へ流し、段が尽きた後の答えは並びに出す（R11・R40）。
-// 段の並びはループで回す（書いた合成が長くても JS のスタックを積まない）。tail なら最後の段の呼び出しは呼ばずに返す。
-function feed(cx, fn, v, line, tail) {
+// 適用の1歩（並びの頭が関数で、v が関数でない値）。tail なら、並びを空にする最後の呼び出しを呼ばずに TailCall で返す（ほかは null）。
+// 関数の値に値を1つ当てる（前の feed を溶かした）。段の口が埋まれば呼び、答えは次の段へ流し、段が尽きた後の答えは並びに出す（R11・R40）。
+// 段の並びはループで回す（書いた合成が長くても積まない）。
+function* applyStep(cx, stack, v, line, tail) {
+  const fn = stack.pop();
+  const last = tail && !stack.length;
+  let rest = null;
+  let out = UNIT;
   let stages = fn.stages;
   for (;;) {
     if (v instanceof Seq) throw notYet("並びを関数の口へ渡す形（器の片）", line);
     const [st, ...later] = stages;
     const recv = [...st.recv, v];
-    if (recv.length < st.f.params.length) return { rest: new Fn([{ f: st.f, recv }, ...later]), outs: [] };
-    if (tail && !later.length) return { call: new TailCall(st.f, recv, line) };
-    const r = callFn(cx, st.f, recv, line);
-    if (!later.length) return { rest: null, outs: r === UNIT ? [] : [r] };
-    if (r === UNIT) return { rest: new Fn(later), outs: [] };
+    if (recv.length < st.f.params.length) {
+      rest = new Fn([{ f: st.f, recv }, ...later]);
+      break;
+    }
+    if (last && !later.length) return new TailCall(st.f, recv, line);
+    const r = yield callFn(cx, st.f, recv, line);
+    if (!later.length) {
+      out = r;
+      break;
+    }
+    if (r === UNIT) {
+      rest = new Fn(later);
+      break;
+    }
     stages = later;
     v = r;
   }
+  if (rest) stack.push(rest);
+  if (out !== UNIT && stepNow(cx, stack, out, line) === NEED) yield applyStep(cx, stack, out, line, false);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,10 +560,11 @@ function feed(cx, fn, v, line, tail) {
 // 呼び出しは、関数と実引数で決まる（値は書き換えず、同じ呼び出しは同じ答え）。だから次の2つは止まらない輪で、回さずに止める（V10・V12）：
 // - 答えを出している途中の呼び出しを、同じ実引数でもう一度呼ぶ（必ず読む所なら問10 で読む段が断る輪で、読む段にまだ無い。枝の中なら同じ引数の輪で眠る）。
 // - 末尾呼び出しのループが前に通った状態へ戻る（アイドル。問12「アイドルでいい」の `_ _ = _` の永久ループで、解釈器にはまだ無い）。Brent の方法で見つける。
-function callFn(cx, f, args, line) {
-  if (reentered(cx, f, args, null)) throw notYet(REENTER, line);
+function* callFn(cx, f, args, line) {
+  const key = argsKey(args);
+  if (reentered(cx, f, key, null)) throw notYet(REENTER, line);
   if (!enter(cx, line)) return UNIT;
-  const frame = { f, args };
+  const frame = { f, args, key };
   pushFrame(cx, frame);
   try {
     let saved = frame.args;
@@ -512,7 +572,54 @@ function callFn(cx, f, args, line) {
     let power = 1;
     let lam = 0;
     for (;;) {
-      const r = runBody(cx, frame.f, frame.args);
+      // 本体を走らせる（前の runBody を溶かした）。
+      const bf = frame.f;
+      const env = { vars: new Map(bf.params.map((p, i) => [p, frame.args[i]])), parent: bf.env };
+      const bline = cx.lineOf(bf.body) ?? bf.line;
+      const bt = singleTerm(bf.body);
+      let r;
+      if (bareAtom(bt) && bt.core.c === "indent") {
+        // 字下げの本体（V8。前の evalBlock を溶かした）。枝（`:` の行）が有れば選び、無ければ手続き `l1 & … & ln`（R76）。
+        const rows = bt.core.rows;
+        r = UNIT;
+        if (rows.some((x) => isOp(x, ":"))) {
+          // 選び：`(c1 & v1) | … | 既定`。値が `_` の枝は次の枝へ進む（U〔答え〕10-29 12:46、U 12:52）。
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const rl = cx.lineOf(row) ?? bline;
+            const last = i === rows.length - 1;
+            // 枝の前か間の裸の行と2つ目からの既定の行は、読む段が名指しして止める（寄せ1 の R130、body-bare-row-between）ので、ここには来ない。来たら読む段の
+            // 抜けなので、言語の `_` に倒さず「まだ」で止める。
+            if (!isOp(row, ":")) {
+              if (!last) throw notYet("枝の間に置いた既定の行（読む段の R130 の抜け）", rl);
+              r = yield evalRow(cx, row, env, rl, "tail");
+              break;
+            }
+            // 本体の `:` の行は左が何でも枝で、何も定義しない（寄せ1 の R128、U〔答え〕10-29 12:18「ガイドに戻す」）。左が名前1つでも、条件として読む（未定義の名前は `_`）。
+            // 最後でない枝の値は末尾でない（値が `_` なら次の枝へ進むので、値を見るまで戻れない。R129）。
+            if (valueOf(yield evalRow(cx, row.left, env, rl, "eval"), rl) === UNIT) continue;
+            if (last) {
+              r = yield evalRow(cx, row.right, env, rl, "tail");
+              break;
+            }
+            const v = valueOf(yield evalRow(cx, row.right, env, rl, "eval"), rl);
+            if (v !== UNIT) {
+              r = v;
+              break;
+            }
+          }
+        } else {
+          for (let i = 0; i < rows.length; i++) {
+            const rl = cx.lineOf(rows[i]) ?? bline;
+            if (i === rows.length - 1) {
+              r = yield evalRow(cx, rows[i], env, rl, "tail");
+              break;
+            }
+            if (valueOf(yield evalRow(cx, rows[i], env, rl, "eval"), rl) === UNIT) break;
+          }
+        }
+      } else r = yield evalRow(cx, bf.body, env, bline, "tail");
+      if (Array.isArray(r)) r = valueOf(r, bline);
       if (!(r instanceof TailCall)) return r;
       if (r.f === savedF && sameArgs(r.args, saved)) throw notYet("前に通った状態へ戻る末尾の輪（アイドル、問12）", r.line);
       if (++lam === power) {
@@ -521,10 +628,12 @@ function callFn(cx, f, args, line) {
         power *= 2;
         lam = 0;
       }
-      if (reentered(cx, r.f, r.args, frame)) throw notYet(REENTER, r.line);
+      const rkey = argsKey(r.args);
+      if (reentered(cx, r.f, rkey, frame)) throw notYet(REENTER, r.line);
       popFrame(cx, frame);
       frame.f = r.f;
       frame.args = r.args;
+      frame.key = rkey;
       pushFrame(cx, frame);
     }
   } finally {
@@ -536,107 +645,143 @@ function callFn(cx, f, args, line) {
 const REENTER = "答えを出している途中の呼び出しを同じ実引数で呼ぶ輪（止まらない。読む段が断る必ず読む輪（問10）か、眠る輪（問12））";
 const sameArgs = (a, b) => a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
 
-function reentered(cx, f, args, self) {
+// 途中の呼び出しは、関数ごとに実引数の鍵で数える（cx.frames は f → (鍵 → 数)）。鍵が等しい ⟺ sameArgs（Int は値、関数は同じ値、並びは中身）。
+// 並べて全部と比べると、入れ子が深い時に1回の呼び出しが深さぶんかかる（深さの2乗。上限を上げると効く）ので、数で引く（2026-11-07 の誤5）。
+// 知らない種類の値は鍵を持たず、内部の誤りで止める（器の片で新しい値が入ったら足す）。
+const fnIds = new WeakMap();
+let fnCount = 0;
+function valueKey(v) {
+  if (typeof v === "bigint") return String(v);
+  if (v === UNIT) return "_";
+  if (v instanceof Fn) {
+    let id = fnIds.get(v);
+    if (id === undefined) fnIds.set(v, (id = ++fnCount));
+    return `f${id}`;
+  }
+  if (v instanceof Seq) return `[${v.items.map(valueKey).join(" ")}]`;
+  throw new Error("内部の誤り：鍵を持たない値");
+}
+// 1つの Int の実引数は値そのものを鍵にする（Map は BigInt を値で引くので、文字の鍵と混ざらない）。
+const argsKey = (args) => (args.length === 1 && typeof args[0] === "bigint" ? args[0] : args.map(valueKey).join(","));
+
+function reentered(cx, f, key, self) {
   const active = cx.frames.get(f);
-  return !!active && active.some((fr) => fr !== self && sameArgs(fr.args, args));
+  if (!active) return false;
+  const n = active.get(key) || 0;
+  return n - (self && self.f === f && self.key === key ? 1 : 0) > 0;
 }
 
 function pushFrame(cx, frame) {
   const active = cx.frames.get(frame.f);
-  if (active) active.push(frame);
-  else cx.frames.set(frame.f, [frame]);
+  if (active) active.set(frame.key, (active.get(frame.key) || 0) + 1);
+  else cx.frames.set(frame.f, new Map([[frame.key, 1]]));
 }
 
-// 途中の呼び出しのうち、いちばん内側の物を外す（同じ関数の並びでもいちばん後ろにいる）。
+// 途中の呼び出しを1つ外す。
 function popFrame(cx, frame) {
   const active = cx.frames.get(frame.f);
-  active.splice(active.lastIndexOf(frame), 1);
-  if (!active.length) cx.frames.delete(frame.f);
-}
-
-function runBody(cx, f, args) {
-  const env = { vars: new Map(f.params.map((p, i) => [p, args[i]])), parent: f.env };
-  const line = cx.lineOf(f.body) ?? f.line;
-  const t = singleTerm(f.body);
-  const r = bareAtom(t) && t.core.c === "indent" ? evalBlock(cx, t.core.rows, env, line) : evalRow(cx, f.body, env, line, "tail");
-  return r instanceof TailCall ? r : Array.isArray(r) ? valueOf(r, line) : r;
-}
-
-// 字下げの本体（V8）。枝（`:` の行）が有れば選び、無ければ手続き `l1 & … & ln`（R76）。
-function evalBlock(cx, rows, env, outer) {
-  const lineAt = (r) => cx.lineOf(r) ?? outer;
-  if (rows.some((r) => isOp(r, ":"))) {
-    // 選び：`(c1 & v1) | … | 既定`。値が `_` の枝は次の枝へ進む（U〔答え〕10-29 12:46、U 12:52）。
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const line = lineAt(r);
-      const last = i === rows.length - 1;
-      // 枝の前か間の裸の行と2つ目からの既定の行は、読む段が名指しして止める（寄せ1 の R130、body-bare-row-between）ので、ここには来ない。来たら読む段の
-      // 抜けなので、言語の `_` に倒さず「まだ」で止める。
-      if (!isOp(r, ":")) {
-        if (!last) throw notYet("枝の間に置いた既定の行（読む段の R130 の抜け）", line);
-        return evalRow(cx, r, env, line, "tail");
-      }
-      // 本体の `:` の行は左が何でも枝で、何も定義しない（寄せ1 の R128、U〔答え〕10-29 12:18「ガイドに戻す」）。左が名前1つでも、条件として読む（未定義の名前は `_`）。
-      // 最後でない枝の値は末尾でない（値が `_` なら次の枝へ進むので、値を見るまで戻れない。R129）。
-      if (sideValue(cx, r.left, env, line) === UNIT) continue;
-      if (last) return evalRow(cx, r.right, env, line, "tail");
-      const v = sideValue(cx, r.right, env, line);
-      if (v !== UNIT) return v;
-    }
-    return UNIT;
-  }
-  for (let i = 0; i < rows.length; i++) {
-    const line = lineAt(rows[i]);
-    if (i === rows.length - 1) return evalRow(cx, rows[i], env, line, "tail");
-    if (sideValue(cx, rows[i], env, line) === UNIT) return UNIT;
-  }
-  return UNIT;
+  const n = active.get(frame.key) - 1;
+  if (n) active.set(frame.key, n);
+  else active.delete(frame.key);
+  if (!active.size) cx.frames.delete(frame.f);
 }
 
 // ---------------------------------------------------------------------------
 // 項（V5・V6）
 // ---------------------------------------------------------------------------
 
-// place は項の並びの置かれた所で、効くのは印の無い括りだけ（"tailkeep" なら括りの中も返す所）。
-function evalTerm(cx, t, env, line, place = "keep") {
-  if (!t) throw notYet("被演算子の欠けた項（点なし）", line);
+// 子を走らせずに値が出る項は、生成器を作らずにここで畳む（速道）：印の無い字面・`_`・走らせずに分かる名前（known）と、それを中置で1段つないだ物
+// （3項の比べの連鎖も）。enter・知らせ・断りは evalTerm と同じ所で同じ順に出る。ほかの項は NEED（呼ぶ側が evalTerm で回す）。
+// evalTerm の入口の順を2か所で持つので、印・芯の種類を増やす時は termNow と plainAtom も見る。
+function termNow(cx, t, env, line) {
+  if (!t) return NEED;
+  if (t.type === "infix") {
+    if (!t.left || !t.right || !INFIX.has(t.sym)) return NEED;
+    const ops = infixOperands(t);
+    for (const x of ops) if (!plainAtom(cx, x, env)) return NEED;
+    if (!enter(cx, line)) return UNIT;
+    try {
+      const vals = [];
+      for (const x of ops) vals.push(operandOf(atomNow(cx, x, env, line), line));
+      return infixValue(cx, t, vals, line);
+    } finally {
+      cx.nest--;
+    }
+  }
+  return plainAtom(cx, t, env) ? atomNow(cx, t, env, line) : NEED;
+}
+const plainAtom = (cx, t, env) =>
+  !!t && t.type === "atom" && !t.pre.length && !t.post.length &&
+  (t.core.c === "lit" || t.core.c === "unit" || (t.core.c === "name" && known(cx, t.core.name, env) !== NEED));
+function atomNow(cx, t, env, line) {
   if (!enter(cx, line)) return UNIT;
   try {
-    return termOf(cx, t, env, line, place);
+    const c = t.core;
+    return c.c === "lit" ? literal(c.text, line) : c.c === "unit" ? UNIT : known(cx, c.name, env);
   } finally {
     cx.nest--;
   }
 }
 
-function termOf(cx, t, env, line, place) {
-  if (t.type === "infix") return evalInfix(cx, t, env, line);
-  if (t.post.length) throw notYet(`後置の印 \`${t.post.join("")}\``, line);
-  for (const p of t.pre) if (p !== "-") throw notYet(`前置の印 \`${p}\``, line);
-  // 前置 `-` は、芯の中の演算子が算術の範囲の時だけ（U [2026-10-30 14:47]、渡された仮引数は見ない U〔答え〕14:52「通す」）。読む段がまだ線を引かないので、
-  // 線の外と言い切れない芯（定義の名前・適用・比べ）もまだで止める。
-  if (t.pre.length && !arithCore(cx, t.core, env)) throw notYet("前置 `-` を算術と言い切れない物に当てる形（10-30 の算術の線）", line);
-  let v;
-  const c = t.core;
-  switch (c.c) {
-    case "lit":
-      v = literal(c.text, line);
-      break;
-    case "name":
-      v = lookup(cx, c.name, env, line);
-      break;
-    case "unit":
-      v = UNIT;
-      break;
-    case "bracket":
-      v = bracketValue(cx, c, env, line, !t.pre.length && place === "tailkeep" ? "tailkeep" : "keep");
-      if (v instanceof TailCall) return v;
-      break;
-    default:
-      throw notYet(c.c === "indent" ? "項に置いた字下げのブロック" : "絶対値・ノルム", line);
+// place は項の並びの置かれた所で、効くのは印の無い括りだけ（"tailkeep" なら括りの中も返す所）。
+function* evalTerm(cx, t, env, line, place = "keep") {
+  if (!t) throw notYet("被演算子の欠けた項（点なし）", line);
+  if (!enter(cx, line)) return UNIT;
+  try {
+    // 項の値（前の termOf・evalInfix・bracketValue を溶かした）。
+    if (t.type === "infix") {
+      if (!t.left || !t.right) throw notYet("点なしの区間", line);
+      if (!INFIX.has(t.sym)) throw notYet(`中置 \`${t.sym}\``, line);
+      const vals = [];
+      for (const x of infixOperands(t)) {
+        let v = termNow(cx, x, env, line);
+        if (v === NEED) v = yield evalTerm(cx, x, env, line);
+        vals.push(operandOf(v, line));
+      }
+      return infixValue(cx, t, vals, line);
+    }
+    if (t.post.length) throw notYet(`後置の印 \`${t.post.join("")}\``, line);
+    for (const p of t.pre) if (p !== "-") throw notYet(`前置の印 \`${p}\``, line);
+    // 前置 `-` は、芯の中の演算子が算術の範囲の時だけ（U [2026-10-30 14:47]、渡された仮引数は見ない U〔答え〕14:52「通す」）。読む段がまだ線を引かないので、
+    // 線の外と言い切れない芯（定義の名前・適用・比べ）もまだで止める。
+    if (t.pre.length && !arithCore(cx, t.core, env)) throw notYet("前置 `-` を算術と言い切れない物に当てる形（10-30 の算術の線）", line);
+    let v;
+    const c = t.core;
+    switch (c.c) {
+      case "lit":
+        v = literal(c.text, line);
+        break;
+      case "name":
+        v = known(cx, c.name, env);
+        if (v === NEED) v = yield lookup(cx, c.name, env, line);
+        break;
+      case "unit":
+        v = UNIT;
+        break;
+      case "bracket": {
+        // 括り（1行だけ。前の bracketValue）。中身を畳んで、空なら `_`、1つならその値（[x] ≅ x。関数も）。2つ以上は器でまだ。
+        // 中身が点なし（区間・前置と後置の点なし `[-_]`・片側の欠けた中置の行 `[5 |]`）なら、括り1つではないので V12 のまだ（V5・V12、2026-11-07 の誤1）。
+        // 印の無い括りで place が "tailkeep" なら中身も返す所で、最後の呼び出しは TailCall で返る。
+        if (c.rows.length !== 1) throw notYet(c.rows.length ? "2行以上の括り（器の片）" : "書いた `[]`", line);
+        const row = c.rows[0];
+        const inner = cx.lineOf(row) ?? line;
+        if (row && row.type === "seq" && row.terms.some(hasMissing)) throw notYet("点なしの区間", inner);
+        if (row && row.type === "seq" && row.terms.length === 1 && valueMarkUnit(row.terms[0])) throw notYet("前置・後置の点なし", inner);
+        if (row && row.type === "op" && rowMissing(row)) throw notYet("被演算子の欠けた行（点なし）", inner);
+        const st = yield evalRow(cx, row, env, inner, !t.pre.length && place === "tailkeep" ? "tailkeep" : "keep");
+        if (st instanceof TailCall) return st;
+        if (st.length >= 2) throw notYet("2つ以上の値の括り（器の片）", inner);
+        v = st.length ? st[0] : UNIT;
+        break;
+      }
+      default:
+        throw notYet(c.c === "indent" ? "項に置いた字下げのブロック" : "絶対値・ノルム", line);
+    }
+    for (let i = t.pre.length - 1; i >= 0; i--) v = negate(cx, operandOf(v, line), line);
+    return v;
+  } finally {
+    cx.nest--;
   }
-  for (let i = t.pre.length - 1; i >= 0; i--) v = negate(cx, operandOf(v, line), line);
-  return v;
 }
 
 // 芯が算術の線の内か：字面・`_`・仮引数・未定義の名前（`_`、R111）と、それを算術の中置でつないだ物、それを1つ括った物。
@@ -672,21 +817,7 @@ function literal(text, line) {
   return n;
 }
 
-// 括り（1行だけ）。中身を畳んで、空なら `_`、1つならその値（[x] ≅ x。関数も）。2つ以上は器でまだ。
-// 中身が点なし（区間・前置と後置の点なし `[-_]`・片側の欠けた中置の行 `[5 |]`）なら、括り1つではないので V12 のまだ（V5・V12、2026-11-07 の誤1）。
-// place が "tailkeep" なら中身も返す所で、最後の呼び出しは TailCall で返る。
-function bracketValue(cx, c, env, line, place) {
-  if (c.rows.length !== 1) throw notYet(c.rows.length ? "2行以上の括り（器の片）" : "書いた `[]`", line);
-  const row = c.rows[0];
-  const inner = cx.lineOf(row) ?? line;
-  if (row && row.type === "seq" && row.terms.some(hasMissing)) throw notYet("点なしの区間", inner);
-  if (row && row.type === "seq" && row.terms.length === 1 && valueMarkUnit(row.terms[0])) throw notYet("前置・後置の点なし", inner);
-  if (row && row.type === "op" && rowMissing(row)) throw notYet("被演算子の欠けた行（点なし）", inner);
-  const st = evalRow(cx, row, env, inner, place);
-  if (st instanceof TailCall) return st;
-  if (st.length >= 2) throw notYet("2つ以上の値の括り（器の片）", inner);
-  return st.length ? st[0] : UNIT;
-}
+// 括りの中身の点なし（evalTerm の括りの門）。区間の形の項か。
 const hasMissing = (t) => !t || (t.type === "infix" && (hasMissing(t.left) || hasMissing(t.right)));
 // 前置・後置の点なしの項：値の前置の印1つ（`-`・`!`・`!!`）か後置の `!` 1つと、核の書いた `_` だけ（`-_`・`!_`・`!!_`・`_!`）。
 // resolve.js の同じ名前の形の写し（import すると V1 の口が増えるので写す）。芯を括った `-(_)` は核が括りなので入らない（V5）。
@@ -706,40 +837,33 @@ function operandOf(v, line) {
 
 const ARITH = new Set(["+", "-", "*", "/", "%", "^"]);
 const ORDER = new Set(["<", "<=", ">", ">="]);
+// 値の段が持つ中置（ほかは V12 のまだ）。
+const INFIX = new Set([...ARITH, ...ORDER, "="]);
 
-function evalInfix(cx, t, env, line) {
-  if (!t.left || !t.right) throw notYet("点なしの区間", line);
-  const operand = (x) => operandOf(evalTerm(cx, x, env, line), line);
-  if (ARITH.has(t.sym)) {
-    const a = operand(t.left);
-    const b = operand(t.right);
-    return arith(cx, t.sym, a, b, line);
-  }
+// 中置の被演算子を、評価する順に。括らない3項の比べの連鎖は3つ（真ん中の中置は項として走らせない）。速道（termNow）と生成器（evalTerm）が同じ1か所を使う。
+const infixOperands = (t) => (ORDER.has(t.sym) && t.left.type === "infix" && ORDER.has(t.left.sym) ? [t.left.left, t.left.right, t.right] : [t.left, t.right]);
+
+// 被演算子の値（operandOf の後）から中置の値（前の evalInfix の値の計算）。
+function infixValue(cx, t, vals, line) {
+  if (ARITH.has(t.sym)) return arith(cx, t.sym, vals[0], vals[1], line);
   if (ORDER.has(t.sym)) {
     // 括らない3項の連鎖（読む段が通すのは向きの揃った3項の範囲だけで、`<` と `<=`、`>` と `>=` は混ぜてもいい。2026-11-06 の寄せ5）：
     // 成り立てば真ん中、外れたら `_`（R119、U 11-04。`0 <= 0 < 5` は 0、`0 <= 5 < 5` は `_`）。
-    if (t.left.type === "infix" && ORDER.has(t.left.sym)) {
-      const a = operand(t.left.left);
-      const b = operand(t.left.right);
-      const c = operand(t.right);
+    if (vals.length === 3) {
+      const [a, b, c] = vals;
       if (a === UNIT || b === UNIT || c === UNIT) return UNIT;
       return holds(t.left.sym, a, b) && holds(t.sym, b, c) ? b : UNIT;
     }
-    const a = operand(t.left);
-    const b = operand(t.right);
+    const [a, b] = vals;
     // 成り立てば左、外れたら `_`（0/1 の例外なし、U 10-27 23:01・U〔答え〕23:5x）。どちらかが `_` なら `_`（U 11-04）。
     if (a === UNIT || b === UNIT) return UNIT;
     return holds(t.sym, a, b) ? a : UNIT;
   }
-  if (t.sym === "=") {
-    // Int の `=`（2026-11-06 の寄せ5、R119・V6）：`==` と同じ値で、等しければ左、違えば `_`、どちらかが `_` なら `_`。
-    // 連鎖（`1 = 1 = 1`）は左の背骨の左畳みで、全部等しければ一番左、どこかが違えば `_`。並び・番地・文字の `=` は V12 のまま（並びは operandOf が止める）。
-    const a = operand(t.left);
-    const b = operand(t.right);
-    if (a === UNIT || b === UNIT) return UNIT;
-    return a === b ? a : UNIT;
-  }
-  throw notYet(`中置 \`${t.sym}\``, line);
+  // Int の `=`（2026-11-06 の寄せ5、R119・V6）：`==` と同じ値で、等しければ左、違えば `_`、どちらかが `_` なら `_`。
+  // 連鎖（`1 = 1 = 1`）は左の背骨の左畳みで、全部等しければ一番左、どこかが違えば `_`。並び・番地・文字の `=` は V12 のまま（並びは operandOf が止める）。
+  const [a, b] = vals;
+  if (a === UNIT || b === UNIT) return UNIT;
+  return a === b ? a : UNIT;
 }
 
 function holds(sym, a, b) {

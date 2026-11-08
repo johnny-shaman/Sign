@@ -3266,9 +3266,12 @@ function freshNest(F) {
   };
 }
 // JS のスタックが溢れた（注の4）：入れ子の数の守りの内でも、実体1段の本体が重い（括弧の深い入れ子）と溢れる。内部の例外の
-// まま出さず、資源の守りとして断る（どこで溢れるかは、同じプロセスで前に何を解いたかでも変わる）。
-function stackRefusal(e) {
-  if (!(e instanceof RangeError) || !/call stack/i.test(e.message)) return null;
+// まま出さず、資源の守りとして断る（どこで溢れるかは、同じプロセスで前に何を解いたかでも変わる）。V8 が正規表現の中の溢れを SyntaxError（`Stack overflow`）で
+// 出す所も同じ（前は RangeError しか拾わず、内部の例外のまま `line: 1` 付きで漏れた。§5 Q25、2026-11-07 の誤5）。export は試験の口（interpret.test.js が
+// 作った SyntaxError を渡して確かめる。溢れる所は揺れるので、源で溢れさせる試験にしない）。
+export function stackRefusal(e) {
+  const overflow = (e instanceof RangeError && /call stack/i.test(e.message)) || (e instanceof SyntaxError && /stack overflow/i.test(e.message));
+  if (!overflow) return null;
   const s = new OperationError("解決の途中で JS のスタックが溢れました（実体の入れ子か、本体の入れ子が深すぎます）。読みを決めません（§5 Q25）。", {
     spec: `${SPEC} §4 R24`,
     reason: "resolve-stack-limit",
