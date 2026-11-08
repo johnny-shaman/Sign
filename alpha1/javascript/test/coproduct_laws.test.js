@@ -6269,6 +6269,17 @@ const SHAPES47 = [
 	["既定値の行の右に自分の名前と同じ綴りの名前（G22）", "e0 : []\nt :\n\t\tx\n\t\tN : e0\n\t? x\n\nt 1", ["e0"], false],
 	["R103 の輪で既定値の行の右の前の仮引数を下ろす", "inc : z ? z + 1\ng :\n\t\tN\n\t\tk : N ' 0\n\t? k\n\nv : 1 , (g $v)\nv", ["inc"], false],
 	["R103 の輪で下ろす関数の中の関数", "g9 : y ? ([N ? 5] 1) ' 0\nv : 1 , (g9 $v)\nv", ["y"], false],
+	// 2026-11-07 の誤6：R110 の当たる項の見分け（appliedResult）と、括りの口に渡る文字の数（stringLengthThrough）も、値の定義の右辺 w0 をファイルの範囲で読む
+	// （前は使う所の範囲で読み、N = w0 だと木が `(apply w1 _)` に、bracket-excess の知らせが消えて割れた。coproduct.test.js の誤6 の節と同じ形）
+	["R110 の当たる項の別名の右辺（gq は R107 の物）", "gq :\n\t\tx\n\t\ty : 1\n\t? x + y\n\nw0 : gq 1\nw1 : w0\nh : N ?\n\tw1 _\n\t1", ["w0"], false],
+	["括りの口に渡る文字列の別名の右辺（bracket-excess）", "inc : z ? z + 1\nfab : [a b] ? a\nw0 : `abc` inc\nw1 : w0 inc\nh : N ? fab w1", ["w0"], false],
+	// 直しの境目：使う所の仮引数は、今までどおり使う所の範囲で引く（右辺に降りた所だけがファイルの範囲。ここをファイルの範囲にすると N = w1 で割れる）。
+	// 3つ目は外の関数の仮引数の下の名前の無い関数の中（ファイルでなく1つ外の範囲で読む半分の直しだと割れる）。
+	["R110 の当たる項の見分けで、使う所の仮引数は使う所の範囲で引く（括りの仮引数を括った項）", "gq :\n\t\tx\n\t\ty : 1\n\t? x + y\n\nw1 : gq 1\nh : [N] ?\n\t(N) _\n\t1\n\nh [$gq]", ["w1"], false],
+	["括りの口に渡る文字の数で、使う所の仮引数は使う所の範囲で引く", "inc : z ? z + 1\nfab : [a b] ? a\nw1 : `abc` inc\nh : N ? fab [N]", ["w1"], false],
+	["括りの口に渡る文字列の別名の右辺（外の仮引数の下の名前の無い関数の中）", "inc : z ? z + 1\nfab : [a b] ? a\nw0 : `abc` inc\nw1 : w0 inc\nh : N ? [z ? fab w1] 1", ["w0"], false],
+	["R110 の当たる項の別名の右辺（外の仮引数の下の関数の中）", "gq :\n\t\tx\n\t\ty : 1\n\t? x + y\n\nw0 : gq 1\nw1 : w0\nh : N ? z ? w1 _ == 1", ["w0"], false],
+	["括りの口に渡る文字の数で、括った並びの仮引数は使う所の範囲で引く", "inc : z ? z + 1\nfab : [a b] ? a\nw1 : `abc` inc\nh : N ? fab (N inc)", ["w1"], false],
 ];
 law("47 仮引数の名前を新しい名前から外の名前に替えても、木・種類・断り・値が同じ（R133、α 同値）：name-shadow の知らせだけが増える", () => {
 	const problems = [];

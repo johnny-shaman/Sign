@@ -7321,7 +7321,8 @@ function appliedResult(item, ctx, depth = 0) {
     if (s.locals && s.locals.has(name)) return false;
   }
   const def = ctx.F.defs.get(name);
-  return !!def && !def.lambda && appliedResult(ctx.F.defRoots.get(def), ctx, depth + 1);
+  // 値の定義の右辺の名前は、その定義の範囲（ファイル）で引く（法則47、2026-11-07 の誤6。前は使う所の範囲で引いていた）
+  return !!def && !def.lambda && appliedResult(ctx.F.defRoots.get(def), { F: ctx.F, scope: ctx.F.fileScope }, depth + 1);
 }
 // closeIdle は、値の上に積まれて口の開いたまま閉じた関数を余ったラムダにする並びか（R52。`$[…]` の中身の行の並びと、その `,` が恒等射で
 // 消えて残った並びだけ false。遅延した式、§5 Q52 の答え。resolveDelayed）。bodyRoot は、関数の本体の根の並びか（R70 の closeEmpty だけが読む）。
@@ -8368,7 +8369,8 @@ function stringLengthThrough(t, ctx) {
       const def = hidden ? null : ctx.F.defs.get(c.name);
       const root = def && !def.lambda ? ctx.F.defRoots.get(def) : null;
       const inner = root ? vanishedOne(root) : null;
-      if (inner) return stringLengthThrough(inner, ctx);
+      // 右辺の名前は、その定義の範囲（ファイル）で引く（法則47、2026-11-07 の誤6。前は使う所の範囲で引いていた）
+      if (inner) return stringLengthThrough(inner, { F: ctx.F, scope: ctx.F.fileScope });
     }
   }
   return stringLength(t);

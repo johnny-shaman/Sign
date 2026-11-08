@@ -8990,6 +8990,39 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		else ok(label);
 	}
 }
+// 黙った誤答の組の片6（2026-11-07、誤6。R136・R110 の R の所、law_map 法則47）：R110 の当たる項の見分け（appliedResult）と、括りの口に渡る文字の数を数える所
+// （stringLengthThrough）も、値の定義の右辺はファイルの範囲で読む（mayBeFunction・aliasOfUndefined と同じ）。前は使う所の範囲で読み、使う所の仮引数が右辺の名前と
+// 同じ綴り（外の名前 w0）だと、木（`(apply w1 _)`）と bracket-excess の知らせが変わった。仮引数を q にした形と、name-shadow の知らせのほかは同じ答え。
+// [名前, 源の行（頭に inc の定義を足す）, 最後の木, 種類, 診断（重さ/reason@行 の並び）]
+{
+	const PRE = ["inc : x ? x + 1"];
+	const GQ = ["gq :", "\t\tx", "\t\ty : 1", "\t? x + y", ""];
+	const LAW47 = [
+		["仮引数 w0 がファイルの w0 を隠しても、w1 の右辺の w0 はファイルの gq 1（R110 で `_` が消える。前は `(apply w1 _)`）", [...GQ, "w0 : gq 1", "w1 : w0", "h : w0 ?", "\tw1 _", "\t1"], "(: h (? [w0] (block w1 1)))", "A", ["information/name-shadow@9"]],
+		["その比べの相手（仮引数を q にした形）", [...GQ, "w0 : gq 1", "w1 : w0", "h : q ?", "\tw1 _", "\t1"], "(: h (? [q] (block w1 1)))", "A", []],
+		["仮引数 w0 がファイルの w0 を隠しても、w1 の右辺の w0 の文字列を数えて bracket-excess（前は出なかった）", ["fab : [a b] ? a", "w0 : `abc` inc", "w1 : w0 inc", "h : w0 ? fab w1"], "(: h (? [w0] (apply fab w1)))", "A", ["information/bracket-excess@5", "information/name-shadow@5", "warning/leftover-lambda@3", "warning/leftover-lambda@4"]],
+		["その比べの相手（仮引数を q にした形）", ["fab : [a b] ? a", "w0 : `abc` inc", "w1 : w0 inc", "h : q ? fab w1"], "(: h (? [q] (apply fab w1)))", "A", ["information/bracket-excess@5", "warning/leftover-lambda@3", "warning/leftover-lambda@4"]],
+	];
+	for (const [name, lines, want, kind, diags] of LAW47) {
+		total++;
+		const label = `黙った誤答の組 誤6 法則47 ${name}`;
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
+		const problems = [];
+		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+}
 
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
