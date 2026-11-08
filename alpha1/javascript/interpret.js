@@ -42,7 +42,7 @@ export class Fn {
 }
 
 // 本体の返す所の、最後の1歩が呼び出しになる形（V10 の末尾呼び出し）。呼んだ側のループが受けて回す。
-// orElse は「呼んだ答えが `_` なら、この所の答えはこの関数」（括りの中の `,` で、単位律が関数1つを残す形。11-04、2026-11-07 の誤2）。
+// orElse は「呼んだ答えが `_` なら、この所の答えはこの関数」（括りの中の `,`・`|`・`;` で、単位律が関数1つを残す形。11-04、2026-11-07 の誤2・誤4）。
 // 残った関数が `_` になる所（"tail"）では要らないので evalRow が外し、callFn のループは見ない。後ろに項が続いて呼ぶ所（callPending）だけが当てる。
 // 当てるのは答えが `_` の時だけ。今は呼び出しの答えが関数になる形が無い（本体の返す所の関数は `_`、R125）ので、関数を返す呼び出しが入る片（ウの `$`・`@`）で
 // 「答えが関数なら `_`（R123）」の枝が要る。
@@ -265,8 +265,8 @@ function makeLambda(cx, op, env, name, line) {
  * - "keep"：定義の右辺と括りの中。1つだけ残った関数は関数のまま、値の上の関数は `_`（R52）。
  * - "tail"：本体の返す所。"eval" と同じで、行の答えが最後の呼び出しの答えそのものなら、呼ばずに TailCall を返す（V10）。
  * - "tailkeep"：返す所に置いた括りの中。"keep" と同じで、TailCall も返す。
- * 返す所かどうかは綴りでなく意味で決める：後ろの項が全部 `_` の呼び出し、括りの中、`&`・`|` の右、`,` の辺の呼び出しで後ろの辺が全部 `_` の物
- * （`_` は出どころに依らず消えるので、隣の辺が行の答え。11-04、2026-11-07 の誤2）も返す所。
+ * 返す所かどうかは綴りでなく意味で決める：後ろの項が全部 `_` の呼び出し、括りの中、`&`・`|` の右（`|` の左が丸ごとの関数でも）、`,`・`;` の辺の呼び出しで
+ * 後ろの辺が全部 `_` の物（`;` は後ろの辺が丸ごとの関数でも。`_` は出どころに依らず消えるので、隣の辺が行の答え。11-04、2026-11-07 の誤2・誤4）も返す所。
  */
 function evalRow(cx, row, env, line, place) {
   if (!row) throw notYet("被演算子の欠けた行（点なし）", line);
@@ -294,15 +294,13 @@ function rowOf(cx, row, env, line, place) {
     }
     case "|": {
       // 左が `_` でなければ右を読まない（V7）。右の答えが行の答え。
+      // 評価する所・返す所では残った関数も `_` なので、左の関数は `_` と同じ（今のまま）。違うのは括りの中と定義の右辺だけ（orKeep、2026-11-07 の誤4）。
+      if (isKeep(place)) return orKeep(cx, row, env, line, place);
       const l = sideValue(cx, row.left, env, line);
       return l !== UNIT ? spread(l) : sideRow(cx, row.right, env, line, place);
     }
-    case ";": {
-      // 片方だけが値ならその値、両方とも値か両方とも `_` なら `_`（U 10-27 23:56）。
-      const l = sideValue(cx, row.left, env, line);
-      const r = sideValue(cx, row.right, env, line);
-      return (l === UNIT) === (r === UNIT) ? [] : spread(l === UNIT ? r : l);
-    }
+    case ";":
+      return xorRow(cx, row, env, line, place);
     case "==": {
       // 深く比べて、等しければ左（U〔答え〕10-27 23:54）。どちらかが `_` なら `_`（U 11-04、R .8）。並びの比べは器の片（V12）。
       const l = sideValue(cx, row.left, env, line);
@@ -324,6 +322,53 @@ const isTail = (place) => place === "tail" || place === "tailkeep";
 const isKeep = (place) => place === "keep" || place === "tailkeep";
 // 辺を関数のまま（keep）読んだ並びが、丸ごとの関数1つか。
 const lone = (s) => Array.isArray(s) && s.length === 1 && s[0] instanceof Fn;
+// keep で読んだ辺の並びを、論理の辺の形（関数1つ・`_`・値1つ。2つ以上の値は並び）にする（sideValue と同じ形）。
+const asSide = (s, line) => (s instanceof TailCall || lone(s) ? s : spread(valueOf(s, line)));
+
+// 括りの中・定義の右辺の `|`（V7、2026-11-07 の誤4。U〔答え〕11-04 05:34「6 に揃える」・06:04「消える」）。`_` は両側の単位で出どころに依らず先に消え、
+// 残った辺は行の置かれた所のまま。消えた後にも `|` が残れば丸ごとの関数は `_`（R123）で、それも単位で消える。左が値なら右を読まない（V7）。
+function orKeep(cx, row, env, line, place) {
+  const l = evalRow(cx, row.left, env, line, "keep");
+  if (!l.length) return asSide(evalRow(cx, row.right, env, line, place), line);
+  if (!lone(l)) return asSide(l, line);
+  // 左が関数：右が `_` なら左の関数だけが残り、右が値なら左の関数は `_`、右も関数なら両方 `_`。右が返す所の呼び出しなら、呼んだ答えが `_` の時に左の関数。
+  const r = evalRow(cx, row.right, env, line, place);
+  if (r instanceof TailCall) return new TailCall(r.f, r.args, r.line, r.orElse ? null : l[0]);
+  if (!r.length) return l;
+  return lone(r) ? [] : asSide(r, line);
+}
+
+// `;`（V7）：片方だけが値ならその値、両方とも値か両方とも `_` なら `_`（U 10-27 23:56）。`_` は両側の単位で、残った辺は行の置かれた所のまま。
+// 消えた後にも `;` が残れば丸ごとの関数は `_`（R123）で、それも消える（2026-11-07 の誤4）。評価する所では残った関数は `_` なので、前と同じ答え。
+// 返す所では、左の最後の呼び出しを取っておき（V10。右が `_` か関数なら左が答えで、右が関数なら呼んだ答えが `_` の時にその関数）、
+// 左が `_` か関数なら右を行の置かれた所のまま（返す所なら返す所）に読む。
+// 辺を関数のまま（keep）読むのは括りの中と定義の右辺だけ。評価する所・返す所の辺は評価する所のまま読む（keep で読むと、`inc , double , add 1 ; 7` の左が
+// Q89 の門に当たって、前は 7 だった答えがまだになる。V7「評価する所では…答えは前と同じ」）。
+function xorRow(cx, row, env, line, place) {
+  const side = isKeep(place) ? "keep" : "eval";
+  const l = evalRow(cx, row.left, env, line, isKeep(place) ? (isTail(place) ? "tailkeep" : "keep") : place);
+  if (l instanceof TailCall) {
+    const r = asSide(evalRow(cx, row.right, env, line, side), line);
+    if (!r.length) return l;
+    if (lone(r)) return new TailCall(l.f, l.args, l.line, l.orElse ? null : r[0]);
+    return close(xorOf(spread(callPending(cx, l)), r), place);
+  }
+  if (!l.length || lone(l)) {
+    const r = evalRow(cx, row.right, env, line, place);
+    if (r instanceof TailCall) return lone(l) ? new TailCall(r.f, r.args, r.line, r.orElse ? null : l[0]) : r;
+    return close(xorOf(l, asSide(r, line)), place);
+  }
+  return close(xorOf(asSide(l, line), asSide(evalRow(cx, row.right, env, line, side), line)), place);
+}
+
+// `;` の2つの辺（`_`・関数1つ・値1つ）。
+function xorOf(l, r) {
+  if (!l.length) return r;
+  if (!r.length) return l;
+  if (lone(l)) return lone(r) ? [] : r;
+  if (lone(r)) return l;
+  return [];
+}
 
 // 答えが行の答えになる辺（`&`・`|` の右）。評価する所で、行が返す所なら辺も返す所。
 function sideRow(cx, row, env, line, place) {
