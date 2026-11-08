@@ -218,6 +218,9 @@ function lookup(cx, name, env, line) {
 
 function defValue(cx, d) {
   const lam = lambdaOf(d.rhs);
+  // 括りに包んだ関数は、括りをその場で書いた時と同じ点なしの門を通る（`f : [x ? x |]` ⏎ `f 5` は `[x ? x |] 5` と同じまだ。字下げの1行に置いた括りも。
+  // 名前は右辺を閉じた1つの項、R42 の読み7。2026-11-07 の誤1）。括らない `f : x ? x |` は読む段が止めるので、ここへは来ない。
+  if (lam && rowMissing(lam)) throw notYet("被演算子の欠けた行（点なし）", cx.lineOf(lam) ?? d.line);
   if (lam) return makeLambda(cx, lam, null, d.name, cx.lineOf(lam) ?? d.line);
   // 定義の右辺は評価する所ではない。1つだけ残った関数は関数のまま（`w : add 1`）、値の上の関数は `_`（R52）。
   return valueOf(evalRow(cx, d.rhs, null, d.line, "keep"), d.line);
@@ -573,18 +576,29 @@ function literal(text, line) {
 }
 
 // 括り（1行だけ）。中身を畳んで、空なら `_`、1つならその値（[x] ≅ x。関数も）。2つ以上は器でまだ。
+// 中身が点なし（区間・前置と後置の点なし `[-_]`・片側の欠けた中置の行 `[5 |]`）なら、括り1つではないので V12 のまだ（V5・V12、2026-11-07 の誤1）。
 // place が "tailkeep" なら中身も返す所で、最後の呼び出しは TailCall で返る。
 function bracketValue(cx, c, env, line, place) {
   if (c.rows.length !== 1) throw notYet(c.rows.length ? "2行以上の括り（器の片）" : "書いた `[]`", line);
   const row = c.rows[0];
   const inner = cx.lineOf(row) ?? line;
   if (row && row.type === "seq" && row.terms.some(hasMissing)) throw notYet("点なしの区間", inner);
+  if (row && row.type === "seq" && row.terms.length === 1 && valueMarkUnit(row.terms[0])) throw notYet("前置・後置の点なし", inner);
+  if (row && row.type === "op" && rowMissing(row)) throw notYet("被演算子の欠けた行（点なし）", inner);
   const st = evalRow(cx, row, env, inner, place);
   if (st instanceof TailCall) return st;
   if (st.length >= 2) throw notYet("2つ以上の値の括り（器の片）", inner);
   return st.length ? st[0] : UNIT;
 }
 const hasMissing = (t) => !t || (t.type === "infix" && (hasMissing(t.left) || hasMissing(t.right)));
+// 前置・後置の点なしの項：値の前置の印1つ（`-`・`!`・`!!`）か後置の `!` 1つと、核の書いた `_` だけ（`-_`・`!_`・`!!_`・`_!`）。
+// resolve.js の同じ名前の形の写し（import すると V1 の口が増えるので写す）。芯を括った `-(_)` は核が括りなので入らない（V5）。
+const VALUE_PREFIX = new Set(["-", "!", "!!"]);
+const valueMarkUnit = (t) =>
+  !!t && t.type === "atom" && t.core.c === "unit" && t.pre.length + t.post.length === 1 &&
+  ((t.pre.length === 1 && VALUE_PREFIX.has(t.pre[0])) || (t.post.length === 1 && t.post[0] === "!"));
+// 行の中置（段1〜9）のどこかの被演算子が欠けているか（`[5 |]`・入れ子の `[3 | 2 +]`・`[5 ; 3 |]`）。並びの項は区間の形だけを見て、中の括りへは降りない（V12）。
+const rowMissing = (r) => !r || (r.type === "op" ? rowMissing(r.left) || rowMissing(r.right) : r.terms.some(hasMissing));
 
 // 値の演算子の被演算子は評価する所（R87）：関数は `_`。並びは器の片でまだ。
 function operandOf(v, line) {
