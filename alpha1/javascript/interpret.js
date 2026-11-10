@@ -157,10 +157,11 @@ export function interpret(source, { workLimit = WORK_LIMIT, nestLimit = NEST_LIM
   // exhausted は深さの上限に当たった回数（lookup が、上限で欠けた値を覚えないために見る）。frames は答えを出している途中の呼び出しを関数ごとに（callFn）。
   const cx = { defs: new Map(), notices: [], noticed: new Set(), lineOf, nest: 0, nestLimit, work: 0, workLimit, exhausted: 0, frames: new Map() };
 
-  // ファイルのいちばん外の定義（順序に依らない。同じ名前の2つ目は読む段が name-duplicate で止める）。右辺が書いた `!_` 1つの定義は書かなかったことと同じ（R113）。
+  // ファイルのいちばん外の定義（順序に依らない。同じ名前の2つ目は読む段が name-duplicate で止める）。前は、右辺が書いた `!_` 1つの定義を書かなかったことと
+  // 同じにしていた（R113、isUnitRow）。2026-11-09 の R138 の片2 から、その行は読む段の void-written が先に断る。
   for (const row of rows) {
     const name = defName(row, lineOf(row));
-    if (name === null || isUnitRow(row.right)) continue;
+    if (name === null) continue;
     if (!cx.defs.has(name)) cx.defs.set(name, { name, rhs: row.right, line: lineOf(row) });
   }
 
@@ -172,7 +173,7 @@ export function interpret(source, { workLimit = WORK_LIMIT, nestLimit = NEST_LIM
     const name = defName(row, line);
     if (name !== null) {
       // 定義は自分の行で1回走る。先に引かれていれば、その時に走っている（U〔答え〕10-31「引かれた時」）。
-      if (!isUnitRow(row.right)) drive(lookup(cx, name, null, line));
+      drive(lookup(cx, name, null, line));
       return;
     }
     if (isOp(row, ":")) throw notYet("左が名前1つでないファイルの `:` の行", line);
@@ -220,10 +221,6 @@ const isOp = (row, sym) => !!row && row.type === "op" && row.sym === sym;
 const bareAtom = (t) => !!t && t.type === "atom" && t.pre.length === 0 && t.post.length === 0;
 const bareName = (t) => (bareAtom(t) && t.core.c === "name" ? t.core.name : null);
 const singleTerm = (row) => (row && row.type === "seq" && row.terms.length === 1 ? row.terms[0] : null);
-const isUnitRow = (row) => {
-  const t = singleTerm(row);
-  return bareAtom(t) && t.core.c === "unit";
-};
 
 // 定義の行（左が名前1つの `:`）なら名前、ほかは null。公開の印 `#` の付いた名前はまだ（V12）。
 function defName(row, line) {
@@ -248,13 +245,12 @@ function valueOf(stack, line) {
 // 名前と定義（V9）
 // ---------------------------------------------------------------------------
 
-// 走らせずに分かる名前の値（仮引数・未定義・覚えた値）。定義を走らせる要る時は NEED（呼ぶ側が lookup で回す）。
+// 走らせずに分かる名前の値（仮引数・覚えた値）。定義を走らせる要る時と、定義の見えない名前は NEED（呼ぶ側が lookup で回す）。
 const NEED = Symbol("need");
 function known(cx, name, env) {
   for (let e = env; e; e = e.parent) if (e.vars.has(name)) return e.vars.get(name);
   const d = cx.defs.get(name);
-  if (!d) return UNIT; // 未定義の名前は `!_`（R111）。`x : !_` の名前も（R113）
-  if ("value" in d) return d.value;
+  if (d && "value" in d) return d.value;
   return NEED;
 }
 
@@ -262,6 +258,9 @@ function* lookup(cx, name, env, line) {
   const k = known(cx, name, env);
   if (k !== NEED) return k;
   const d = cx.defs.get(name);
+  // 定義の見えない名前は、取り込み（後置 `@`）のある範囲の名前だけが来る（取り込みの無い範囲の未定義の名前は、読む段の name-undefined が先に断る、R138）。
+  // 取り込み先の値はまだ持っていない（V12）。前（R111）は `!_` と読んでいた。
+  if (!d) throw notYet(`取り込みの先にあるかもしれない名前 \`${name}\` の値`, line);
   if (d.busy) throw notYet("値の定義の輪", line);
   d.busy = true;
   const before = cx.exhausted;
@@ -595,7 +594,7 @@ function* callFn(cx, f, args, line) {
               r = yield evalRow(cx, row, env, rl, "tail");
               break;
             }
-            // 本体の `:` の行は左が何でも枝で、何も定義しない（寄せ1 の R128、U〔答え〕10-29 12:18「ガイドに戻す」）。左が名前1つでも、条件として読む（未定義の名前は `!_`）。
+            // 本体の `:` の行は左が何でも枝で、何も定義しない（寄せ1 の R128、U〔答え〕10-29 12:18「ガイドに戻す」）。左が名前1つでも、条件として読む（未定義の名前は読む段が断る、R138）。
             // 最後でない枝の値は末尾でない（値が `!_` なら次の枝へ進むので、値を見るまで戻れない。R129）。
             if (valueOf(yield evalRow(cx, row.left, env, rl, "eval"), rl) === UNIT) continue;
             if (last) {
@@ -740,6 +739,8 @@ function* evalTerm(cx, t, env, line, place = "keep") {
       }
       return infixValue(cx, t, vals, line);
     }
+    // 識別子の id（2026-11-09、R138。value_spec V5）：芯が id の値の印は、印に依らず `!_`（下の idMarked）。
+    if (idMarked(t)) return UNIT;
     if (t.post.length) throw notYet(`後置の印 \`${t.post.join("")}\``, line);
     for (let k = 0; k < t.pre.length; k++) {
       const p = t.pre[k];
@@ -768,7 +769,8 @@ function* evalTerm(cx, t, env, line, place = "keep") {
         // 括り（1行だけ。前の bracketValue）。中身を畳んで、空なら `!_`、1つならその値（[x] ≅ x。関数も）。2つ以上は器でまだ。
         // 中身が点なし（区間・前置と後置の点なし `[-_]`・片側の欠けた中置の行 `[5 |]`）なら、括り1つではないので V12 のまだ（V5・V12、2026-11-07 の誤1）。
         // 印の無い括りで place が "tailkeep" なら中身も返す所で、最後の呼び出しは TailCall で返る。
-        if (c.rows.length !== 1) throw notYet(c.rows.length ? "2行以上の括り（器の片）" : "書いた `[]`", line);
+        // 書いた空の括りは、読む段の empty-written が先に断る（R138。前はここで「書いた `[]`」のまだ）。
+        if (c.rows.length !== 1) throw notYet("2行以上の括り（器の片）", line);
         const row = c.rows[0];
         const inner = cx.lineOf(row) ?? line;
         if (row && row.type === "seq" && row.terms.some(hasMissing)) throw notYet("点なしの区間", inner);
@@ -790,7 +792,30 @@ function* evalTerm(cx, t, env, line, place = "keep") {
   }
 }
 
-// 芯が算術の線の内か：字面・`!_`・仮引数・未定義の名前（`!_`、R111）と、それを算術の中置でつないだ物、それを1つ括った物。
+// 識別子の id（2026-11-09、R138。value_spec V5）：芯が id の値の印か。芯が id なのは、書いた `_`（内部ではいちばん内側に前置 `!` を足した、印 nId の核。resolve.js の tokenize の
+// 写し）と、それだけを1行で括った物（`(_)`・`[[_]]`。R24 の [x] ≅ x）。印は、内部で足した `!` を外した前置が `-`・`!!` だけで、後置が `!` だけの物（`-_`・`!!_`・`_!`・`-_!`・
+// `!!_!`・`-(_)`）。括らない値の印の `_` は識別子が当たり、名前の id（`i : _` の i）と同じく、関数に演算子を直接充てた解なし（R87）なので `!_`。印の中身（`-`・`!!`・`!`）に
+// 依らないので、前置 `-` の算術の線（10-30）の外の答えで、`!!`・後置 `!` がまだ（V12）でも同じ所で返す。根拠：U [2026-11-09 13:18:07 2617ea04]「他方で括らないというなら、
+// 識別子が当たるよね。」と R87。値は、前の綴りの同じ源（void に印。U〔答え〕[2026-10-28 00:17:32 438d5b1a]「単項の -_・!!_・_! は _」、前の綴り）で repo の 3283f019 が出していた値と同じ
+// （`-_ 5` は 5）。印に否定の `!` が混ざる物（`!-_`）は、否定がまだなので今のまま止まる。名前の芯（`i : _` ⏎ `-i`）も今のまま止まる（V12、定義の名前の芯）。
+function idMarked(t) {
+  const c = t.core;
+  const own = c.c === "unit" && !!c.nId && t.pre.length > 0 && t.pre[t.pre.length - 1] === "!";
+  if (!own && !bracketedId(c)) return false;
+  const marks = own ? t.pre.slice(0, -1) : t.pre;
+  return marks.length + t.post.length > 0 && marks.every((p) => p === "-" || p === "!!") && t.post.every((p) => p === "!");
+}
+// 書いた `_`（id）だけの項（内部の綴りで前置 `!` 1つと印 nId の核）。
+const isIdAtom = (t) => !!t && t.type === "atom" && t.pre.length === 1 && t.pre[0] === "!" && !t.post.length && t.core.c === "unit" && !!t.core.nId;
+// 芯が、id だけを1行で括った物か（`(_)`・`[[_]]`）。
+function bracketedId(c) {
+  if (c.c !== "bracket" || c.rows.length !== 1) return false;
+  const t = singleTerm(c.rows[0]);
+  return isIdAtom(t) || (bareAtom(t) && bracketedId(t.core));
+}
+
+// 芯が算術の線の内か：字面・`!_`・仮引数・定義の見えない名前と、それを算術の中置でつないだ物、それを1つ括った物。定義の見えない名前は、取り込み（後置 `@`）のある
+// 範囲の名前だけが来て（ほかは読む段の name-undefined が先に断る、R138）、値は lookup が V12 のまだで止める。前（R111）は `!_` と読んでいた。
 function arithCore(cx, c, env) {
   switch (c.c) {
     case "lit":
