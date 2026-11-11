@@ -53,7 +53,7 @@ $heap_ptr # ...
 - **`$` (Address-Of)**:
   - `$0x00`: Returns static `.rodata` slot address of Address literal `0x00`.
   - `$0u00`: Returns static address of Char niche slot.
-  - `$_`: Evaluates to `!_` (Unit).
+  - `$!_`: Evaluates to `!_` (Unit).
 - **`@` (Dereference)**:
   - `@0x00`: Interprets `0x00` as an address and performs a memory read at `0x00`.
   - `@0u00`: Causes a type error or collapses to `!_`.

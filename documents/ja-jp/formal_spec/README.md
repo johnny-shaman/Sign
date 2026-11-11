@@ -62,7 +62,7 @@ alpha JavaScript の実装は、ここで定められる仕様の観測対象・
 
 前の誤った方針に基づく文書は削除済みである。現在は、`impl/` を正本に戻したうえで、[`syntax_and_sets.md`](syntax_and_sets.md) を追加した。この文書は新しい意味論を決めず、既存定義を厳密に書くための対象集合と記号翻訳を与える。
 
-ここで `$_` の意味について `operator_table.md` と `unit.md` に差分があることを明示した。この差分は本ディレクトリで勝手に解決せず、system semantics を形式化する前に `impl/` 側で裁定する対象として残す。
+ここで `$!_` の意味について `operator_table.md` と `unit.md` に差分があることを明示した。この差分は本ディレクトリで勝手に解決せず、system semantics を形式化する前に `impl/` 側で裁定する対象として残す。
 
 次の作業は、PEG を書き直したり alpha AST から再構成したりすることではない。`impl/syntax/grammar.pegjs` の各 rule と `impl/1_definition.md` の字句・構文規約の対応を、情報を落とさず `01_concrete_syntax.md` に整理することである。
 

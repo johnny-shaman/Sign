@@ -47,11 +47,14 @@ The compiler reserves the niche slot at offset `0x00` of the `.rodata` section:
 
 $$\$0u00 = \text{Start Address of } .rodata + 0x00$$
 
-### 3.3 Boot-Up Fixed Point: $\$_ = @!_ = !_$
+### 3.3 Boot-Up Fixed Point: $\$!_ = @!_ = !_$
+
+> [!CAUTION]
+> **`!_` (void) cannot be written in user source** (user ruling 2026-11-10). `!_`, `$!_` and `@!_` in this document are specification notation. `!_` has its own address, so it also has the face of an Address, and the fixed point below holds.
 
 By initializing the niche slot to contain its own address, the following fixed point holds:
 
-$$\$_ = @!_ = !_$$
+$$\$!_ = @!_ = !_$$
 
 - **Layer 0 (Bare-Metal)**: Resolved statically by the linker as a relative relocation (`R_*_RELATIVE`) written into Flash/ROM.
 - **Layer 1+ (OS)**: Self-relocated by the loader before setting page protections (`mprotect`).

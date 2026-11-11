@@ -46,13 +46,16 @@ operator there; returning another expression gives it another meaning there (ins
 written in a file stays inside that file's function; only `#`-exported overrides reach importers. Scopes and imports are resolved
 at compile time, so each operator resolves statically to its definition — no runtime cost.
 
-### 0.4 `$_` and `@!_` Behavior: Unit Absorbs All Operators
+### 0.4 `$!_` and `@!_` Behavior: Unit Absorbs All Operators
+
+> [!CAUTION]
+> **`!_` (void) cannot be written in user source** (user ruling 2026-11-10). `!_`, `$!_` and `@!_` in this document are specification notation. `!_` has its own address, so it also has the face of an Address, and `$!_ = !_ = @!_` ([`value_representation.md`](value_representation.md) §3.3) holds.
 
 `$` (Address-Of) and `@` (Dereference) absorb `!_`:
 ```sign
-$_   = !_
+$!_   = !_
 @!_   = !_
-@$_  = !_
+@$!_  = !_
 ```
 
 ---

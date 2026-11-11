@@ -27,9 +27,10 @@
 - **Convergence of Undefined Identifiers to Unit (`!_`)**:  
   All undefined identifiers evaluate to `!_` (empty coproduct / Unit). This foundational design eliminates reserved words and allows arbitrary identifiers as zero-cost virtual keywords or DSL constructs.
 - **Unit Absorption and Asymmetry**: Behaviors match the operator table specifications below.
-- **Clear Distinction between `!_` (Immediate Collapse) and `$_` (Lazy Suspend)**:
+- **Clear Distinction between `!_` (Immediate Collapse) and `$!_` (Lazy Suspend)**:
   - `!_` is the zero object of function application, immediately collapsing the entire expression upon evaluation.
-  - `$_` is the address (reference) of `!_`. It is a valid non-Unit value, preventing completeness axiom collapse and representing a suspended state (Promise / Thunk).
+  - `$!_` is the address (reference) of `!_`. It is a valid non-Unit value, preventing completeness axiom collapse and representing a suspended state (Promise / Thunk).
+  - **Caution**: `!_` (void) cannot be written in user source (user ruling 2026-11-10). `!_` and `$!_` here are specification notation; `!_` has its own address, so `$!_ = !_ = @!_` holds ([`value_representation.md`](../impl/core/value_representation.md) §3.3).
 - **Duality of `$` Depending on Target**:
   - `$AnonymousExpression` (e.g., `$[x ? x]`, `$_`): Retrieves the **address of the generated object instance** (similar to C++ `&(new [](x){x})`). Address uniqueness is not guaranteed if compiler deduplication merges identical lambdas.
   - `$NamedIdentifier` (e.g., `$Red`, `$b`): Retrieves the **address of the binding itself** (similar to C++ `&b`). Guaranteed to return a unique, stable address for each named binding.
@@ -52,7 +53,7 @@
 > so compare with the infix over the elements); **their values split exactly on `!_`**
 > (ja-jp `kan_extensions.md` §3.7.4):
 >
-> - `1 + !_` is `1` (an operation: the meadow unit); `[[+] 1 !_]` and `[+] 1 !_ 3` are `!_` (a function: the totality axiom). `[* 2,] 1 !_ 3` is `!_` as well; so is a name bound to `!_`, `$_` (the point), or a `!_` that arrives at run time
+> - `1 + !_` is `1` (an operation: the meadow unit); `[[+] 1 !_]` and `[+] 1 !_ 3` are `!_` (a function: the totality axiom). `[* 2,] 1 !_ 3` is `!_` as well; so is a name bound to `!_`, `$!_` (the point), or a `!_` that arrives at run time
 > - A `!_` written inside a literal container vanishes when the container is built (`[+] [1 !_ 3]` is `4`). The function-position rule is unchanged (`(add !_) 3` is `3`, `add !_ 3` is `!_`)
 > - The logical folds (2026-10-06): `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument (`[&] 1 2 3` is `3`, `[&] 1 !_ 3` is `!_`). `[|]` ("at least one true") alone is an exception: it returns the leftmost argument that is not `!_`, and is `!_` only when every argument is `!_` (`[|] !_ 5` is `5`, `[|] 3 5` is `3`). Over a literal container, `[|] [a b c]` is the first, `[&] [a b c]` the last, an empty one `!_`
 > - Being a function, a section does not short-circuit (2026-10-06): every written argument is evaluated once, in the written order (`[|] 5 (w p 7)` evaluates `w p 7` too; the infix `5 | (w p 7)` does not evaluate the right side)
@@ -134,7 +135,7 @@
 >
 > `;` does **not** short-circuit. It evaluates both sides; if exactly one side is Non-Unit, it returns that value; if both sides are Non-Unit, they cancel to `!_`. This reflects the algebraic axiom ($A \oplus A = \text{false}$).
 
-- Overwriting `!_` via `$_ # expr` corrupts language invariants and causes a fatal error.
+- Overwriting `!_` via `$!_ # expr` corrupts language invariants and causes a fatal error.
 - Branching logic is expressed via `match_case` blocks or short-circuit logical operators.
 - Right-associative function composition requires explicit parentheses.
 - Infix `'` operator syntax: `(list | struct) ' index`.
