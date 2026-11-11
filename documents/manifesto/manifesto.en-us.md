@@ -40,9 +40,9 @@ Side effects are explicit, expression through function composition. Code becomes
 [+ 3] 4
 
 `Logical unit element: false`
-` __   Unit is the zero of &
+` !_   Unit is the zero of &
 x : 5
-__ & x
+!_ & x
 ```
 
 ### List Unification Model

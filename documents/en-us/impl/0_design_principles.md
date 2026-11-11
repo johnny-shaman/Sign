@@ -46,7 +46,7 @@ Throughout Sign's design, a recurring pattern manifests: **Safe default syntax e
 | Domain | Safe Default | Risky Opt-In |
 |---|---|---|
 | Code Generation | Standard Compilation | `"..."` (Direct Inline Assembly Injection) |
-| Constructor Origin Verification | Static Type Ledger | `' !__` (Explicit Origin Inspection) |
+| Constructor Origin Verification | Static Type Ledger | `' _` (Explicit Origin Inspection) |
 | Parameter Block IO | `@address` Default Reads (Single-shot, visible effect types) | `#` (Output/Store) inside parameter blocks is **strictly prohibited** |
 | Function Body IO | — | `@` (Input), `#` (Output), and `$` (Address-Of) allow arbitrary IO. Using explicit non-arithmetic symbols continuously alerts the author that "this code touches the physical world rather than pure calculation." |
 
@@ -74,10 +74,10 @@ Because Passes 1–3 resolve the type ledger statically, these rules are checked
 
 ## Principle 5: The Completeness Axiom Benefits Both Speed and Safety
 
-The Completeness Axiom $f\ \mathbf{1} = \mathbf{1}$ (`f __ = __`: a function applied to Unit skips its body and returns Unit immediately) appears as a compact rule, yet achieves two distinct architectural goals simultaneously:
+The Completeness Axiom $f\ \mathbf{1} = \mathbf{1}$ (`f !_ = !_`: a function applied to Unit skips its body and returns Unit immediately) appears as a compact rule, yet achieves two distinct architectural goals simultaneously:
 
 - **Performance**: The function call sequence (prologue, epilogue, `call`/`ret`) is skipped entirely. On register-rich RISC architectures (AArch64/RISC-V), caller-side early-out checks bypass full call sequences, providing optimizations when non-tail recursion or inlining/TCO are inapplicable.
-- **Safety**: Guarantees that fatal memory overwrite patterns like `$__ # expr` (corrupting Unit) are structurally unreachable during execution. For instance, recursive list writers like `update : [x ~xs] ? $x # x * 2 update xs` collapse via the completeness axiom the moment `xs = __` is reached, terminating without ever entering the function body `$x # ...`.
+- **Safety**: Guarantees that fatal memory overwrite patterns like `$_ # expr` (corrupting Unit) are structurally unreachable during execution. For instance, recursive list writers like `update : [x ~xs] ? $x # x * 2 update xs` collapse via the completeness axiom the moment `xs = !_` is reached, terminating without ever entering the function body `$x # ...`.
 
 A single simple axiom simultaneously yields performance optimization and execution safety.
 

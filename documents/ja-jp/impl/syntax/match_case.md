@@ -143,7 +143,7 @@ is_even : n ?
 	is_odd (n - 1)
 
 is_odd : n ?
-	n = 0 : __
+	n = 0 : !_
 	is_even (n - 1)
 ```
 

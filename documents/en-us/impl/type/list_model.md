@@ -116,13 +116,13 @@ In binary operations, **the left-hand operand type determines the type of the op
 
 $$\text{typeof}(L \text{ op } R) = \text{typeof}(L)$$
 
-There is **no implicit type conversion**: if the right-hand operand is outside the domain the left-hand one chose, the operation collapses to `__` (diagnosed at information level).
+There is **no implicit type conversion**: if the right-hand operand is outside the domain the left-hand one chose, the operation collapses to `!_` (diagnosed at information level).
 
 ```sign
-` __   arithmetic does not swallow String (information: a String operand of '+')
+` !_   arithmetic does not swallow String (information: a String operand of '+')
 0 + `123`
 
-` __   the same with the operands swapped — the direction is not what decides
+` !_   the same with the operands swapped — the direction is not what decides
 `123` + 0
 ```
 

@@ -28,7 +28,7 @@ Noboru Okazaki
 
 # Prerequisites
 
-* **Identity Element**: A value that, when combined with another under a binary operation, leaves the other value unchanged (e.g., Unit `__`).
+* **Identity Element**: A value that, when combined with another under a binary operation, leaves the other value unchanged (e.g., Unit `!_`).
 * **Left Associativity**: Evaluating operations from left to right: $(a \cdot b) \cdot c$.
 * **Right Associativity**: Evaluating operations from right to left: $a \cdot (b \cdot c)$.
 * **Product (積)**: Stacking or constructing structural lists / tuples (Product category $\times$).
@@ -58,7 +58,7 @@ Sign differs fundamentally from conventional imperative and functional languages
 * **Whitespace Rules for Operators**: Prefix and postfix operators must NOT have whitespace between the symbol and operand. Infix operators require surrounding whitespace.
 * **Literal-Only Lines Are Ignored**: Unbound literal lines produce no side effects and are skipped (used for comments).
 * **Lexical File Scope**: Each source file possesses a private local scope. No global pollution occurs without explicit `#` export or `@` import.
-* **Falsy Definitions**: Empty lists (`__`) and unevaluated lambdas are falsy. All other valid values are truthy. Dedicated boolean primitives are unnecessary.
+* **Falsy Definitions**: Empty lists (`!_`) and unevaluated lambdas are falsy. All other valid values are truthy. Dedicated boolean primitives are unnecessary.
 * **Short-Circuit Logic**: Logical operators (`&`, `|`) evaluate via short-circuiting.
 * **Low-Level Bitwise Support**: Built-in bitwise operators (`<<`, `>>`, `||`, `&&`, `;;`, `!!`) map directly to native register operations and SIMD instructions.
 * **Homoiconicity & List Model**: Arguments passed to functions are lists. All computational data are lists. Sign source code itself is a list.
@@ -104,13 +104,13 @@ Sign supports the following literal forms:
 * **Functions / Lambdas** (`?`, `[...]`)
 * **Dictionaries / Structs** (`key : value`)
 * **Identifiers**
-* **Unit** (`__`)
+* **Unit** (`!_`)
 
 ## Numbers
 
 * **Non-negative Integer**: `57`
 * **Signed Integer**: `-57`, `57`
-* Decimal integers are `Int`: −(2^63−1) … 2^63−1. A computation that leaves that range traps (`wfi`); a literal outside it (`9223372036854775808`) is a compile-time error. Division by zero is `__`. Write numbers that should wrap with `0r`.
+* Decimal integers are `Int`: −(2^63−1) … 2^63−1. A computation that leaves that range traps (`wfi`); a literal outside it (`9223372036854775808`) is a compile-time error. Division by zero is `!_`. Write numbers that should wrap with `0r`.
 * **Floating-Point**: `3537.45468`, `0.357`, `-187.0235`
 * **Hexadecimal**: `0xAF8534`
 * **Octal**: `0o3574`
@@ -134,7 +134,7 @@ Sign supports the following literal forms:
 * Created by separating literals with commas `,` (Product) or whitespace (Coproduct).
 * A comma list whose elements share one type is a `List` (an integer promotes when a float is present: `1, 2.5` is a list of floats); a heterogeneous one is a tuple (`Struct`), supported natively.
 * Lists of characters represent strings.
-* `__` represents the empty list.
+* `!_` represents the empty list.
 * Comma `,` is the Product operator ($\times$).
 
 ## Functions
@@ -159,13 +159,13 @@ Because Sign has zero reserved words, any string can be used as an identifier, s
 * Can begin with `_` (e.g., `_foo`).
 * Accepts alphanumeric characters and non-ASCII Unicode.
 
-## Unit (`__`)
+## Unit (`!_`)
 
 The identity element ($\mathbf{1}$ / $\mathbf{0}$) of lists and functions.
 Functions as `null`, `nil`, and `false`.
-* Represented as `__`.
-* Evaluating `__` yields `__`.
-* Acts as identity element under coproduct: `__ x = x` and `x __ = x`.
+* Represented as `!_`.
+* Evaluating `!_` yields `!_`.
+* Acts as identity element under coproduct: `!_ x = x` and `x !_ = x`.
 
 ---
 
@@ -186,8 +186,8 @@ Exposes bindings across module boundaries.
 Binds names or pattern conditions to expressions.
 
 ```sign
-nop : __
-yep : !__
+nop : !_
+yep : _
 
 calc :
 	additive :
@@ -208,7 +208,7 @@ Writes data to a physical memory address or IO port.
 The left side is an **address** — a place taken with `$` (`$x`, `$(l ' 1)`), a name bound to one, or a hex literal.
 A name that holds a value is refused by name: writing through it would read the value as an address.
 
-Returns the address on success, or `__` on failure.
+Returns the address on success, or `!_` on failure.
 
 ```sign
 #stream : [s ~t] ?
@@ -243,7 +243,7 @@ exp2fn 2 3
 [x y ? (x + y) ^ 2] 2 3
 ```
 
-### 2. Partial Application with Hole (`_`) vs Unit (`__`)
+### 2. Partial Application with Hole (`_`) vs Unit (`!_`)
 
 * **Hole `_` (Static Desugaring)**: Placeholders in syntax are transformed into lambdas at compile time.
   ```sign
@@ -253,16 +253,16 @@ exp2fn 2 3
   ` Result: 8
   add_three 5
   ```
-* **Unit `__` (Runtime Behavior)**:
-  * **Unsaturated (Arity incomplete)**: `__` causes immediate short-circuit collapse to `__`.
+* **Unit `!_` (Runtime Behavior)**:
+  * **Unsaturated (Arity incomplete)**: `!_` causes immediate short-circuit collapse to `!_`.
     ```sign
-    ` Result: __
-    add 3 __
+    ` Result: !_
+    add 3 !_
     ```
-  * **Saturated (Arity complete)**: `__` triggers comonadic `extract` (immediate execution).
+  * **Saturated (Arity complete)**: `!_` triggers comonadic `extract` (immediate execution).
     ```sign
     ` Result: 5
-    add 2 3 __
+    add 2 3 !_
     ```
 
 ### 3. Default Arguments & Arity Exclusion
@@ -276,7 +276,7 @@ g :
 
 ` Result: 3 4 5
 g 3
-` 3 < 2 evaluates to __ (False), y falls back to 1+1=2. Result: 1 2 3
+` 3 < 2 evaluates to !_ (False), y falls back to 1+1=2. Result: 1 2 3
 g 1 (3 < 2)
 ```
 
@@ -329,7 +329,7 @@ length 1 2 3
 ### 8. Point-Free Style
 
 ```sign
-` Result: __
+` Result: !_
 [!_] (2 < 3)
 ` Result: 120
 [_!] 5
@@ -380,9 +380,9 @@ Infix `~` constructs range lists:
 ## Logical Operators (`|`, `&`, `;`, `!`)
 
 - `|` (OR): Infix, short-circuits. Returns left operand if truthy, otherwise right operand.
-- `&` (AND): Infix, short-circuits. Returns `__` if left is falsy, otherwise evaluates right operand.
-- `;` (XOR): Infix, does **not** short-circuit. Returns Non-Unit side if exactly one side is Non-Unit; returns `__` if both sides are Non-Unit.
-- `!` (NOT): Prefix, logical negation. Returns identity morphism `!__` when negating `__`.
+- `&` (AND): Infix, short-circuits. Returns `!_` if left is falsy, otherwise evaluates right operand.
+- `;` (XOR): Infix, does **not** short-circuit. Returns Non-Unit side if exactly one side is Non-Unit; returns `!_` if both sides are Non-Unit.
+- `!` (NOT): Prefix, logical negation. Returns identity morphism `_` when negating `!_`.
 
 ## Structural Comparison Operators (`==`, `!==`)
 
@@ -391,7 +391,7 @@ Infix `~` constructs range lists:
 
 ## Scalar Comparison Operators (`<`, `<=`, `=`, `>=`, `>`, `!=`)
 
-Scalar comparison operators return a value on True and `__` (Unit) on False.
+Scalar comparison operators return a value on True and `!_` (Unit) on False.
 
 ### Return Value Rules (Value-Based Algebra)
 When comparison $L \text{ op } R$ evaluates to True:
@@ -402,7 +402,7 @@ When comparison $L \text{ op } R$ evaluates to True:
 Ternary comparisons like `1 < x < 10` are parsed as AST `ChainCompare(1, <, x, <, 10)`:
 - Requires identical comparison operators in chain.
 - If all adjacent pairs evaluate to True, unconditionally returns the **central value**.
-- If any pair evaluates to False, immediately returns **`__`** (Unit).
+- If any pair evaluates to False, immediately returns **`!_`** (Unit).
 
 ```sign
 ` (1 < 5) and (5 < 10) are both True → returns central value 5
@@ -548,7 +548,7 @@ i : `hello`
 
 ### Truthiness of `$Lambda` vs `Lambda`
 
-- Unevaluated bare lambda `Lambda` is falsy (`__` equivalent).
+- Unevaluated bare lambda `Lambda` is falsy (`!_` equivalent).
 - Encapsulated address reference `$Lambda` is an instantiated reference and is always truthy.
 
 ```sign
@@ -578,4 +578,4 @@ result : "
 ## Degeneration Rule for Out-of-Domain Type Deviations
 
 Sign operates on type-agnostic lists (Words). Binary operations enforce **Left-Hand Priority Casting**.
-However, if operand data completely deviates from the operation domain (e.g., string addition `` `123` + 0 ``), the expression degenerates to **Unit (`__`)** rather than throwing a runtime error.
+However, if operand data completely deviates from the operation domain (e.g., string addition `` `123` + 0 ``), the expression degenerates to **Unit (`!_`)** rather than throwing a runtime error.

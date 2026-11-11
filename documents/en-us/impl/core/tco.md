@@ -68,7 +68,7 @@ Mutual recursion between multiple functions is also fully optimized via TCE when
 
 ```sign
 is_even : n ? n = 0 & 1  | is_odd  (n - 1)
-is_odd  : n ? n = 0 & __ | is_even (n - 1)
+is_odd  : n ? n = 0 & !_ | is_even (n - 1)
 ```
 
 Both calls transform into unconditional jumps, consuming a constant single stack frame ($O(1)$ stack space).

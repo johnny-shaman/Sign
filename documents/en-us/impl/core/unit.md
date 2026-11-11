@@ -1,4 +1,4 @@
-# Complete Specification of Unit (`__`) in Sign
+# Complete Specification of Unit (`!_`) in Sign
 
 > [!NOTE]
 > **The canonical source is the Japanese document [unit.md](../../../ja-jp/impl/core/unit.md).**
@@ -12,7 +12,7 @@
 ### 0.1 Convergence of Undefined Identifiers to Unit (Zero Reserved Words)
 
 Sign contains zero reserved words (`null`, `nil`, `false` do not exist).
-**Any identifier undefined in the current scope evaluates to `__` (Unit).**
+**Any identifier undefined in the current scope evaluates to `!_` (Unit).**
 
 #### Virtual Keywords
 Users may use arbitrary identifiers as zero-cost virtual keywords:
@@ -20,7 +20,7 @@ Users may use arbitrary identifiers as zero-cost virtual keywords:
 @lazy tick
 @iterator next
 ```
-Undefined identifiers (`tick`, `next`) evaluate safely to `__`, functioning as natural readable markers.
+Undefined identifiers (`tick`, `next`) evaluate safely to `!_`, functioning as natural readable markers.
 
 ### 0.2 Isomorphism of Unit and False under Short-Circuiting
 
@@ -30,43 +30,43 @@ append : [x ~xs] [y ~ys] ?
 	xs & x (append xs (y ys)) | @x y ys
 ```
 - Non-empty `xs` (truthy) evaluates the recursive step.
-- Empty `xs` (`__` / falsy) evaluates the right-hand termination branch.
+- Empty `xs` (`!_` / falsy) evaluates the right-hand termination branch.
 
 ### 0.3 Operator Invalidation
 
 ```sign
-[+] : a b ? __
+[+] : a b ? !_
 ```
-Taking the two operands `a` `b` and explicitly returning `__` safely collapses the expression to `__`.
+Taking the two operands `a` `b` and explicitly returning `!_` safely collapses the expression to `!_`.
 (This used to absorb the operands with a variadic `~x`; a bare `~x` outside brackets — a bare stream parameter — was abolished on 2026-10-04.)
 
 This is scoped operator overloading, not only invalidation (user, 2026-10-05): the override applies only inside the block where it
-is written and in the limited scope that imports it; the operator table itself does not change. Returning `__` disables the
+is written and in the limited scope that imports it; the operator table itself does not change. Returning `!_` disables the
 operator there; returning another expression gives it another meaning there (inside `[+] : a b ? a * b`, `2 + 3` is 6). An override
 written in a file stays inside that file's function; only `#`-exported overrides reach importers. Scopes and imports are resolved
 at compile time, so each operator resolves statically to its definition — no runtime cost.
 
-### 0.4 `$__` and `@__` Behavior: Unit Absorbs All Operators
+### 0.4 `$_` and `@!_` Behavior: Unit Absorbs All Operators
 
-`$` (Address-Of) and `@` (Dereference) absorb `__`:
+`$` (Address-Of) and `@` (Dereference) absorb `!_`:
 ```sign
-$__   = __
-@__   = __
-@$__  = __
+$_   = !_
+@!_   = !_
+@$_  = !_
 ```
 
 ---
 
 ## 1. Introduction & Categorical Foundation
 
-`__` represents the **Zero Object** ($\mathbf{0} \cong \mathbf{1}$) of Sign as a Category:
+`!_` represents the **Zero Object** ($\mathbf{0} \cong \mathbf{1}$) of Sign as a Category:
 
 $$\mathbf{0} \cong \text{Initial Object} \cong \text{Terminal Object}$$
 
 | Category Role | Operation | Semantics |
 |:---:|:---:|---|
-| **Terminal Object** (Absorbing in Product) | `&`, `+`, `*`, ... | `__ op x = __` |
-| **Initial Object** (Identity in Coproduct) | `|`, `;`, ` `, `,` | `__ op x = x` |
+| **Terminal Object** (Absorbing in Product) | `&`, `+`, `*`, ... | `!_ op x = !_` |
+| **Initial Object** (Identity in Coproduct) | `|`, `;`, ` `, `,` | `!_ op x = x` |
 
 ---
 
@@ -76,7 +76,7 @@ $$\mathbf{0} \cong \text{Initial Object} \cong \text{Terminal Object}$$
 
 - **Zero Object**: Convergence of initial and terminal objects in Category Theory.
 - **Identity of Bialgebra**: Identity element for both List structures (coalgebra) and function composition (algebra).
-- **Value Semantics**: `__ = []` (Isomorphic to empty list).
+- **Value Semantics**: `!_ = []` (Isomorphic to empty list).
 - **Function Semantics**: Passes through operations as coproduct identity element.
 
 ### 2.2 Bialgebra Structure Definition
@@ -97,31 +97,31 @@ Lists in Sign form a bialgebra $(L, \text{unit}, \text{join}, \text{extract}, \t
 
 ### 3.1 Arithmetic Asymmetric Unit Propagation Rules
 
-- `__ + X -> __` (LHS Unit acts as zero morphism / absorbing element)
-- `X + __ -> X` (RHS Unit acts as identity morphism / transparent pass-through)
+- `!_ + X -> !_` (LHS Unit acts as zero morphism / absorbing element)
+- `X + !_ -> X` (RHS Unit acts as identity morphism / transparent pass-through)
 
 ### 3.2 Comparison Operator Absorption Rules
 
-- Both LHS and RHS Unit collapse to `__` in comparison operations (`<`, `<=`, `=`, `>=`, `>`).
-- Exception: `X != __` returns `X` when `X` is non-Unit (Logically True).
+- Both LHS and RHS Unit collapse to `!_` in comparison operations (`<`, `<=`, `=`, `>=`, `>`).
+- Exception: `X != !_` returns `X` when `X` is non-Unit (Logically True).
 
 ### 3.3 Function Application & Arity
 
-- Unsaturated functions applied to `__` collapse to `__` (Completeness Axiom: $f\ \mathbf{1} = \mathbf{1}$).
-- Functions with declared default arguments fallback to default expressions upon receiving `__`.
+- Unsaturated functions applied to `!_` collapse to `!_` (Completeness Axiom: $f\ \mathbf{1} = \mathbf{1}$).
+- Functions with declared default arguments fallback to default expressions upon receiving `!_`.
 
 ---
 
 ## 4. Assembly & ARM64 Implementation Mapping
 
-- **Null Pointer**: `__` is represented physically as a NULL pointer (`0x00`).
-- **Binary Wire Format**: `\x00` in raw input streams signals Unit type tokens without requiring 2-byte ASCII `__`.
+- **Null Pointer**: `!_` is represented physically as a NULL pointer (`0x00`).
+- **Binary Wire Format**: `\x00` in raw input streams signals Unit type tokens without requiring 2-byte ASCII `!_`.
 
 ---
 
 ## 5. Unit Traceability & Dynamic Payload in Debug Environments
 
-In production environments and bare-metal Layer 0 execution, Unit (`__`) operates as a zero-overhead zero object with immediate register-level collapse. In **scriptable high-resolution debug layers (Scriptable/Debug Layer)**, Sign provides a dynamic payload mechanism to trace the **Causal Trajectory** of a collapsed Unit:
+In production environments and bare-metal Layer 0 execution, Unit (`!_`) operates as a zero-overhead zero object with immediate register-level collapse. In **scriptable high-resolution debug layers (Scriptable/Debug Layer)**, Sign provides a dynamic payload mechanism to trace the **Causal Trajectory** of a collapsed Unit:
 
 1. **Causal Trajectory Retention**:
    - Captures recent pattern matching history and local variable stack frames.

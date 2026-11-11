@@ -38,7 +38,7 @@ This document defines the **Standard Library Memory Allocation Models** (Project
 > [!IMPORTANT]
 > **In `layer: 0`, a function cannot return a container it built in its own frame.** There is no way to allocate: as the table shows, prefix `#` is unavailable, leaving only `alloca` and `.rodata`. `alloca` lives in the function's own frame, so a container built there disappears with the call.
 >
-> **Containers are returned through sret.** The caller reserves the place and passes its address and capacity; the callee writes into it. The place is reserved once, at the outermost call, and its upper bound is known at compile time. If the bound is an estimate, an `information` diagnostic names it; an overflow at run time stops at a trap (`wfi`), never `__`. So functions that return containers can be written in `layer: 0`.
+> **Containers are returned through sret.** The caller reserves the place and passes its address and capacity; the callee writes into it. The place is reserved once, at the outermost call, and its upper bound is known at compile time. If the bound is an estimate, an `information` diagnostic names it; an overflow at run time stops at a trap (`wfi`), never `!_`. So functions that return containers can be written in `layer: 0`.
 >
 > | Operation | `layer: 0` | Why |
 > |---|:---:|---|
@@ -53,7 +53,7 @@ This document defines the **Standard Library Memory Allocation Models** (Project
 > In `layer: 1` and above, containers are also returned through sret for now (a path where the callee allocates and returns is added when a shape needs it). There, the outermost caller may size the place at run time, for example from the input length, because that layer can allocate.
 
 > [!NOTE]
-> alpha's machine backend still returns `__` on a run-time overflow (switching it to the trap is a separate slice).
+> alpha's machine backend still returns `!_` on a run-time overflow (switching it to the trap is a separate slice).
 
 ---
 

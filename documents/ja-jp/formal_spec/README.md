@@ -16,7 +16,7 @@ alpha JavaScript の実装は、ここで定められる仕様の観測対象・
 |---:|---|---|---|
 | 1 | [`../impl/syntax/operator_table.md`](../impl/syntax/operator_table.md) | 優先順位、位置、型の組合せ、機能、自然な意味、操作的意味、左右 Unit 規則 | 記号ごとの入力形・結合性・結果・継続規則を表として曖昧なく参照する |
 | 2 | [`../impl/syntax/grammar.pegjs`](../impl/syntax/grammar.pegjs) | PEG による受理構文と parse action | PEG を canonical concrete syntax として固定し、必要な BNF は PEG の情報を落とさない範囲でのみ併記する |
-| 3 | [`../impl/core/unit.md`](../impl/core/unit.md) | `__`、零対象、同型、完全性、診断の規則 | Unit の規則を演算子表と矛盾しない判断・表へ分離する |
+| 3 | [`../impl/core/unit.md`](../impl/core/unit.md) | `!_`、零対象、同型、完全性、診断の規則 | Unit の規則を演算子表と矛盾しない判断・表へ分離する |
 | 4 | [`../impl/core/coproduct_resolver.md`](../impl/core/coproduct_resolver.md) | 空白の category-based resolution と phase | 余積の縮約を入力 category・出力 operation・phase 順序で定義する |
 | 5 | [`../impl/core/execution_model.md`](../impl/core/execution_model.md) | ファイル、関数、遅延評価、実行の全体モデル | 他の規則を結ぶ実行モデルとして参照する |
 
@@ -62,7 +62,7 @@ alpha JavaScript の実装は、ここで定められる仕様の観測対象・
 
 前の誤った方針に基づく文書は削除済みである。現在は、`impl/` を正本に戻したうえで、[`syntax_and_sets.md`](syntax_and_sets.md) を追加した。この文書は新しい意味論を決めず、既存定義を厳密に書くための対象集合と記号翻訳を与える。
 
-ここで `$__` の意味について `operator_table.md` と `unit.md` に差分があることを明示した。この差分は本ディレクトリで勝手に解決せず、system semantics を形式化する前に `impl/` 側で裁定する対象として残す。
+ここで `$_` の意味について `operator_table.md` と `unit.md` に差分があることを明示した。この差分は本ディレクトリで勝手に解決せず、system semantics を形式化する前に `impl/` 側で裁定する対象として残す。
 
 次の作業は、PEG を書き直したり alpha AST から再構成したりすることではない。`impl/syntax/grammar.pegjs` の各 rule と `impl/1_definition.md` の字句・構文規約の対応を、情報を落とさず `01_concrete_syntax.md` に整理することである。
 

@@ -13,7 +13,7 @@ Comprehensive documentation suite for implementers of the Sign compiler, interpr
 
 1. **[syntax/operator_table.md](syntax/operator_table.md)** — Operator Table (Core language framework)
 2. **[syntax/grammar.pegjs](syntax/grammar.pegjs)** — PEG Grammar Specification
-3. **[core/unit.md](core/unit.md)** — Complete Unit (`__`) Specification (Impacts all compiler passes)
+3. **[core/unit.md](core/unit.md)** — Complete Unit (`!_`) Specification (Impacts all compiler passes)
 4. **[core/coproduct_resolver.md](core/coproduct_resolver.md)** — Coproduct Resolver (Space operator semantic resolution)
 5. **[core/execution_model.md](core/execution_model.md)** — Execution Model (File = Function, Heapless design)
 
@@ -36,7 +36,7 @@ impl/
 │
 ├── core/                   ← Semantics & Runtime Model
 │   ├── compiler_pipeline.md  Multi-Pass Compiler Pipeline Specification
-│   ├── unit.md               Complete Unit (__) Spec (Math foundation & rules)
+│   ├── unit.md               Complete Unit (!_) Spec (Math foundation & rules)
 │   ├── coproduct_resolver.md Coproduct Resolver Algorithm
 │   ├── execution_model.md    Execution Model (Main inline expansion)
 │   ├── tco.md                Tail Call Optimization (TCO/TCE)

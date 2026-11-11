@@ -35,7 +35,7 @@ export const OPERATOR_TYPES = {
     // $ は任意の型 T に適用でき Implicit(T) を返す
     // Lambda → Implicit(Lambda): Lambda を Atom として扱う（高階関数渡し）
     // Atom/Address → Implicit(Atom): データのアドレス取得（C言語の &var に相当）
-    // $__ も有効: Implicit(Unit) = Unit のアドレス（非Unit、遅延サスペンド用）
+    // $_ も有効: Implicit(Unit) = Unit のアドレス（非Unit、遅延サスペンド用）
     return { type: 'Implicit', target: R };
   },
   '@_': (R) => {
@@ -49,7 +49,7 @@ export const OPERATOR_TYPES = {
       // @Implicit(Address/Register/その他) = メモリ読み出し
       return { type: 'Deref', target: R };
     }
-    // @__ = __（Unit の読み出しは Unit）
+    // @!_ = !_（Unit の読み出しは Unit）
     if (getTypeName(R) === 'Unit') return { type: 'Unit' };
     return { type: 'Unit' };
   },

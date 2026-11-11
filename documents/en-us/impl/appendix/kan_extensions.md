@@ -85,7 +85,7 @@ $$\text{Lan}_K \;\dashv\; K^* \;\dashv\; \text{Ran}_K$$
 
 ## 3. Unified Proof Specifications of Operators and Lambdas
 
-### 3.1 Identity Morphism `__` and Partial Application (Adjunction)
+### 3.1 Identity Morphism `!_` and Partial Application (Adjunction)
 
 Partial application (`_` / Hole desugaring) is uniquely derived as a Right Kan Extension of the Identity Functor $\text{Id}_{\mathcal{C}}$ along functor $F$:
 
@@ -106,11 +106,11 @@ In scalar domains, `1, 2, 3` (Product) and `1 2 3` (Coproduct) exhibit equivalen
 
 $$\text{Lan}_{!} D \;\cong\; \text{Ran}_{!} D$$
 
-### 3.3 Role of `__` (Unit) in Static Land
+### 3.3 Role of `!_` (Unit) in Static Land
 
-`__` functions as the absolute Zero Object ($\mathbf{0} \cong \mathbf{1}$) of Sign:
-- Identity element under Coproduct (Space ` `): `__ f` $\to f$, `f __` $\to f$.
-- Identity element under Product (Comma `,`): `__ , x` $\to x$, `x , __` $\to x$.
+`!_` functions as the absolute Zero Object ($\mathbf{0} \cong \mathbf{1}$) of Sign:
+- Identity element under Coproduct (Space ` `): `!_ f` $\to f$, `f !_` $\to f$.
+- Identity element under Product (Comma `,`): `!_ , x` $\to x$, `x , !_` $\to x$.
 
 ### 3.4 Derived Functors for Arithmetic and Logic Operators
 
@@ -118,15 +118,15 @@ Arithmetic and logical operators exist as **Derived Functors** mapped from core 
 
 - **Addition `+`**: Derived functor of Coproduct (Space ` `) mapped to the numeric domain.
 - **Multiplication `*`**: Derived functor of Product (Comma `,`) mapped to the numeric domain.
-- **Comparison `<`**: Unital Derived Functor mapped to Unit (`__`) on failure (zero morphism) or identity value on success (unit morphism $\eta: \text{Id} \to F$).
+- **Comparison `<`**: Unital Derived Functor mapped to Unit (`!_`) on failure (zero morphism) or identity value on success (unit morphism $\eta: \text{Id} \to F$).
 
-### 3.5 Role of `__` in Derived Categories & Homological Extensionality
+### 3.5 Role of `!_` in Derived Categories & Homological Extensionality
 
 In derived categories $\mathcal{D}(\mathcal{C})$, values exist as complexes $X^\bullet$:
-- **Absolute Zero Object `__`**: Zero complex $\mathbf{0}^\bullet$.
+- **Absolute Zero Object `!_`**: Zero complex $\mathbf{0}^\bullet$.
 - **Scalar Values `0` and `1`**: Single-point complexes $S(0)$ and $S(1)$ non-zero at degree 0.
 
-Thus, `__` $\neq 0$ ($\mathbf{0}^\bullet \neq S(0)$) holds strictly, preserving scalar `0` as truthy while treating `__` as falsy.
+Thus, `!_` $\neq 0$ ($\mathbf{0}^\bullet \neq S(0)$) holds strictly, preserving scalar `0` as truthy while treating `!_` as falsy.
 
 #### Topos Theory and Boolean Elimination
 
@@ -142,4 +142,4 @@ Boolean primitives are eliminated because comparison operations directly measure
 
 The compiler's type checker verifies operation correctness via two universal meta-rules:
 1. **Commutative Diagram Verification**: Validates whether juxtaposition meets colimit/limit universal properties.
-2. **Zero Object Descent Verification**: Validates that zero object `__` propagates cleanly across derived domain operations.
+2. **Zero Object Descent Verification**: Validates that zero object `!_` propagates cleanly across derived domain operations.

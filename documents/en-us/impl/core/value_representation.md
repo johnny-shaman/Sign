@@ -31,7 +31,7 @@ The `Char` type in Sign adopts **Standard UTF-8 (RFC 3629 compliant)** encoding.
 
 ---
 
-## 3. `__` (Unit) and `U+0000` Niche Optimization
+## 3. `!_` (Unit) and `U+0000` Niche Optimization
 
 ### 3.1 Basic Principle
 
@@ -39,7 +39,7 @@ Because `U+0000` carries no practical text utility in modern string semantics, S
 
 $$\text{Char Domain} := \{ U+0001, \dots, U+D7FF \} \cup \{ U+E000, \dots, U+10FFFF \}$$
 
-The single excluded bit pattern of `U+0000` is reused in `Char` contexts to represent **`__` (Unit)** as a zero-cost **niche optimization** (isomorphic to Rust's `Option<char>`).
+The single excluded bit pattern of `U+0000` is reused in `Char` contexts to represent **`!_` (Unit)** as a zero-cost **niche optimization** (isomorphic to Rust's `Option<char>`).
 
 ### 3.2 Allocation Convention: `.rodata + 0x00 = $0u00`
 
@@ -47,11 +47,11 @@ The compiler reserves the niche slot at offset `0x00` of the `.rodata` section:
 
 $$\$0u00 = \text{Start Address of } .rodata + 0x00$$
 
-### 3.3 Boot-Up Fixed Point: $\$__ = @__ = __$
+### 3.3 Boot-Up Fixed Point: $\$_ = @!_ = !_$
 
 By initializing the niche slot to contain its own address, the following fixed point holds:
 
-$$\$__ = @__ = __$$
+$$\$_ = @!_ = !_$$
 
 - **Layer 0 (Bare-Metal)**: Resolved statically by the linker as a relative relocation (`R_*_RELATIVE`) written into Flash/ROM.
 - **Layer 1+ (OS)**: Self-relocated by the loader before setting page protections (`mprotect`).
@@ -65,12 +65,12 @@ Binary data requiring full 8-bit coverage (`0x00`–`0xFF`) is handled by the **
 | Feature | `Char` Type | `Byte` Type |
 | --- | --- | --- |
 | **Domain** | Unicode Scalar Values (Excl. `U+0000`, Surrogates) | Complete `0x00`–`0xFF` range |
-| **Niche Optimization** | Yes (`U+0000` represents `__`) | None |
-| **Termination Form** | No sentinel required (`__` is niche) | Externalized length (`[len ~bytes]`) |
+| **Niche Optimization** | Yes (`U+0000` represents `!_`) | None |
+| **Termination Form** | No sentinel required (`!_` is niche) | Externalized length (`[len ~bytes]`) |
 | **Primary Use Cases** | Human text, Strings | Raw binary, FFI boundaries, Images |
 
 ---
 
-## 5. Identity Morphism (`!__`) Dispatch
+## 5. Identity Morphism (`_`) Dispatch
 
-The identity function `!__` (`∀A. A -> A`) is synthesized directly by the compiler as a pure identity lambda without taking up encoding space in string buffers.
+The identity function `_` (`∀A. A -> A`) is synthesized directly by the compiler as a pure identity lambda without taking up encoding space in string buffers.

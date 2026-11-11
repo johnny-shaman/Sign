@@ -6,7 +6,7 @@
 
 1. **[syntax/operator_table.md](syntax/operator_table.md)** — 演算子テーブル（言語の骨格）
 2. **[syntax/grammar.pegjs](syntax/grammar.pegjs)** — PEG文法仕様
-3. **[core/unit.md](core/unit.md)** — Unit（`__`）完全仕様（全フェーズに影響）
+3. **[core/unit.md](core/unit.md)** — Unit（`!_`）完全仕様（全フェーズに影響）
 4. **[core/coproduct_resolver.md](core/coproduct_resolver.md)** — 余積リゾルバー（スペース演算子の意味解決）
 5. **[core/execution_model.md](core/execution_model.md)** — 実行モデル（ファイル=関数、ヒープレス）
 
@@ -27,7 +27,7 @@ impl/
 │   └── operator_table.js    演算子テーブル実装参照
 │
 ├── core/              ← 意味論フェーズ
-│   ├── unit.md              Unit（__）完全仕様（数学的基盤 + 実装規則）
+│   ├── unit.md              Unit（!_）完全仕様（数学的基盤 + 実装規則）
 │   ├── coproduct_resolver.md 余積リゾルバーアルゴリズム
 │   ├── execution_model.md   実行モデル（main内部関数展開）
 │   ├── tco.md               末尾呼び出し最適化（TCO/TCE）

@@ -32,36 +32,36 @@ To treat operators as first-class functions, enclose the operator in parentheses
 [_!] 5
 ```
 
-Point-free forms are **functions**, not operations. If any written argument is `__`, the result is `__` (the totality axiom, user ruling 2026-10-05).
-An infix operation reads `__` as its unit (`1 + __` is `1`), so the values of a point-free form and the infix form split exactly on `__`.
-The exceptions are the point-free forms of the catching `|`: the fold `[|]` ("at least one true") returns the leftmost argument that is not `__`, and is `__` only when every argument is `__` (2026-10-06); the map `[| d,]` catches `__` element by element (2026-10-07). `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument.
-Being a function, a point-free form does not short-circuit: every written argument is evaluated once, in the written order. A spread of `__` is an empty spread and adds no argument (2026-10-06). Any other spread argument (`xs~`) puts its elements in as written arguments.
-A `__` written inside a literal container vanishes when the container is built, so it does not count as a written argument (ja-jp `kan_extensions.md` §3.7.4).
+Point-free forms are **functions**, not operations. If any written argument is `!_`, the result is `!_` (the totality axiom, user ruling 2026-10-05).
+An infix operation reads `!_` as its unit (`1 + !_` is `1`), so the values of a point-free form and the infix form split exactly on `!_`.
+The exceptions are the point-free forms of the catching `|`: the fold `[|]` ("at least one true") returns the leftmost argument that is not `!_`, and is `!_` only when every argument is `!_` (2026-10-06); the map `[| d,]` catches `!_` element by element (2026-10-07). `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument.
+Being a function, a point-free form does not short-circuit: every written argument is evaluated once, in the written order. A spread of `!_` is an empty spread and adds no argument (2026-10-06). Any other spread argument (`xs~`) puts its elements in as written arguments.
+A `!_` written inside a literal container vanishes when the container is built, so it does not count as a written argument (ja-jp `kan_extensions.md` §3.7.4).
 
 ```sign
-` A function: a written __ makes the result __
-[+] 1 __ 3
+` A function: a written !_ makes the result !_
+[+] 1 !_ 3
 
-` Sections too. The infix 1 + __ is 1 (an operation), but this is __
-[[+] 1 __]
+` Sections too. The infix 1 + !_ is 1 (an operation), but this is !_
+[[+] 1 !_]
 
 ` Maps too
-[* 2,] 1 __ 3
+[* 2,] 1 !_ 3
 
-` [&] is "all true": a __ makes it __ (otherwise the rightmost)
-[&] 1 __ 3
+` [&] is "all true": a !_ makes it !_ (otherwise the rightmost)
+[&] 1 !_ 3
 
-` [|] is the exception: the leftmost value that is not __ (__ only when all are __)
-[|] __ 5
+` [|] is the exception: the leftmost value that is not !_ (!_ only when all are !_)
+[|] !_ 5
 
-` [| d,] catches __ element by element ([1 0 3])
-[| 0,] 1 __ 3
+` [| d,] catches !_ element by element ([1 0 3])
+[| 0,] 1 !_ 3
 
-` Spreading __ adds no argument (4)
-[+] 1 __~ 3
+` Spreading !_ adds no argument (4)
+[+] 1 !_~ 3
 
-` A __ inside a container vanishes when the container is built (folds [1 3], so 4)
-[+] [1 __ 3]
+` A !_ inside a container vanishes when the container is built (folds [1 3], so 4)
+[+] [1 !_ 3]
 ```
 
 ## Definition Using the `?` Operator
@@ -162,13 +162,13 @@ g :
 ` Result: 3 4 5
 g 3
 
-` If an unexpected evaluation yields __ (Unit), functions without default arguments collapse to __
+` If an unexpected evaluation yields !_ (Unit), functions without default arguments collapse to !_
 ` (Unit propagation / Short-circuit collapse)
-` 3 < 2 yields __, turning f into f __ 1, collapsing result to __
+` 3 < 2 yields !_, turning f into f !_ 1, collapsing result to !_
 f (3 < 2) 1
 
-` Passing __ into a parameter with a default value triggers fallback to the default expression.
-` 3 < 2 yields __, giving g 1 __, so y falls back to x + 1 (2).
+` Passing !_ into a parameter with a default value triggers fallback to the default expression.
+` 3 < 2 yields !_, giving g 1 !_, so y falls back to x + 1 (2).
 g 1 (3 < 2)
 ` Result: 1 2 3
 ```
@@ -202,9 +202,9 @@ func_mixed :
 
 ` Result: -1 (x=5, y=6. Since x > 3, evaluates 5 - 6 = -1)
 func_mixed [5]
-` Result: 3  (x=2, y=3. Since x > 3 is __, returns y)
+` Result: 3  (x=2, y=3. Since x > 3 is !_, returns y)
 func_mixed [2]
-` Result: 10 (x=2, y=10. Since x > 3 is __, returns y)
+` Result: 10 (x=2, y=10. Since x > 3 is !_, returns y)
 func_mixed [2 10]
 ```
 

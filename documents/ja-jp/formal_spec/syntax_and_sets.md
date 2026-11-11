@@ -50,7 +50,7 @@ NumLit      = { -? d+ .? d* | d ∈ {0,…,9} }
 AddrLit     = { 0x h+ | h ∈ Hex }
 RegLit      = { 0r h+ } ∪ { 0b b+ | b ∈ {0,1} }
 UnicodeLit  = { 0u h+ | h ∈ Hex }
-UnitLit     = { __, \x00 }
+UnitLit     = { !_, \x00 }
 HoleLit     = { _ }
 Lit         = StrLit ⊎ CharLit ⊎ NumLit ⊎ AddrLit ⊎ RegLit ⊎ UnicodeLit ⊎ UnitLit
 AtomSrc     = Lit ⊎ IdSrc ⊎ HoleLit
@@ -58,7 +58,7 @@ AtomSrc     = Lit ⊎ IdSrc ⊎ HoleLit
 
 PEG の集合は、前処理の最初の走査を通した後のテキストの上で読む。その走査はディスク上の改行を、`\` の直後なら LF（文字の改行）に、それ以外は CR（処理の区切り）に分け、行頭のコメントを読み捨てる（`impl/build/preprocessor.md` §0）。だから `\` + 改行は `\` + LF の `CharLit` であり、CR は `CharLit` の c に入らない。
 
-ここで `HoleLit` は PEG の `Atom` に現れるが、実行時の値ではない。`_` は静的脱糖の対象であり、`__` は実行時に流通する Unit である。この区別は既存の Unit 仕様でも明示されている。[2] [3]
+ここで `HoleLit` は PEG の `Atom` に現れるが、実行時の値ではない。`_` は静的脱糖の対象であり、`!_` は実行時に流通する Unit である。この区別は既存の Unit 仕様でも明示されている。[2] [3]
 
 `(`、`)`、`[`、`]`、`{`、`}` は `impl/1_definition.md` で同義の字句素とされる。したがって、source-level の delimiter 集合を
 
@@ -141,14 +141,14 @@ unit ∈ VUnit
 
 この分割は、すべての backend が別々の object representation を使うことを主張しない。`List` と `Struct` の実装上の違い、`Address` と `Float` の layer 条件、`Iterator` の固定サイズ表現などは既存の型仕様に従う。[6]
 
-Sign の source literal `__` が表す distinguished value を `unit` と書く。既存の Unit 仕様は、これを零対象として初対象と終対象の一致に置き、空リストとの等価を規定する。[2]
+Sign の source literal `!_` が表す distinguished value を `unit` と書く。既存の Unit 仕様は、これを零対象として初対象と終対象の一致に置き、空リストとの等価を規定する。[2]
 
 ```text
-parse(__) ⇓ unit
+parse(!_) ⇓ unit
 unit ≡ []
 ```
 
-この `≡` は、文字列 `__` と空 block の字面が同じであることを意味しない。Unit 仕様が規定する値・構造上の同型を表す。`unit ≠ 0` は同じ仕様の明示的な制約である。[2]
+この `≡` は、文字列 `!_` と空 block の字面が同じであることを意味しない。Unit 仕様が規定する値・構造上の同型を表す。`unit ≠ 0` は同じ仕様の明示的な制約である。[2]
 
 ### 4.3 静的環境 Γ
 
@@ -208,7 +208,7 @@ x ∉ dom(ρ)
 ρ ⊢ x ⇓ unit
 ```
 
-この規則は `impl/core/unit.md` の「現在スコープにおいて定義されていない識別子は `__` として評価される」を、big-step 評価記法で表すドラフトである。[2] `Γ` に未登録であることと `ρ` に値がないことの関係、診断の severity、TCO 位置の例外は、この一規則だけでは完結しないため Unit / execution 文書で補う。
+この規則は `impl/core/unit.md` の「現在スコープにおいて定義されていない識別子は `!_` として評価される」を、big-step 評価記法で表すドラフトである。[2] `Γ` に未登録であることと `ρ` に値がないことの関係、診断の severity、TCO 位置の例外は、この一規則だけでは完結しないため Unit / execution 文書で補う。
 
 ## 5. 基本関係と判断
 
@@ -268,16 +268,16 @@ Sign の記号は、自然言語の読み、圏論的な説明、操作的意味
 
 | occurrence | 自然言語的な読み | 圏論的・型的な対応 | 操作的な対応 | 正本 |
 |---|---|---|---|---|
-| `__` | 見える無、空 | 零対象。初対象と終対象の一致。空リストとの同型 | Unit 値。未定義 identifier の収束先。多くの operation の零射または単位元条件を起動する | [2] [5] |
-| `_` | 穴、欠落した引数 slot | 値ではなく compile-time placeholder。`__` と別 | 静的脱糖の対象。部分適用に関わる | [2] [9] |
+| `!_` | 見える無、空 | 零対象。初対象と終対象の一致。空リストとの同型 | Unit 値。未定義 identifier の収束先。多くの operation の零射または単位元条件を起動する | [2] [5] |
+| `_` | 穴、欠落した引数 slot | 値ではなく compile-time placeholder。`!_` と別 | 静的脱糖の対象。部分適用に関わる | [2] [9] |
 | ` ` as infix | 並べる、連接 | 余積。category pair により射の適用・合成または構造構築へ解釈される | PEG が flat term 列を作り、resolver が `apply` / `apply_reverse` / `compose` / `construct` 等へ縮約する | [4] [5] [8] |
 | `,` as infix | 積、構造的組み立て | 直積。Unit に対する規則は表の恒等射欄に従う | 右結合の構造構築 | [5] |
 | `:` as infix | 即ち、A ならば B | 名前・条件と右辺を結ぶ binding / definition の構成 | 左辺を右辺 expression へ束縛し、identifier 宣言では型情報も生成する | [1] [5] |
 | `?` as infix | 問いかけ、どうするか | Lambda / 射の構成 | 関数定義。左側は仮引数束縛列、右側は body | [1] [5] [6] |
-| `&` as infix | かつ、結合 | 積における零対象の規則 | 左側が零射へ落ちれば右側を評価せず `__`。両側 Unit の扱いは演算子表に従う | [2] [5] |
+| `&` as infix | かつ、結合 | 積における零対象の規則 | 左側が零射へ落ちれば右側を評価せず `!_`。両側 Unit の扱いは演算子表に従う | [2] [5] |
 | `|` as infix | または、通路 | 余積における Unit の単位元 | 左側が非Unitなら右側を評価せず左値を返す。左側 Unit なら右側へ進む | [2] [5] |
 | `;` as infix | 排他的関係 | 余積の差分 | 両側の Unit / 非Unit により identity または相殺を選ぶ。`|` と異なり短絡しない | [5] |
-| `!` as prefix | 否定 | `__` から Id 射、非Unit から零射への翻訳 | `!__` は数値 Boolean でなく、評価予定が確定した非Unit の Id 射。`!expr` は Unit へ落とす | [2] [10] |
+| `!` as prefix | 否定 | `!_` から Id 射、非Unit から零射への翻訳 | `_` は数値 Boolean でなく、評価予定が確定した非Unit の Id 射。`!expr` は Unit へ落とす | [2] [10] |
 | `!` as postfix | 階乗 | 一般の圏論的対応は本書では未固定 | 階乗演算。右 operand を取らない | [5] |
 | `~` as infix | その辺り、範囲 | range / iterator の構成 | range、等差・等比・等冪系列を指定する | [5] |
 | `~` as prefix | 末尾へ、連続 | 連続 list / iterator の構成 | continuous list construction | [5] |
@@ -308,9 +308,9 @@ compare-failure   ↦ unit
 
 この `truth` は仕様の補助的な述語であり、Sign source の組み込み Boolean 関数を導入するものではない。比較演算子ごとの witness selection、連鎖比較、`!=` の例外は [`../impl/type/comparison.md`](../impl/type/comparison.md) を正本として別文書で定義する。
 
-## 8. Unit と `$__` に関する未解決の差分
+## 8. Unit と `$_` に関する未解決の差分
 
-`operator_table.md` は `$__` を「有効な非Unit のアドレス」とし、遅延サスペンドを表すと記す。一方、`unit.md` は `$__ = __`、`@__ = __` とし、独立した `$__` の実体は存在しないと記す。[2] [5]
+`operator_table.md` は `$_` を「有効な非Unit のアドレス」とし、遅延サスペンドを表すと記す。一方、`unit.md` は `$_ = !_`、`@!_ = !_` とし、独立した `$_` の実体は存在しないと記す。[2] [5]
 
 この二つの記載は、少なくともメタ言語上は同じ等式として同時に採用できない。したがって本書は、以下を**未決**として保留する。
 

@@ -29,7 +29,7 @@ Core principles:
 |---|---|
 | `"key": value` | `key : value` |
 | Quoted string required | Identifiers as bare words, strings enclosed in backticks (`` `string` ``) |
-| `null` / `false` | `__` (Unit) |
+| `null` / `false` | `!_` (Unit) |
 | Comments prohibited | Backtick comments at line start (`` ` Comment ``) |
 
 ---

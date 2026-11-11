@@ -13,9 +13,9 @@ In early Sign iterations, `_` served a dual role:
 1. **Unit as Value**: Empty lists, logical "false", Nothing (absence of value).
 2. **Hole for Partial Application**: Placeholder inside function applications, creating closures/lambdas.
 
-To resolve semantic conflicts between runtime values (`__`) and syntactic placeholders (`_`), Sign enforces strict separation:
+To resolve semantic conflicts between runtime values (`!_`) and syntactic placeholders (`_`), Sign enforces strict separation:
 - **Syntactically written `_`** is desugared at compile time into lambda expressions (`?`) representing Holes.
-- **Runtime values** are represented by `__` (Unit).
+- **Runtime values** are represented by `!_` (Unit).
 
 ---
 

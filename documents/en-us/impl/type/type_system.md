@@ -57,14 +57,14 @@ x + y
 ` → Atom    (Value list block)
 [1 2 3]
 ` → Atom    (Unit)
-__
+!_
 ```
 
 > [!IMPORTANT]
 > **Asymmetry of `$` and `@`**
 >
 > `$expr` always returns `Atom(Address)` regardless of whether `expr` is a Lambda or Atom.
-> The one exception is `$__`, which is the point: there is no place for nothing, so the address of the zero object is the zero object itself, typed `Unit` (`$__ + 3` is `__ + 3`, i.e. 3).
+> The one exception is `$_`, which is the point: there is no place for nothing, so the address of the zero object is the zero object itself, typed `Unit` (`$_ + 3` is `!_ + 3`, i.e. 3).
 > `@expr` dereferences the address and inherits the structural domain of the target (returns `Lambda` if calling a function, or `Atom` if loading data).
 
 ### Layer 2: Atom Subtypes
@@ -73,19 +73,19 @@ Atom Subtypes govern binary operator semantics and type casts:
 
 | Subtype | Description | Example Literal | Minimum `layer` Required |
 |:---:|---|---|:---:|
-| `Int` | Signed integer: ℤ held in one GPR word, −(2^63−1) … 2^63−1 (`INT64_MIN` is the `__` niche). A result that does not fit the word traps (`wfi`); division by zero is `__` | `42`, `-1` | **0+** |
-| `UInt` | Wrapping unsigned integer, the ring ℤ/2^64ℤ; bit strings (`0r`, `0b`) and the home of bit operations. It has no niche: a value that may be `__` is carried as a (value, flag) pair, the one exception to "one bit representation per width class" (ja type_system §2). Division by zero is `__` | `0rFF`, `0b1010` | 0+ |
+| `Int` | Signed integer: ℤ held in one GPR word, −(2^63−1) … 2^63−1 (`INT64_MIN` is the `!_` niche). A result that does not fit the word traps (`wfi`); division by zero is `!_` | `42`, `-1` | **0+** |
+| `UInt` | Wrapping unsigned integer, the ring ℤ/2^64ℤ; bit strings (`0r`, `0b`) and the home of bit operations. It has no niche: a value that may be `!_` is carried as a (value, flag) pair, the one exception to "one bit representation per width class" (ja type_system §2). Division by zero is `!_` | `0rFF`, `0b1010` | 0+ |
 | `Float` | Floating-point number | `3.14`, `1.0` | **2+** |
 | `String` | Unicode string (Isomorphic to `List(0u)`) | `` `hello` ``, `\a` | 0+ |
 | `Vector` | SIMD Vector type | `[1.0 2.0 3.0 4.0]` | **3+** |
 | `List` | Homogeneous 1D array (a comma chain whose elements unify to one type is one too) | `1 2 3`, `[1 2 3]`, `1, 2, 3` | 0+ |
 | `Struct` | Heterogeneous Product structure (a comma chain whose elements do not unify) | `` 1, `a`, 2.5 `` | 0+ |
 | `Dict` | Key-Value structure | `[key : val]` | 0+ |
-| `Unit` | Zero object / Empty / Null | `__` | 0+ |
+| `Unit` | Zero object / Empty / Null | `!_` | 0+ |
 | `Address` | Pointer location | `0x00`, `$expr` | 0+ |
 
 > [!NOTE]
-> **alpha today (not a rule).** Every statement in this document about `UInt`, `Int` traps and division by zero still answers by the old rules in alpha: it types `0r`/`0b` as `Int` (there is no `UInt` yet), wraps `Int` at 64 bits without trapping, and divides by zero to quotient 0 and remainder = dividend (user rulings 2026-10-11; they land in a later slice). It also still types as a `Struct` a comma chain that unifies only by promotion (`1, 2.5`), one holding `__` (`x , __`), a scalar beside a container (`1 , [2 3]`), and containers of different lengths — the values are already right.
+> **alpha today (not a rule).** Every statement in this document about `UInt`, `Int` traps and division by zero still answers by the old rules in alpha: it types `0r`/`0b` as `Int` (there is no `UInt` yet), wraps `Int` at 64 bits without trapping, and divides by zero to quotient 0 and remainder = dividend (user rulings 2026-10-11; they land in a later slice). It also still types as a `Struct` a comma chain that unifies only by promotion (`1, 2.5`), one holding `!_` (`x , !_`), a scalar beside a container (`1 , [2 3]`), and containers of different lengths — the values are already right.
 
 ---
 
@@ -111,21 +111,21 @@ $$\text{typeof}(L \text{ op } R) = \text{typeof}(L)$$
 ### 3.3 Asymmetric Unit Propagation Rules
 
 - **Zero Object Absorption**:
-  - `__ & x = __` / `x & __ = __` (Terminal object in Product)
-  - `__ | x = x` / `x | __ = x` (Initial object in Coproduct)
-  - `__ ; x = x` / `x ; __ = x` (Initial object in XOR)
+  - `!_ & x = !_` / `x & !_ = !_` (Terminal object in Product)
+  - `!_ | x = x` / `x | !_ = x` (Initial object in Coproduct)
+  - `!_ ; x = x` / `x ; !_ = x` (Initial object in XOR)
 
 - **Asymmetric Arithmetic Propagation**:
-  - `__ + x = __` (LHS Unit acts as zero morphism / error propagation)
-  - `x + __ = x` (RHS Unit acts as identity morphism / transparent pass-through)
+  - `!_ + x = !_` (LHS Unit acts as zero morphism / error propagation)
+  - `x + !_ = x` (RHS Unit acts as identity morphism / transparent pass-through)
 
 ### 3.4 The Completeness Axiom ($f\ \mathbf{1} = \mathbf{1}$)
 
-> **Any function application whose argument evaluates to `__` (Unit) in an unsaturated state collapses to `__`.**
+> **Any function application whose argument evaluates to `!_` (Unit) in an unsaturated state collapses to `!_`.**
 
 $$\forall f, f\ \mathbf{1} = \mathbf{1}$$
 
-Functions with declared default arguments represent an exception: passing `__` triggers fallback to declared default parameter expressions.
+Functions with declared default arguments represent an exception: passing `!_` triggers fallback to declared default parameter expressions.
 
 ---
 
@@ -138,14 +138,14 @@ Functions with declared default arguments represent an exception: passing `__` t
 | `###` | Prefix* | `R -> Implicit(R)` |
 | `:` | Infix* | `(Identifier -> R) -> R` |
 | `?` | Infix* | `(List -> R) -> Lambda(R)` |
-| `#` | Infix* | `(Address -> R) -> (Address \| __)` |
-| `;` | Infix | `(L -> R) -> (L \| R \| __)` |
-| `\|` | Infix | `(L -> R) -> (L \| R \| __)` |
-| `&` | Infix | `(L -> R) -> (R \| __)` |
-| `==` | Infix | `(L -> R) -> (L \| __)` |
-| `!==` | Infix | `(L -> R) -> (L \| __)` |
+| `#` | Infix* | `(Address -> R) -> (Address \| !_)` |
+| `;` | Infix | `(L -> R) -> (L \| R \| !_)` |
+| `\|` | Infix | `(L -> R) -> (L \| R \| !_)` |
+| `&` | Infix | `(L -> R) -> (R \| !_)` |
+| `==` | Infix | `(L -> R) -> (L \| !_)` |
+| `!==` | Infix | `(L -> R) -> (L \| !_)` |
 | `,` | Infix* | `(L -> R) -> List` |
-| `<` `<=` `=` `>=` `>` `!=` | Infix | `(L(Scalar) -> R(Scalar)) -> (L \| R \| __)` |
+| `<` `<=` `=` `>=` `>` `!=` | Infix | `(L(Scalar) -> R(Scalar)) -> (L \| R \| !_)` |
 | `+` `-` | Infix | `(L(Scalar) -> R(Scalar)) -> L` |
 | `*` `/` `%` | Infix | `(L(Scalar) -> R(Scalar)) -> L` |
 | `^` | Infix* | `(L(Scalar) -> R(Scalar)) -> L` |
@@ -174,4 +174,4 @@ Emits ISA machine instructions by consuming the type ledger.
 
 - **`.st` (Public Signature Files)**: Written to disk upon build completion for exported `#` symbols.
 - **Structural `==` Comparison**: Structural comparison `==` checks Hom-set equivalence (matching fields/properties), independent of constructor names.
-- **Constructor Origin Opt-In (`' !__`)**: Inspects whether an instance originated from a specific constructor binding address (`p ' !__ = $Point`).
+- **Constructor Origin Opt-In (`' _`)**: Inspects whether an instance originated from a specific constructor binding address (`p ' _ = $Point`).

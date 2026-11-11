@@ -49,7 +49,7 @@ AI systems can emit code running on bare metal without OS dependencies, paving t
 | Sign Design Choice | Advantage for AI Code Generation |
 |-------------|-----------------|
 | **Zero Reserved Words** | Eliminates keyword collision risks and reserved keyword checking. |
-| **Unit (`__`) Propagation** | Exception-free, mathematically deterministic semantics. |
+| **Unit (`!_`) Propagation** | Exception-free, mathematically deterministic semantics. |
 | **Linear Type Inference ($O(n)$)** | Syntax tree shape directly resolves types without constraint solvers. |
 | **`layer` Constraints** | Using float literals in `layer < 2` triggers static compile errors. |
 | **`'` Composition Chain** | Multi-dimensional indexing translates to composition of maps. |

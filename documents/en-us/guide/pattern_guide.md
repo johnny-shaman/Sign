@@ -17,7 +17,7 @@
 ```sign
 f : x y ? x + y
 
-` 3 < 2 evaluates to False (__ Unit), so Unit is returned
+` 3 < 2 evaluates to False (!_ Unit), so Unit is returned
 f (3 < 2) 2
 
 g :

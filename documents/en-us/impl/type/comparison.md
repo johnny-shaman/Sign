@@ -9,11 +9,11 @@
 
 ## 1. Overview
 
-Comparison operations in Sign (`<`, `>`, `<=`, `>=`, `=`, `!=`) return concrete values on True and collapse to `__` (Unit) on False.
+Comparison operations in Sign (`<`, `>`, `<=`, `>=`, `=`, `!=`) return concrete values on True and collapse to `!_` (Unit) on False.
 
 > [!NOTE]
 > - `_` (Hole): Syntactic placeholder desugared at compile time.
-> - `__` (Unit): Runtime value representing "absence / falsy".
+> - `!_` (Unit): Runtime value representing "absence / falsy".
 
 Comparison return rules use **Value-Based Algebraic Dispatch** rather than AST syntax inspects, satisfying Referential Transparency while preserving intuitive chained comparisons (`1 < x < 10` returns central term $x$).
 
@@ -25,7 +25,7 @@ For $V = \text{eval}(LHS \text{ op } RHS)$:
 
 $$ V = \begin{cases} 
 \text{select}(LHS, RHS) & (\text{Condition is True}) \\
-\mathbf{1}\ (\text{__}) & (\text{Condition is False})
+\mathbf{1}\ (\text{!_}) & (\text{Condition is False})
 \end{cases} $$
 
 Where:
@@ -54,4 +54,4 @@ Ternary chains (`L < C < R`) parse into dedicated AST nodes: `ChainCompare(L, <,
 1. Validated statically: All operators in chain must be identical.
 2. Validated statically: The operator must be **transitive**, so that `a R b` and `b R c` imply `a R c`. Only `<` `<=` `=` `>=` `>` qualify; **`!=` cannot be chained** (syntax error), since `3 != 5 != 3` satisfies both adjacent pairs while the outer terms are equal. Write `(a != b) & (b != c)` explicitly instead.
 3. If all adjacent comparisons evaluate to True, unconditionally return **Central Term $C$**.
-4. If any comparison evaluates to False, immediately return **`__`** (Unit). Evaluation short-circuits at the first zero morphism, so terms to its right are not evaluated.
+4. If any comparison evaluates to False, immediately return **`!_`** (Unit). Evaluation short-circuits at the first zero morphism, so terms to its right are not evaluated.

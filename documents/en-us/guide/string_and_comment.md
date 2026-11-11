@@ -33,7 +33,7 @@ message  : `Sign is elegant`
 ### Characteristics
 
 - Strings are single-line (cannot span across newline boundaries directly).
-- Empty strings are isomorphic to `__` (Unit).
+- Empty strings are isomorphic to `!_` (Unit).
 - Backticks cannot be directly embedded inside strings (to prevent ambiguity with comment starts).
 
 ---

@@ -38,7 +38,7 @@ The default-argument form ([`function_guide.md`](../../guide/function_guide.md),
 ```sign
 go :
 		acc : 0
-		rest : __
+		rest : !_
 	?
 		(rest) : go (acc + (rest ' 0)) (rest ' 1~)
 		acc
@@ -48,7 +48,7 @@ go :
 |---|---|---|
 | `go :` | 0 | none |
 | `acc : 0` | 2 | `\x02\x02` (opens two levels) |
-| `rest : __` | 2 | none |
+| `rest : !_` | 2 | none |
 | `?` (definition row) | 1 | `\x03` (closes one level, then joins the previous line) |
 | `(rest) : go …` | 2 | `\x02` (opens one level) |
 | `acc` | 2 | none |

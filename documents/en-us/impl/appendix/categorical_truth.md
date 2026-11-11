@@ -11,7 +11,7 @@
 
 This specification details the mathematical foundation of truth values in Sign:
 
-- **Unit (`__`)**: Empty lists and unevaluated lambdas are falsy (`false`).
+- **Unit (`!_`)**: Empty lists and unevaluated lambdas are falsy (`false`).
 - **All other values (including numeric `0`)**: Truthy (`true`).
 
 ---
@@ -32,15 +32,15 @@ Truth values in Sign map directly to SKI combinator structures:
 
 | SKI Combinator | Lambda Equivalent | Sign Construction | Boolean Meaning |
 |:---:|:---:|:---:|:---:|
-| **K** (Left Selector) | $\lambda x. \lambda y. x$ | **Identity Morphism** (`[__ ]` / `!__`) | **True** |
-| **KI** (Right Selector) | $\lambda x. \lambda y. y$ | **Unit** (`__`) | **False** |
+| **K** (Left Selector) | $\lambda x. \lambda y. x$ | **Identity Morphism** (`[!_ ]` / `_`) | **True** |
+| **KI** (Right Selector) | $\lambda x. \lambda y. y$ | **Unit** (`!_`) | **False** |
 
 ### Negation Operator (`!`) Semantics
 
 Logical negation `!` transforms between Initial and Terminal object morphisms:
 
-- `!__` $\implies$ Evaluates to Identity Morphism `K` (Evaluated Non-Unit True).
-- `!(valid_value)` $\implies$ Collapses to Unit `__` (`KI` False).
+- `_` $\implies$ Evaluates to Identity Morphism `K` (Evaluated Non-Unit True).
+- `!(valid_value)` $\implies$ Collapses to Unit `!_` (`KI` False).
 
 ---
 
@@ -50,10 +50,10 @@ Logical negation `!` transforms between Initial and Terminal object morphisms:
 ` Numeric 0 is truthy; returns x
 0 & x
 
-` Empty list is falsy; returns __
+` Empty list is falsy; returns !_
 [] & x
 
-` Evaluation of invalid comparison collapses to Unit (__)
-` → __
+` Evaluation of invalid comparison collapses to Unit (!_)
+` → !_
 3 < 2
 ```

@@ -48,16 +48,16 @@ $heap_ptr # ...
 
 ---
 
-## Behavior of Literals (`0x00`, `0u00`, `__`) under Pointer Operations
+## Behavior of Literals (`0x00`, `0u00`, `!_`) under Pointer Operations
 
 - **`$` (Address-Of)**:
   - `$0x00`: Returns static `.rodata` slot address of Address literal `0x00`.
   - `$0u00`: Returns static address of Char niche slot.
-  - `$__`: Evaluates to `__` (Unit).
+  - `$_`: Evaluates to `!_` (Unit).
 - **`@` (Dereference)**:
   - `@0x00`: Interprets `0x00` as an address and performs a memory read at `0x00`.
-  - `@0u00`: Causes a type error or collapses to `__`.
-  - `@__`: Collapses to `__` immediately under the Completeness Axiom.
+  - `@0u00`: Causes a type error or collapses to `!_`.
+  - `@!_`: Collapses to `!_` immediately under the Completeness Axiom.
 
 ---
 

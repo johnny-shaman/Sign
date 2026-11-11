@@ -24,16 +24,16 @@
 - Relationships between lifting (construct and expand) and lowering (fold) operators comprehensively determine types.
 - Lowering (folding) operations cast the result to the type of the left-hand operand.
 - Because coproducts can be typed prior to code generation, Sign is a statically typed language.
-- **Convergence of Undefined Identifiers to Unit (`__`)**:  
-  All undefined identifiers evaluate to `__` (empty coproduct / Unit). This foundational design eliminates reserved words and allows arbitrary identifiers as zero-cost virtual keywords or DSL constructs.
+- **Convergence of Undefined Identifiers to Unit (`!_`)**:  
+  All undefined identifiers evaluate to `!_` (empty coproduct / Unit). This foundational design eliminates reserved words and allows arbitrary identifiers as zero-cost virtual keywords or DSL constructs.
 - **Unit Absorption and Asymmetry**: Behaviors match the operator table specifications below.
-- **Clear Distinction between `__` (Immediate Collapse) and `$__` (Lazy Suspend)**:
-  - `__` is the zero object of function application, immediately collapsing the entire expression upon evaluation.
-  - `$__` is the address (reference) of `__`. It is a valid non-Unit value, preventing completeness axiom collapse and representing a suspended state (Promise / Thunk).
+- **Clear Distinction between `!_` (Immediate Collapse) and `$_` (Lazy Suspend)**:
+  - `!_` is the zero object of function application, immediately collapsing the entire expression upon evaluation.
+  - `$_` is the address (reference) of `!_`. It is a valid non-Unit value, preventing completeness axiom collapse and representing a suspended state (Promise / Thunk).
 - **Duality of `$` Depending on Target**:
-  - `$AnonymousExpression` (e.g., `$[x ? x]`, `$!__`): Retrieves the **address of the generated object instance**.
+  - `$AnonymousExpression` (e.g., `$[x ? x]`, `$_`): Retrieves the **address of the generated object instance**.
   - `$NamedIdentifier` (e.g., `$Red`, `$b`): Retrieves the **address of the binding itself**.
-  - **Enum variants must be defined as named lambdas: `Red : !__`**.
+  - **Enum variants must be defined as named lambdas: `Red : _`**.
 - **Type Constructors Must Start with an Uppercase Letter**:
   - Functions starting with an uppercase letter are recognized internally by the compiler as returning a newly defined type.
 
@@ -43,31 +43,31 @@
 
 > [!IMPORTANT]
 > **The "Left Operand is Unit" / "Right Operand is Unit" columns describe the infix forms (operations).**
-> A section or point-free form (`[+]`, `[* 2,]`, `[<]`, …) is a **function**, so if any written argument is `__`
-> the result is `__` by the totality axiom (user ruling 2026-10-05; the exceptions are the point-free forms of the catching `|`: `[|]` and `[| d,]`, below).
-> When no written argument is `__`, a section gives the same value as the infix form (`[[+] 1 2]` is `1 + 2`; a spread argument `xs~` puts its elements in as written arguments,
-> so compare with the infix over the elements); **their values split exactly on `__`**
+> A section or point-free form (`[+]`, `[* 2,]`, `[<]`, …) is a **function**, so if any written argument is `!_`
+> the result is `!_` by the totality axiom (user ruling 2026-10-05; the exceptions are the point-free forms of the catching `|`: `[|]` and `[| d,]`, below).
+> When no written argument is `!_`, a section gives the same value as the infix form (`[[+] 1 2]` is `1 + 2`; a spread argument `xs~` puts its elements in as written arguments,
+> so compare with the infix over the elements); **their values split exactly on `!_`**
 > (ja-jp `kan_extensions.md` §3.7.4):
 >
-> - `1 + __` is `1` (an operation: the meadow unit); `[[+] 1 __]` and `[+] 1 __ 3` are `__` (a function: the totality axiom). `[* 2,] 1 __ 3` is `__` as well; so is a name bound to `__`, `$__` (the point), or a `__` that arrives at run time
-> - A `__` written inside a literal container vanishes when the container is built (`[+] [1 __ 3]` is `4`). The function-position rule is unchanged (`(add __) 3` is `3`, `add __ 3` is `__`)
-> - The logical folds (2026-10-06): `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument (`[&] 1 2 3` is `3`, `[&] 1 __ 3` is `__`). `[|]` ("at least one true") alone is an exception: it returns the leftmost argument that is not `__`, and is `__` only when every argument is `__` (`[|] __ 5` is `5`, `[|] 3 5` is `3`). Over a literal container, `[|] [a b c]` is the first, `[&] [a b c]` the last, an empty one `__`
+> - `1 + !_` is `1` (an operation: the meadow unit); `[[+] 1 !_]` and `[+] 1 !_ 3` are `!_` (a function: the totality axiom). `[* 2,] 1 !_ 3` is `!_` as well; so is a name bound to `!_`, `$_` (the point), or a `!_` that arrives at run time
+> - A `!_` written inside a literal container vanishes when the container is built (`[+] [1 !_ 3]` is `4`). The function-position rule is unchanged (`(add !_) 3` is `3`, `add !_ 3` is `!_`)
+> - The logical folds (2026-10-06): `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument (`[&] 1 2 3` is `3`, `[&] 1 !_ 3` is `!_`). `[|]` ("at least one true") alone is an exception: it returns the leftmost argument that is not `!_`, and is `!_` only when every argument is `!_` (`[|] !_ 5` is `5`, `[|] 3 5` is `3`). Over a literal container, `[|] [a b c]` is the first, `[&] [a b c]` the last, an empty one `!_`
 > - Being a function, a section does not short-circuit (2026-10-06): every written argument is evaluated once, in the written order (`[|] 5 (w p 7)` evaluates `w p 7` too; the infix `5 | (w p 7)` does not evaluate the right side)
-> - A spread of `__` is an empty spread and adds no argument (2026-10-06): `[+] 1 __~ 3` is `4`
-> - A map whose element operation is the catching `|`, `[| d,]`, shares the `[|]` exception (2026-10-07): it catches `__` element by element (`[| 0,] 1 __ 3` is `[1 0 3]`). Every other map follows the axiom (`[& 0,] 1 __ 3` is `__`)
+> - A spread of `!_` is an empty spread and adds no argument (2026-10-06): `[+] 1 !_~ 3` is `4`
+> - A map whose element operation is the catching `|`, `[| d,]`, shares the `[|]` exception (2026-10-07): it catches `!_` element by element (`[| 0,] 1 !_ 3` is `[1 0 3]`). Every other map follows the axiom (`[& 0,] 1 !_ 3` is `!_`)
 
 | Precedence | Symbol | Position & Type Combinations | Function | Natural Meaning | Operational Semantics | Left Operand is Unit | Right Operand is Unit |
 | :---------: | :------: | :------: | :------: | ----------- | ------------- | ---------- | ---------- |
 | 1 | `#` | Prefix* | export | Hashtag (Discoverable) | Makes name discoverable internally within project | / | Exports Unit |
 | 1 | `##` | Prefix* | export | Hashtag (Discoverable) | Makes name discoverable externally (ARC compatible) | / | Exports Unit |
 | 1 | `###` | Prefix* | export | Hashtag (Discoverable) | Makes name discoverable externally (Pinned memory) | / | Exports Unit |
-| 2 | `:` | Infix* | define | Namely ($A \implies B$) | Binds left-hand name/condition to right-hand expression | Absorbing | `identifier : __` is valid definition |
+| 2 | `:` | Infix* | define | Namely ($A \implies B$) | Binds left-hand name/condition to right-hand expression | Absorbing | `identifier : !_` is valid definition |
 | 3 | `?` | Infix* | lambda | Question (How to?) | Function definition | Parameterless function | Can define function returning Unit |
-| 4 | `#` | Infix* | output | Hashtag (Store) | Stores data to address, returns address on success | Returns Unit | `0x00 # __` does nothing, returns address |
+| 4 | `#` | Infix* | output | Hashtag (Store) | Stores data to address, returns address on success | Returns Unit | `0x00 # !_` does nothing, returns address |
 | 5 | `;` | Infix | xor | Exclusive | Exclusive OR | Right operand $X$ (Identity) | Left operand $X$ (Identity) |
 | 6 | `\|` | Infix | or | Or (Passage) | Logical OR (Short-circuit) | Right operand $X$ (Identity) | Left operand $X$ (Short-circuit) |
-| 7 | `&` | Infix | and | And (Combine) | Logical AND (Short-circuit) | `__` (Short-circuit) | `__` (Absorbing) |
-| 8 | `==` | Infix | equal | Equal | Structural equality | `__` (Absorbing) | `__` (Absorbing) |
+| 7 | `&` | Infix | and | And (Combine) | Logical AND (Short-circuit) | `!_` (Short-circuit) | `!_` (Absorbing) |
+| 8 | `==` | Infix | equal | Equal | Structural equality | `!_` (Absorbing) | `!_` (Absorbing) |
 | 8 | `!==` | Infix | xnot_equal | Not equal | Structural inequality | Right operand $X$ (Identity) | Left operand $X$ (Identity) |
 | 9 | `,` | Infix* | product | Product (Structural) | Right-associative list construction | Identity | Identity |
 | 10.0 | ` ` | `Atom \| List \| Struct` Infix `Atom \| List \| Struct` | construct | Juxtapose | Structural construction | Identity | Identity |
@@ -83,25 +83,25 @@
 | 12 | `>=` | Infix | more_equal | Greater or equal | Comparison | Absorbing | Absorbing |
 | 12 | `>` | Infix | more | Greater than | Comparison | Absorbing | Absorbing |
 | 12 | `!=` | Infix | not_equal | Not equal | Comparison | Identity | Identity |
-| 13 | `+` | Infix | add | Addition | Arithmetic | `__` (Absorbing) | Left operand $X$ |
-| 13 | `-` | Infix | sub | Subtraction | Arithmetic | `__` (Absorbing) | Left operand $X$ |
-| 14 | `*` | Infix | mul | Multiplication | Arithmetic | `__` (Absorbing) | Left operand $X$ |
-| 14 | `/` | Infix | div | Division | Arithmetic | `__` (Absorbing) | Left operand $X$ |
-| 14 | `%` | Infix | mod | Modulo | Arithmetic | `__` (Absorbing) | Left operand $X$ |
-| 15 | `^` | Infix* | pow | Exponentiation | Exponentiation | `__` (Absorbing) | Left operand $X$ |
+| 13 | `+` | Infix | add | Addition | Arithmetic | `!_` (Absorbing) | Left operand $X$ |
+| 13 | `-` | Infix | sub | Subtraction | Arithmetic | `!_` (Absorbing) | Left operand $X$ |
+| 14 | `*` | Infix | mul | Multiplication | Arithmetic | `!_` (Absorbing) | Left operand $X$ |
+| 14 | `/` | Infix | div | Division | Arithmetic | `!_` (Absorbing) | Left operand $X$ |
+| 14 | `%` | Infix | mod | Modulo | Arithmetic | `!_` (Absorbing) | Left operand $X$ |
+| 15 | `^` | Infix* | pow | Exponentiation | Exponentiation | `!_` (Absorbing) | Left operand $X$ |
 | 16 | `\|...\|` | Enclosing | abs | Absolute value | Absolute value | / | Absorbing |
 | 17 | `'` | Infix | get | Possessive | Access value from structure | Absorbing | Absorbing |
 | 17 | `@` | Infix* | get | At | Access value from structure | Absorbing | Absorbing |
-| 18 | `<<` | Infix | Bitwise Left Shift | Bitwise Left Shift | Bitwise Left Shift | `__` (Absorbing) | Left operand $X$ |
-| 18 | `>>` | Infix | Bitwise Right Shift | Bitwise Right Shift | Bitwise Right Shift | `__` (Absorbing) | Left operand $X$ |
-| 19 | `\|\|` | Infix | Bitwise OR | Bitmask | Bitwise OR | `__` (Absorbing) | Left operand $X$ |
-| 20 | `;;` | Infix | Bitwise XOR | Bitmask | Bitwise XOR | `__` (Absorbing) | Left operand $X$ |
-| 21 | `&&` | Infix | Bitwise AND | Bitmask | Bitwise AND | `__` (Absorbing) | Left operand $X$ |
+| 18 | `<<` | Infix | Bitwise Left Shift | Bitwise Left Shift | Bitwise Left Shift | `!_` (Absorbing) | Left operand $X$ |
+| 18 | `>>` | Infix | Bitwise Right Shift | Bitwise Right Shift | Bitwise Right Shift | `!_` (Absorbing) | Left operand $X$ |
+| 19 | `\|\|` | Infix | Bitwise OR | Bitmask | Bitwise OR | `!_` (Absorbing) | Left operand $X$ |
+| 20 | `;;` | Infix | Bitwise XOR | Bitmask | Bitwise XOR | `!_` (Absorbing) | Left operand $X$ |
+| 21 | `&&` | Infix | Bitwise AND | Bitmask | Bitwise AND | `!_` (Absorbing) | Left operand $X$ |
 | 22 | `!` | Postfix | factorial | Factorial | Factorial operation | Absorbing | / |
 | 22 * | `~` | Postfix | expand | Spread | Expansion / Splat | Absorbing | / |
 | 23 * | `~` | Prefix* | continuous | Sequence | Continuous list construction | / | Absorbing |
 | 23 | `!` | Prefix* | not | Negation | Logical negation | / | Identity morphism (Evaluated Non-Unit True) |
-| 23 | `$` | Prefix* | address | Value abstraction | Retrieve address | / | Address of `__` is retrievable |
+| 23 | `$` | Prefix* | address | Value abstraction | Retrieve address | / | Address of `!_` is retrievable |
 | 23 | `@` | Prefix* | input | At | Read data from address | / | Absorbing |
 | 23 | `!!` | Prefix* | Bitwise NOT | Bitwise inversion | Bitwise NOT | / | Absorbing |
 | 24 | `@` | Postfix | import | At | Import module from file path | Absorbing | / |

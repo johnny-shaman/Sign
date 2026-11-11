@@ -154,7 +154,7 @@ _ 1, 2, 3 == 1
 ` The above desugaring transforms to short-circuit logic: `
 ` Crucial rule: `
 ` 0 is True (valid value) `
-` _, empty list, and unevaluated functions are False (__ Unit) `
+` _, empty list, and unevaluated functions are False (!_ Unit) `
 
 [ x ?
 	x = 0 |

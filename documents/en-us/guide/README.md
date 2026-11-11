@@ -27,7 +27,7 @@ When in doubt, return to these 6 fundamental definitions:
 
 | Symbol | Semantics | Example |
 |------|------|----|
-| `__` | Unit (Identity element in coproduct) | `__ 5 = 5` |
+| `!_` | Unit (Identity element in coproduct) | `!_ 5 = 5` |
 | `_` | Hole (Placeholder for partial application) | `f _ 3 = $p0 ? f $p0 3` |
 | Space | Coproduct (Function composition, application, list construction) | `f g x = g(f(x))` |
 | `,` | Product (Structural list construction) | `1, 2, 3` |
