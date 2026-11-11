@@ -76,6 +76,9 @@ impl/
 > [!NOTE]
 > Below is a high-level mapping diagram corresponding to pipeline passes. For exact specifications of Compiler Passes 1–4, see [`type/type_system.md` §5](type/type_system.md) and [`core/compiler_pipeline.md`](core/compiler_pipeline.md).
 
+> [!WARNING]
+> **Old spec** (user 2026-11-11). In the diagram below, `reverse_apply` in the Pass 2 line (reading a function written after a value as reverse application) is not the current spec. Reverse application was abolished (user 2026-10-23, alpha1 R47). A function written after a value no longer takes that value; it is stacked and takes the following terms from the right. The rest of the diagram is outside this mark.
+
 ```
 .sn Source Files
   ↓

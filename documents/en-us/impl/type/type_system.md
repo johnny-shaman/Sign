@@ -99,7 +99,7 @@ After resolving Layer 1 Structural Types, space juxtaposition resolves into one 
 |:---:|:---:|:---:|---|---|
 | 10.5 | `Lambda` | `Lambda` | `compose` (Function composition) | $\text{Lambda}(A \to B) \to \text{Lambda}$ |
 | 10.4 | `Lambda` | `Atom` | `apply` (Function application) | $\text{Lambda}(A \to B) \to B$ |
-| 10.3 | `Atom` | `Lambda` | `apply_reverse` (Reverse application) | $\text{Lambda}(A \to B) \to B$ |
+| 10.3 | `Atom` | `Lambda` | ~~`apply_reverse` (Reverse application)~~ | $\text{Lambda}(A \to B) \to B$ (old spec: this row's reading and its typing rule; reverse application abolished, alpha1 R47) |
 | 10.0 | `Atom` | `Atom` | `concat` (List / Tuple concatenation) | $\text{Atom} \to \text{List}$ |
 
 ### 3.2 Left-Hand Priority Rule (Layer 2 Dependent)
@@ -160,7 +160,7 @@ Functions with declared default arguments represent an exception: passing `!_` t
 Scans source linearly to collect structural types (`Lambda` vs `Atom`) and parameter arities for all identifiers into an in-memory `.ist` table.
 
 ### Pass 2: Coproduct Space Resolution
-Resolves space juxtaposition into `compose`, `apply`, `apply_reverse`, or `concat` AST nodes based on Pass 1 categories.
+Resolves space juxtaposition into `compose`, `apply`, ~~`apply_reverse`~~ (old spec: reverse application abolished, alpha1 R47), or `concat` AST nodes based on Pass 1 categories.
 
 ### Pass 3: Layer 2 Atom Type Propagation
 Propagates concrete Layer 2 Atom subtypes across AST nodes using Left-Hand Priority rules.

@@ -851,7 +851,7 @@ Layer 1 の構造型が確定した後、スペース演算子は以下の4つ�
 |:---:|:---:|:---:|---|---|
 | 10.3 | `Lambda` | `Lambda` | compose（合成） | `Lambda(A→B) → Lambda` |
 | 10.2 | `Lambda` | `Atom` | apply（適用） | `Lambda(A→B) → B \| Lambda` |
-| 10.1 | `Atom` | `Lambda` | apply_reverse（逆適用） | `Lambda(A→B) → B \| Lambda` |
+| 10.1 | `Atom` | `Lambda` | ~~apply_reverse（逆適用）~~ | ~~`Lambda(A→B) → B \| Lambda`~~（旧仕様：逆適用は廃止、alpha1 の R47） |
 | 10.0 | `Atom` | `Atom` | concat（連接） | `Atom → List` |
 
 > [!IMPORTANT]
@@ -2036,6 +2036,9 @@ for each `pending` (generic) function f:
 ### Pass 2: 余積（スペース）の解決
 
 完全な識別子テーブルを用いて、スペース演算子のセマンティクスを確定し、ASTを2分木に変換します。
+
+> [!WARNING]
+> **旧仕様**（利用者 2026-11-11）。下のコードの最初の if の行（`catL` が `'Atom'` で `catR` が `'Lambda'` の枝）の行き先 `→ apply_reverse`（値の後ろの関数を逆適用に読む）は、今の仕様ではない。逆適用は廃止した（利用者 2026-10-23、alpha1 の R47）。今は、値の後ろの関数はその値を取らず、積まれて後ろの項を右から受ける。この枝を今どう書くかは、ここでは決めない。ほかの3つの枝はこの印の外。
 
 ```
 for each space between L and R:

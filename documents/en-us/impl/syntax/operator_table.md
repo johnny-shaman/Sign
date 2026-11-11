@@ -74,7 +74,7 @@
 | 10.0 | ` ` | `Atom \| List \| Struct` Infix `Atom \| List \| Struct` | construct | Juxtapose | Structural construction | Identity | Identity |
 | 10.1 | ` ` | `Atom \| List~` Infix `Atom \| List~` | push / unshift | Juxtapose | Prepend / Append to list | Identity | Identity |
 | 10.2 | ` ` | `List~ \| Struct~` Infix `List~ \| Struct~` | concat | Juxtapose | Concatenate list / struct | Identity | Identity |
-| 10.3 | ` ` | `Atom \| List \| Struct` Infix `Lambda` | apply | Reverse apply | Function application | Identity | Identity |
+| 10.3 | ` ` | `Atom \| List \| Struct` Infix `Lambda` | ~~apply~~ | ~~Reverse apply~~ | ~~Function application~~ (old spec: reverse application abolished, alpha1 R47; the two Unit columns are not decided here) | Identity | Identity |
 | 10.4 | ` ` | `Lambda` Infix `Atom \| List \| Struct` | apply | Apply | Function application | Identity | Identity |
 | 10.5 | ` ` | `Lambda` Infix `Lambda` | compose | Left-associative composition | Function composition | Identity | Identity |
 | 11 | `~` | Infix | range | Around | Range list construction | Absorbing | Absorbing |

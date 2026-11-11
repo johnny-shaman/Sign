@@ -100,6 +100,8 @@ export const OPERATOR_TYPES = {
   'concat': (L, R) => ({ type: 'List', elements: [L, R] }),
   'compose': (L, R) => ({ type: 'Lambda', returns: L?.returns || { type: 'Compose', left: L, right: R } }),
   'apply': (L, R) => L?.returns || { type: 'Apply', left: L, right: R },
+  // 旧仕様（利用者 2026-11-11）：次の行の apply_reverse（逆適用）は廃止した（利用者 2026-10-23、alpha1 の R47）。
+  // 今は、値の後ろの関数はその値を取らず、積まれて後ろの項を右から受ける。
   'apply_reverse': (L, R) => R?.returns || { type: 'Apply', left: R, right: L },
   '~': (L, R) => (L === 'Scalar' || L === 'Iterator') && R === 'Scalar' ? 'Stream' : 'Unit',
   '~-': (L, R) => L === 'Scalar' && R === 'Scalar' ? 'Iterator' : 'Unit',

@@ -77,7 +77,7 @@
 | 10.0 | ` ` | `Atom \| List \| Struct` Infix `Atom \| List \| Struct` | construct | Juxtapose | Structural construction | Identity | Identity |
 | 10.1 | ` ` | `Atom \| List~` Infix `Atom \| List~` | push / unshift | Juxtapose | Prepend / Append to list | Identity | Identity |
 | 10.2 | ` ` | `List~ \| Struct~` Infix `List~ \| Struct~` | concat | Juxtapose | Concatenate list / struct | Identity | Identity |
-| 10.3 | ` ` | `Atom \| List \| Struct` Infix `Lambda` | apply | Reverse apply | Function application | Identity | Identity |
+| 10.3 | ` ` | `Atom \| List \| Struct` Infix `Lambda` | ~~apply~~ | ~~Reverse apply~~ | ~~Function application~~ (old spec: reverse application abolished, alpha1 R47; the two Unit columns are not decided here) | Identity | Identity |
 | 10.4 | ` ` | `Lambda` Infix `Atom \| List \| Struct` | apply | Apply | Function application | Identity | Identity |
 | 10.5 | ` ` | `Lambda` Infix `Lambda` | compose | Left-associative composition | Function composition | Identity | Identity |
 | 11 | `~` | Infix | range | Around | Range list construction | Absorbing | Absorbing |
@@ -160,7 +160,7 @@
   a : 0 @ m
   b : m ' 1
   ```
-- **Do not put postfix `~` on the container side of get (the left of infix `'`, the right of infix `@`) (syntax error).** In `p~ ' 0` the `~` opens the container and spreads its contents into a receiver, so after the spread there is no single container left to index ([`list_model.md`](../impl/type/list_model.md) §5.3: spreading only means something where a receiver takes it). It is refused for the same reason as the receiver form `x~ f` ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4). To index the container, write `p ' 0`. **A `~` on the key side (the right of infix `'`, the left of infix `@`) is valid**, but the spelling alone decides which of three readings you get.
+- **Do not put postfix `~` on the container side of get (the left of infix `'`, the right of infix `@`) (syntax error).** In `p~ ' 0` the `~` opens the container and spreads its contents into a receiver, so after the spread there is no single container left to index ([`list_model.md`](../impl/type/list_model.md) §5.3: spreading only means something where a receiver takes it). ~~It is refused for the same reason as the receiver form `x~ f`~~ (old spec: reverse application abolished, alpha1 R47; the Principle 4 citation right after it is outside this mark) ([`0_design_principles.md`](../impl/0_design_principles.md) Principle 4). To index the container, write `p ' 0`. **A `~` on the key side (the right of infix `'`, the left of infix `@`) is valid**, but the spelling alone decides which of three readings you get.
 
   - **A literal with postfix `~` (`s ' 1~`, `1~ @ s`) is a slice** — from there to the end. The contents of a literal are the literal itself, so "take the contents" is the identity on it and only the spreading reading is left. Pass 2 flattens it to `1 ~+ 1`.
   - **An identifier or expression with postfix `~` (`l ' i~`, `i~ @ l`) takes the contents** — it uses what `i` holds as the key and pulls out one element. It flattens to **the same node** as prefix `@` (`l ' @i`), so the two are indistinguishable in the tree.

@@ -13,7 +13,7 @@ This document defines the deterministic algorithm that reduces flat space-separa
 
 ## 1. Overview
 
-In Sign, space juxtaposition represents a **Coproduct**, which reduces to `reverse_apply`, `apply`, `compose`, or `concat` based on operand type categories.
+In Sign, space juxtaposition represents a **Coproduct**, which reduces to ~~`reverse_apply`,~~ (old spec: reverse application abolished, alpha1 R47) `apply`, `compose`, or `concat` based on operand type categories.
 
 Constructing ASTs prior to Hindley-Milner type inference avoids circular dependency deadlocks by using **pre-inference type categories (`Lambda` vs `Atom`)** attached to nodes during parsing.
 
@@ -43,7 +43,7 @@ Juxtaposed pairs `(LHS, RHS)` reduce to these nodes:
 | :--- | :--- | :--- | :--- | :--- |
 | **10.5** | `Lambda` | `Lambda` | `compose` | Function composition |
 | **10.4** | `Lambda` | `Atom` | `apply` | Function application |
-| **10.3** | `Atom` | `Lambda` | `apply` (operands swapped) | Reverse application; see §3.1 |
+| **10.3** | `Atom` | `Lambda` | ~~`apply` (operands swapped)~~ | ~~Reverse application; see §3.1~~ (old spec: reverse application abolished, alpha1 R47) |
 | **10.2** | `Atom \| List \| Struct` | `List~ \| Struct~` | `concat` | Splice the right side in |
 | **10.1** | `Atom \| List \| Struct` | `Atom \| List \| Struct` | `unshift` | Add the right side as one element |
 | **10.0** | `Atom` | `Atom` | `construct` | Coproduct (list construction) |
@@ -76,7 +76,7 @@ Innermost first:
 | 2 | `Lambda` `Atom` | **unsaturated** (still needs one after this) | `apply` |
 | 3 | `Atom` `Atom` | — | `concat` / `unshift` / `construct` (shape decides; 10.2–10.0) |
 | 4 | `Lambda` `Atom` | saturated | `apply` |
-| 5 | `Atom` `Lambda` | point-free excluded (§3.1) | `apply` (operands swapped) |
+| 5 | `Atom` `Lambda` | ~~point-free excluded (§3.1)~~ | ~~`apply` (operands swapped)~~ (old spec: reverse application abolished, alpha1 R47) |
 
 Measured against `alpha/javascript` (trees as produced):
 
@@ -110,7 +110,7 @@ double inc 5 ->  apply(compose(double, inc), 5) = 11   1 settles the composition
 
 For a flat token list `items`:
 
-1. **Walk the phases**: Iterate through the resolution order of §3.0 (1 through 5), not through the `10.x` numbering. Composition is innermost; construction sits inside application.
+1. **Walk the phases**: Iterate through the resolution order of §3.0 (1 through 5; stage 5, reverse application, is old spec: abolished, alpha1 R47), not through the `10.x` numbering. Composition is innermost; construction sits inside application.
 2. **Left-Associative Scan**: Scan adjacent pairs `(items[i], items[i+1])` from left to right.
 3. **Match & Reduce**: On matching category pairs, collapse into a single binary AST node and re-scan from the beginning to preserve left-associativity.
 4. **Convergence**: Scan terminates when `items` reduces to a single root AST node.

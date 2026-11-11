@@ -229,6 +229,9 @@ x ∉ dom(ρ)
 
 source-level space を集合論の literal concatenation として理解してはならない。PEG は一個以上の space を coproduct operator として expression の flat term 列を作り、余積リゾルバーは category pair によって operation を選ぶ。[4] [8]
 
+> [!WARNING]
+> **旧仕様**（利用者 2026-11-11）。下のコードの `⊙(Atom, Lambda)` の行（`apply_reverse` に写す行で、値の後ろの関数を逆適用で読む）は、今の仕様ではない。逆適用は廃止した（利用者 2026-10-23、alpha1 の R47）。今は、値の後ろの関数はその値を取らず、積まれて後ろの項を右から受ける。この対を `⊙` でどう書き直すかは、ここでは決めない。ほかの行はこの印の外。
+
 ```text
 ⊙ : Cat × Cat ⇀ OpName
 
@@ -270,7 +273,7 @@ Sign の記号は、自然言語の読み、圏論的な説明、操作的意味
 |---|---|---|---|---|
 | `!_` | 見える無、空 | 零対象。初対象と終対象の一致。空リストとの同型 | Unit 値。未定義 identifier の収束先。多くの operation の零射または単位元条件を起動する | [2] [5] |
 | `_` | 穴、欠落した引数 slot | 値ではなく compile-time placeholder。`!_` と別 | 静的脱糖の対象。部分適用に関わる | [2] [9] |
-| ` ` as infix | 並べる、連接 | 余積。category pair により射の適用・合成または構造構築へ解釈される | PEG が flat term 列を作り、resolver が `apply` / `apply_reverse` / `compose` / `construct` 等へ縮約する | [4] [5] [8] |
+| ` ` as infix | 並べる、連接 | 余積。category pair により射の適用・合成または構造構築へ解釈される | PEG が flat term 列を作り、resolver が `apply` / ~~`apply_reverse`~~（旧仕様：逆適用は廃止、alpha1 の R47） / `compose` / `construct` 等へ縮約する | [4] [5] [8] |
 | `,` as infix | 積、構造的組み立て | 直積。Unit に対する規則は表の恒等射欄に従う | 右結合の構造構築 | [5] |
 | `:` as infix | 即ち、A ならば B | 名前・条件と右辺を結ぶ binding / definition の構成 | 左辺を右辺 expression へ束縛し、identifier 宣言では型情報も生成する | [1] [5] |
 | `?` as infix | 問いかけ、どうするか | Lambda / 射の構成 | 関数定義。左側は仮引数束縛列、右側は body | [1] [5] [6] |
