@@ -32,7 +32,7 @@ Truth values in Sign map directly to SKI combinator structures:
 
 | SKI Combinator | Lambda Equivalent | Sign Construction | Boolean Meaning |
 |:---:|:---:|:---:|:---:|
-| **K** (Left Selector) | $\lambda x. \lambda y. x$ | **Identity Morphism** (`[!_ ]` / `_`) | **True** |
+| **K** (Left Selector) | $\lambda x. \lambda y. x$ | **Identity Morphism** (~~`[!_ ]`~~ is old spec / `_`) | **True** |
 | **KI** (Right Selector) | $\lambda x. \lambda y. y$ | **Unit** (`!_`) | **False** |
 
 ### Negation Operator (`!`) Semantics
