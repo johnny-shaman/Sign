@@ -8227,7 +8227,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		if (e && e.reason === wantReason && (isName || e.gate === want) && e.line === line) ok(`寄せ3 R133 断る ${name} → ${want} line ${line}`);
 		else fail(`寄せ3 R133 断る ${name}`, !e ? "断るはずが通った" : `got: ${e.reason} ${e.gate || ""} line ${e.line}  want: ${want} line ${line}`, e ? String(e.message) : "");
 	}
-	// α 同値の錨（R133 の帰結、law_map 法則47）：仮引数 N を外の名前にしても、新しい名前 qq にしても、木・種類・断り・行・ほかの診断が同じ（name-shadow の知らせだけが
+	// α 同値の錨（R133 の帰結、coproduct_laws.test.js の法則47）：仮引数 N を外の名前にしても、新しい名前 qq にしても、木・種類・断り・行・ほかの診断が同じ（name-shadow の知らせだけが
 	// 増える）。前（寄せ3 の前の作り）は名前を範囲で引かない所が4つあり、断りを外すだけだと次の形で割れた（並べ方の依存・黙った通り・偽の断り）。寄せ3 の確かめで
 	// 5つ目（既定値の G22 の範囲、unitDefaultParam）が見つかり、R103 の2つの守り（既定値の行の右の前の仮引数・仮引数のある関数を運びうる側に数える）は錨が無かった。
 	// [名前, N のソース, 外の名前, 答え]。答えは「ERR reason 門 行」か「OK 最後の木 種類 [ほかの診断]」。
@@ -8892,7 +8892,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		else ok(label);
 	}
 }
-// 黙った誤答の組の片6（2026-11-07、誤6。R136・R110 の R の所、law_map 法則47）：R110 の当たる項の見分け（appliedResult）と、括りの口に渡る文字の数を数える所
+// 黙った誤答の組の片6（2026-11-07、誤6。R136・R110 の R の所、coproduct_laws.test.js の法則47）：R110 の当たる項の見分け（appliedResult）と、括りの口に渡る文字の数を数える所
 // （stringLengthThrough）も、値の定義の右辺はファイルの範囲で読む（mayBeFunction・aliasOfUndefined と同じ）。前は使う所の範囲で読み、使う所の仮引数が右辺の名前と
 // 同じ綴り（外の名前 w0）だと、木（`(apply w1 _)`）と bracket-excess の知らせが変わった。仮引数を q にした形と、name-shadow の知らせのほかは同じ答え。
 // R110 の当たる項の見分け（appliedResult）の2行（本体の `⇥w1 !_`）は、2026-11-08 の R138 で外した（R110 は廃止、書いた `!_` は読む段の void-written）。残るのは文字の数の
