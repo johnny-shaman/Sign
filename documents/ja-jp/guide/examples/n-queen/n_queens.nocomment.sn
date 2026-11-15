@@ -1,19 +1,12 @@
-conflict : col dist [h ~t] ?
-	h = col | h - col = dist | col - h = dist | conflict col (dist + 1) t
+ix : k m ? (k < m) & (k (ix (k + 1) m)~)
 
-try_col : col row n [~board] ?
-	col > n : _
-	conflict col 1 board : try_col (col + 1) row n board
-	(place (row + 1) n (col board~)) | try_col (col + 1) row n board
+safe : c d p [x ~t] ?
+	|c - x| > d | |c - x| < d :
+		d = p : c
+		safe c d + 1 p t
 
-place : row n [~board] ?
-	row > n : board
-	try_col 1 row n board
+place : n m k [~qs] [c ~r] ?
+	m = n | safe c 1 n - m qs : (m < 2 & (c qs~)) | (place n (m - 1) (m - 1) (c qs~) r)
+	k > 1 : place n m (k - 1) qs (r~ c)
 
-first_row : col n ?
-	col > n : _
-	(place 2 n col) | first_row (col + 1) n
-
-solve : n ? first_row 1 n
-
-solve 8
+nqueens : n ? place n n n (ix 0 0) (ix 0 n)
