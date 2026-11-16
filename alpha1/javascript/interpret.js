@@ -41,6 +41,16 @@ export class Fn {
   }
 }
 
+// id（恒等射の項、仕様 R74。V2）：書いた `_`・`i : _` の i・それを括った物・それどうしの合成。口は並び全体で、受けた物をそのまま返す（本体は無く、applyStep が流す）。
+// 値は1つ（ID_FN）で、合成は単位律で id の段を落とす（composeFn。`inc i inc` は `inc inc`、`i i` は id。仕様 R74）。
+const ID_F = { name: "_", params: ["x"], id: true };
+const ID_FN = new Fn([{ f: ID_F, recv: [] }]);
+const isIdFn = (v) => v instanceof Fn && v.stages.length === 1 && v.stages[0].f === ID_F;
+function composeFn(a, b) {
+  const stages = [...a.stages, ...b.stages].filter((s) => s.f !== ID_F);
+  return stages.length ? new Fn(stages) : ID_FN;
+}
+
 // 本体の返す所の、最後の1歩が呼び出しになる形（V10 の末尾呼び出し）。呼んだ側のループが受けて回す。
 // orElse は「呼んだ答えが `!_` なら、この所の答えはこの関数」（括りの中の `,`・`|`・`;` で、単位律が関数1つを残す形。11-04、2026-11-07 の誤2・誤4）。
 // 残った関数が `!_` になる所（"tail"）では要らないので evalRow が外し、callFn のループは見ない。後ろに項が続いて呼ぶ所（callPending）だけが当てる。
@@ -327,23 +337,49 @@ function* evalRow(cx, row, env, line, place) {
       const tail = isTail(place);
       const stack = [];
       let pending = null;
+      // 取っておいた呼び出しの後ろに id が来たか（2026-11-16、恒等射の片）。呼んだ答えは関数にならない（TailCall の注）ので、答えの後ろの id は根と同じく
+      // 値の後ろの関数（置かれた所の終わりで `!_`、括りの中なら答えが `!_` の時に id が残る）。`cd (q - 1) _` も返す所の呼び出し（V10）。
+      let idAfter = false;
       for (const t of row.terms) {
-        let v = termNow(cx, t, env, line);
-        if (v === NEED) v = yield evalTerm(cx, t, env, line, tail && !stack.length && !pending ? "tailkeep" : "keep");
-        if (v instanceof TailCall) {
-          pending = v; // 並びが空の所の括りの中の最後の呼び出し
-          continue;
-        }
-        if (v === UNIT) continue;
-        if (pending) {
+        // 取っておいた呼び出しが、答えが `!_` の時に関数を残す（orElse）なら、書いた `_` の前に呼ぶ（その関数の口を `_` が埋めるかを、根と同じく下で見る）。
+        if (pending && pending.orElse && isIdAtom(t)) {
           const c = yield callPending(cx, pending);
           pending = null;
           if (stepNow(cx, stack, c, line) === NEED) yield applyStep(cx, stack, c, line, false);
         }
+        // 関数の口を埋める書いた `_` は穴（仕様 R16・R34、解2 の片で V12 のまだ）。口の数の決まった関数に口が1つだけ残っている所は、穴と読んでも恒等射と読んでも
+        // 同じ関数なので（仕様 R46）、恒等射として合成する（単位律で消える。`inc _ 5` は 6）。
+        if (isIdAtom(t) && stack.length && stack[stack.length - 1] instanceof Fn && !onePort(stack[stack.length - 1])) throw notYet("穴 `_`（素の関数の口を埋める書いた `_`。解2 の片）", line);
+        let v = termNow(cx, t, env, line);
+        // 返す所の括りの中の最後の呼び出しは、並びが空か、頭が id だけの所（`_ (cd (q - 1))`。id は受けた物をそのまま返す、R74）なら取っておける。
+        const headId = stack.length === 1 && isIdFn(stack[0]);
+        if (v === NEED) v = yield evalTerm(cx, t, env, line, tail && !pending && (!stack.length || headId) ? "tailkeep" : "keep");
+        if (v instanceof TailCall) {
+          // 並びが空の所の括りの中の最後の呼び出し。頭の id は答えの前で消える（答えが `!_` なら id が残る、根の `_ !_` と同じ）。
+          if (stack.length) {
+            stack.pop();
+            if (!v.orElse) v = new TailCall(v.f, v.args, v.line, ID_FN);
+          }
+          pending = v;
+          continue;
+        }
+        if (v === UNIT) continue;
+        if (pending && !pending.orElse && isIdFn(v)) {
+          idAfter = true;
+          continue;
+        }
+        if (pending) {
+          const c = yield callPending(cx, pending);
+          pending = null;
+          if (stepNow(cx, stack, c, line) === NEED) yield applyStep(cx, stack, c, line, false);
+          if (idAfter) stepNow(cx, stack, ID_FN, line);
+          idAfter = false;
+        }
         pending = stepNow(cx, stack, v, line);
         if (pending === NEED) pending = yield applyStep(cx, stack, v, line, tail);
       }
-      r = pending || close(stack, place);
+      // 答えの後ろの id は、答えが値なら置かれた所の終わりで落ち、`!_` なら id が残る（括りの中。根・返す所では `!_`）。
+      r = pending ? (idAfter ? new TailCall(pending.f, pending.args, pending.line, ID_FN) : pending) : close(stack, place);
     } else r = yield rowOf(cx, row, env, line, place);
     // "tail" は評価する所なので、残った関数は `!_`（V4）。呼んだ答えが `!_` の時の関数（orElse）は要らない（外さないと、`&` の右を通った括りの関数が残る）。
     return r instanceof TailCall && r.orElse && place === "tail" ? new TailCall(r.f, r.args, r.line) : r;
@@ -385,6 +421,8 @@ function* rowOf(cx, row, env, line, place) {
   }
 }
 
+// 関数 f の口が、ちょうど1つ残っているか（仕様 R46。id の口は並び全体なので数えない）。
+const onePort = (f) => f.stages[0].f !== ID_F && f.stages[0].f.params.length - f.stages[0].recv.length === 1;
 // 比べ・論理の被演算子は評価する所（R76）：呼ぶ所で `valueOf(yield evalRow(…, "eval"), line)`（前の sideValue。生成器を1つ減らすため開いた）。
 const spread = (v) => (v === UNIT ? [] : [v]);
 const isTail = (place) => place === "tail" || place === "tailkeep";
@@ -404,6 +442,7 @@ function* orKeep(cx, row, env, line, place) {
   const r = yield evalRow(cx, row.right, env, line, place);
   if (r instanceof TailCall) return new TailCall(r.f, r.args, r.line, r.orElse ? null : l[0]);
   if (!r.length) return l;
+  // 両方とも丸ごとの関数なら、どちらも `!_`（V7 の字面）。id もほかの関数と同じ（2026-11-16、恒等射の片：`(_ | inc) 5`・`(inc | i) 5` は 5）。
   return lone(r) ? [] : asSide(r, line);
 }
 
@@ -467,6 +506,8 @@ function* product(cx, row, env, line, place) {
       pending = s;
       continue;
     }
+    // `!_` の辺は積の単位で消える（取っておいた呼び出しも呼ばない）。辺に丸ごと立った id は、ほかの丸ごとの関数と同じ辺（2026-11-16、恒等射の片。U「関数に演算子が
+    // 当ってる段階で !_」）：`,` が残れば `!_`（R123）で消え、1つだけ残れば行の置かれた所のまま（`(i i , inc) 5` は 5、`w : _ , (3 < 2)` の w は id）。
     if (!s.length) continue;
     if (pending) {
       const v = yield callPending(cx, pending);
@@ -507,7 +548,7 @@ function stepNow(cx, stack, v, line) {
   const top = stack[stack.length - 1];
   if (top instanceof Fn) {
     if (v instanceof Fn) {
-      stack[stack.length - 1] = new Fn([...top.stages, ...v.stages]);
+      stack[stack.length - 1] = composeFn(top, v);
       return null;
     }
     return NEED;
@@ -527,8 +568,17 @@ function* applyStep(cx, stack, v, line, tail) {
   let out = UNIT;
   let stages = fn.stages;
   for (;;) {
-    if (v instanceof Seq) throw notYet("並びを関数の口へ渡す形（器の片）", line);
     const [st, ...later] = stages;
+    if (st.f === ID_F) {
+      // id は受けた物をそのまま返す（口は並び全体、V2）。合成は id の段を落とす（composeFn）ので、ふつうは id だけの関数。
+      if (!later.length) {
+        out = v;
+        break;
+      }
+      stages = later;
+      continue;
+    }
+    if (v instanceof Seq) throw notYet("並びを関数の口へ渡す形（器の片）", line);
     const recv = [...st.recv, v];
     if (recv.length < st.f.params.length) {
       rest = new Fn([{ f: st.f, recv }, ...later]);
@@ -745,8 +795,9 @@ function* evalTerm(cx, t, env, line, place = "keep") {
     for (let k = 0; k < t.pre.length; k++) {
       const p = t.pre[k];
       if (p === "-") continue;
-      // 書いた恒等射 `_` は、内部ではいちばん内側に前置 `!` を持つ（読む段の tokenize が足した物で、書いた印ではない。resolve.js の seatRows の注）。
-      if (k === t.pre.length - 1 && t.core.c === "unit" && t.core.nId) throw notYet("恒等射 `_` の評価", line);
+      // 書いた恒等射 `_` は、内部ではいちばん内側に前置 `!` を持つ（読む段の tokenize が足した物で、書いた印ではない。resolve.js の seatRows の注）。値は id（V2）。
+      // 値の印を当てた形（`-_`）は上の idMarked が先に返すので、ここに来るのは印の無い `_` だけ。
+      if (k === t.pre.length - 1 && t.core.c === "unit" && t.core.nId) return ID_FN;
       throw notYet(`前置の印 \`${p}\``, line);
     }
     // 前置 `-` は、芯の中の演算子が算術の範囲の時だけ（U [2026-10-30 14:47]、渡された仮引数は見ない U〔答え〕14:52「通す」）。読む段がまだ線を引かないので、
