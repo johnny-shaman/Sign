@@ -450,8 +450,8 @@ function* orKeep(cx, row, env, line, place) {
 // 消えた後にも `;` が残れば丸ごとの関数は `!_`（R123）で、それも消える（2026-11-07 の誤4）。評価する所では残った関数は `!_` なので、前と同じ答え。
 // 返す所では、左の最後の呼び出しを取っておき（V10。右が `!_` か関数なら左が答えで、右が関数なら呼んだ答えが `!_` の時にその関数）、
 // 左が `!_` か関数なら右を行の置かれた所のまま（返す所なら返す所）に読む。
-// 辺を関数のまま（keep）読むのは括りの中と定義の右辺だけ。評価する所・返す所の辺は評価する所のまま読む（keep で読むと、`inc , double , add 1 ; 7` の左が
-// Q89 の門に当たって、前は 7 だった答えがまだになる。V7「評価する所では…答えは前と同じ」）。
+// 辺を関数のまま（keep）読むのは括りの中と定義の右辺だけ。評価する所・返す所の辺は評価する所のまま読む（評価する所に丸ごと残った関数は `!_` なので、
+// 辺の関数も `!_` で単位に消える。`inc , double , add 1 ; 7` は 7。V4・V7）。
 function* xorRow(cx, row, env, line, place) {
   const side = isKeep(place) ? "keep" : "eval";
   const l = yield evalRow(cx, row.left, env, line, isKeep(place) ? (isTail(place) ? "tailkeep" : "keep") : place);
@@ -487,11 +487,11 @@ function* sideRow(cx, row, env, line, place) {
 // `,` の積（V4、2026-11-07 の誤2）。括らない `,` の鎖は1つの平らな積で、辺（因子。括った `(…)` は1つの因子）を左から、関数のまま（keep）読む（R121）。
 // 1. 単位律：`!_` の辺は出どころ（書いた・名前・括り・計算・0 除算・`!_` を返す呼び出し）に依らず消える（R61、U 11-04 04:26）。
 // 2. 1つだけ残った辺は行の置かれた所のまま（`w : inc , !_` は inc、根では `!_`）。
-// 3. 2つ以上残れば `,` が残るので、丸ごとの関数は `!_`（R123）で、それも単位で消える（U〔答え〕11-04 06:04）。関数だけが3つ以上残る形は、括りの中と
-//    定義の右辺では仕様 §5 Q89 の答えまでまだ（V12）、評価する所ではどの読みでも `!_`。
-// 返す所では、前の辺が関数だけ（2つまで）の辺の最後の呼び出しを取っておき（evalRow の畳みの pending と同じ）、後ろの辺が全部 `!_` ならそれが行の答え（V10）。
-// 前の関数が3つ以上なら取っておかずに読む（末尾の道が Q89 を黙って答えないように）。取っておいた呼び出しの中の括りが残す関数（orElse）も数える：
-// 返す所の括りの中で、それを足して3つ以上なら、取っておかずに呼んで下の規則（Q89 の門）に当てる（`(inc , double , (add 1 , lz n)) 5` は根と同じまだ）。
+// 3. 2つ以上残れば `,` が残るので、丸ごとの関数は一斉に `!_`（R61 の 2）で、それも単位で消える（U〔答え〕11-04 06:04）。1 に戻って数え直さない（平らな積、
+//    仕様 R61・§5 Q89。関数だけが2つ以上残る鎖は、その数と置かれた所に依らず `!_`：`(inc , double , double) 5` は 5）。
+// 返す所では、前の辺が関数だけの辺の最後の呼び出しを取っておき（evalRow の畳みの pending と同じ）、後ろの辺が全部 `!_` ならそれが行の答え（V10）。
+// 前の関数の数に依らず、行の答えは呼んだ答えそのもの：値なら前の関数は R61 の 2 で消えてその値、`!_` なら残るのは前の関数と中の括りが残す関数（orElse）で、
+// 1つならその関数、2つ以上なら一斉に `!_`（`(inc , double , (add 1 , lz n)) 5` は根と同じ 5）。
 function* product(cx, row, env, line, place) {
   const sides = [];
   let r = row;
@@ -500,7 +500,7 @@ function* product(cx, row, env, line, place) {
   const kept = []; // 消えなかった辺（keep で読んだ並び）
   let pending = null;
   for (const side of sides) {
-    const tailHere = isTail(place) && !pending && kept.length < 3 && kept.every(lone);
+    const tailHere = isTail(place) && !pending && kept.every(lone);
     const s = yield evalRow(cx, side, env, line, tailHere ? "tailkeep" : "keep");
     if (s instanceof TailCall) {
       pending = s;
@@ -517,15 +517,13 @@ function* product(cx, row, env, line, place) {
     kept.push(s);
   }
   if (pending) {
-    // 後ろの辺は全部 `!_`、前の辺は関数だけ。呼んだ答えが `!_` でなければそれが答え（前の関数は R123 で消える）、`!_` なら残るのは関数だけ。
+    // 後ろの辺は全部 `!_`、前の辺は関数だけ。呼んだ答えが `!_` でなければそれが答え（前の関数は R61 の 2 で消える）、`!_` なら残るのは関数だけで、
+    // 1つならその関数（orElse）、2つ以上なら `,` が残るので一斉に `!_`（3）。
     const fns = [...kept.map((s) => s[0]), ...(pending.orElse ? [pending.orElse] : [])];
-    if (fns.length < 3 || !isKeep(place)) return fns.length === 0 ? pending : new TailCall(pending.f, pending.args, pending.line, fns.length === 1 ? fns[0] : null);
-    const v = yield callPending(cx, pending);
-    if (v !== UNIT) kept.push([v]);
+    return fns.length === 0 ? pending : new TailCall(pending.f, pending.args, pending.line, fns.length === 1 ? fns[0] : null);
   }
   if (kept.length <= 1) return close(kept[0] || [], place);
   const vals = kept.filter((s) => !lone(s));
-  if (!vals.length && kept.length >= 3 && isKeep(place)) throw notYet("括らない `,` の鎖で関数だけが3つ以上残る形（仕様 §5 Q89）", line);
   if (vals.length <= 1) return vals[0] || [];
   if (vals.some((s) => s.some((x) => x instanceof Seq))) throw notYet("並びを `,` の辺に置く形（器の片）", line);
   // 4. `,` は段を保つ（V4、2026-11-07 の誤3）。辺が2つ以上の値なら2次元（`1 2 , 3 4` は `[1 2] , [3 4]`）で器の片。門は単位律と R123 の後
