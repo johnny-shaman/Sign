@@ -92,7 +92,7 @@
 | 7 | カリー化・関数の並び・余りの綴りと、括りを開いた綴り | R35・R40・R41・R47 | foldStep・partialFn・renderEntry |
 | 10 | `P S` と `(P) S` と `v : P ⏎ v S` | R40・R52 | foldItems・rowsInfo |
 | 11 | `_ X` と `i X`、`5 _ X` と `5 i X`、`-_ X` と `-i X` | R44・R87・R137・R138 | classify・single・holeStep |
-| 12 | 行 X と `_ , X`・`X , _`・`i , X`・`w , X` | R61・R137 | resolveProduct・productOperand・resolveEvaluatedSide・finishTrees・resolveBlockBody |
+| 12 | `_ , X`・`X , _`・`i , X` と `ff , X`・`X , ff`、行 X と `w , X` | R61・R48・R137 | resolveProduct・productOperand・resolveEvaluatedSide・finishTrees・resolveBlockBody |
 | 13 | `P i S` と恒等射を消した `P S`（根・括り・名前） | R29・R44・R46・R74・R126 | identityGate・reduceFold・withoutIdentity・passStream |
 | 14 | 口の中の `Y _ S` と `Y i S`・`[x ? Y x] S` | R46 | holeStep |
 | 15 | `map $f xs`・`[f,] xs`・`[f,] xs~`、`f xs~` と畳み込み・書き下し | R31・R49・R50・R51 | classifySpread・mapOver・foldOver・elemsOfContainer・foldOneKind |
@@ -100,7 +100,7 @@
 | 17 | `C[$N]` と `C[$[N]]`・`C[$[右辺]]`、`p : $[B]` と `[B]` | R57・R99・R100・R101 | classifyDollar・classifyLift・leftoverUnit・isIdentityKind |
 | 18 | `$lf` と開いた `$[R]`、`$_` と `$[x ? x]` と `$i` | R49・R54・R56・R57・R128 | classifyDollar |
 | 19 | `F G X~` と `g : F G ⏎ g X~`・`(F G) X~`・`h X~` | R51 | streamStep・composedMouths |
-| 20 | `$[X]` と `$[X , _]`・`$[X , wz]`・`$[(X)]` | R44・R57・R59・R61・R101・R137 | classifyDollar・writtenProductRow |
+| 20 | `$[X]` と `$[(X)]`・`$[X , wz]`、`$[X , _]` と `$[X , ff]` | R44・R57・R59・R61・R101・R137 | classifyDollar・writtenProductRow |
 | 21 | 値を読む参照 R を値の演算子に当てた中置・区間・点なし・口の綴りどうし | R62・R99 | pointfreeOf・classifyInfix・addressOp |
 | 22 | `(P + X) - P` と差、`P + (Q - P)` と Q ほか、点と差の綴り | R62 | addressOp・operandFace |
 | 23 | `H e1 … em`・`H e1 , … , em`・`H [e1 … em]`・`H [e1 … em]~` | R64・R66・R93・R121 | closeKind・productIntoRefPort・resolveProduct |
