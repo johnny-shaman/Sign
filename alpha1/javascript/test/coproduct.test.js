@@ -3822,8 +3822,8 @@ const idPasses = [
 	// 片イ（R123）：`,` の被演算子に丸ごと残った関数は `!_`（木は `(unit …)`）と leftover-lambda（前は `(, inc double)`・`(, inc (, $!_ double))`、前の綴り）。
 	["inc , _ , double（片イの R123 で inc・_・double は `!_`）", std("inc , _ , double"), "(, (unit inc) (, (unit _) (unit double)))", "A", { leftoverDiag: ["double", "inc"] }],
 	["inc , $_ , double（器に残すなら `$_`）（片イの R123 で inc・double は `!_`）", std("inc , $_ , double"), "(, (unit inc) (, $_ (unit double)))", "A", { leftoverDiag: ["double", "inc"] }],
-	// x2 は `x2 : inc , double` の x2 と同じ `!_` と分かる名前（R137）。`x2 5` は仕様では `w 5` と同じ 5（R137）で、実装は `w 5` と同じく並びの項の `!_` と分かる辺を消さずに
-	// 残す（§6.4 の空白の並びの項の行）ので、期待値は書かず、x2 そのものと定義の行の木で見る。
+	// x2 は `x2 : inc , double` の x2 と同じ読みの名前（右辺は R61 の 2 で `!_`）。並びの項の `x2 5` で x2 を `w 5` の w と同じに消すか（右辺が `!_` と分かる辺の名前を
+	// R49 の名前に数えるか）は R49 の一覧に無く、読む段は x2 を消さない（`(construct x2 5)`）ので、期待値は書かず、x2 そのものと定義の行の木で見る。
 	["x2 : _ , _ ⏎ x2（x2 は `x2 : inc , double` の x2 と同じ `!_` と分かる名前）", std(["x2 : _ , _", "x2"]), "x2", "A", { diagCount: 0 }],
 	["x2 : _ , _ の定義の行は (: x2 (, (unit _) (unit _)))", std(["x2 : _ , _", "x2"]), "(: x2 (, (unit _) (unit _)))", "A", { at: -2, diagCount: 0 }],
 	["cc : _ , inc ⏎ cc 5（cc は `cc : double , inc` と同じ `!_`）", std(["cc : _ , inc", "cc 5"]), "(construct cc 5)", "A", { leftoverDiag: ["inc"] }],
@@ -5127,7 +5127,7 @@ const r60Passes = [
 	["R60 pq9 : 5 , 99 ⏎ $pq9（積の参照。書いた `$(n , 99)` は片8 の R101 で G20）", std(["pq9 : 5 , 99", "$pq9"]), "$pq9", "A"],
 	["R60 $[vs]（[x] ≅ x で `$vs` と同じ）", std("$[vs]"), "$[vs]", "A"],
 	["R60 $[inc 5]（足りた適用の値の参照）", std("$[inc 5]"), "$[inc 5]", "A"],
-	["R60 $[w 5]（w は `!_` と分かる名前、R115。`$[…]` の中身は評価する所でないので、値の隣でも消えずに構築の参照のまま、§5 Q83。前は未定義の名前 zz の `$[zz 5]`）", std([...W115, "$[w 5]"]), "$[w 5]", "A"],
+	["R60 $[w 5]（w は `!_` と分かる名前、R115。中身の構築の項の w は並びの項で消え（R137）、`$[5]` と同じ値に当てた `$`、R99・R100）", std([...W115, "$[w 5]"]), "$[w 5]", "A", { severities: ["warning/dollar-non-function"] }],
 	// 字面の `$5`・`$[1 2]`：置き場所の無い値の Reader（定数のサンク）として通す（R60 の細かい所。主の Claude の 08:38 UTC の見当のとおり）。
 	["R60 $5（字面の参照。R53 は G20、前は未知の根）", std("$5"), "$5", "A"],
 	["R60 $5 , 1（R53 は G20、前は A）", std("$5 , 1"), "(, $5 1)", "A"],
@@ -6632,6 +6632,9 @@ const r83Passes = [
 	["R93 fp vs~ , 4（撒く項）（前は G3）", r83("fp vs~ , 4"), "(, (apply fp vs~) 4)", "A", { diagCount: 0 }],
 	["R93 fp 1 inc , 2（後ろに関数）（前は G3）", r83("fp 1 inc , 2"), "(, (apply inc (apply fp 1)) 2)", "A", { diagCount: 0 }],
 	["R93 f3 1 , 2 , 3（値の口だけの関数、R121 の文面の例）（前は G3）", r83("f3 1 , 2 , 3"), "(, (unit (apply f3 1)) (, 2 3))", "A", { leftoverDiag: ["(apply f3 1)"] }],
+	// R91・R137・R122：最後の括りが受ける並びの長さは、単位として消えた項を数えない。w だけの並びは葉を1つ残して `fe w` と同じ空の器で、頭の名前があるので本体を読まない
+	// （`fq w`（`fq : [a ~r] ? $a == $a`）の `(apply fq w)` と同じ読み）。
+	["R91・R122 fe w w w は fe w と同じ空の器（w は要素に数えない、R137）", r83w("fe w w w"), "(apply fe w)", "A", { diagCount: 0 }],
 ];
 const r83Refused = [
 	// R85（片5：書いた `[]` が値の口に来たら G5）の行（`inc []`・`add [] 3`・`add 3 []`・`[+ 1] []`・`inc e0`・`inc ~[]`・`e8 : ~[]` ⏎ `inc e8`・`add _ []`・`(add !_ 3) []`・
@@ -6651,12 +6654,11 @@ const r83Refused = [
 	["R89 f3 vs~ 3 4 6（前から n 個に撒く項。前の見本 `f3 vs~ 3 4 !_ 6` は R105 でこれと同じ G19、その前は G13）", r83("f3 vs~ 3 4 6"), "G19"],
 	// R86（廃止）の `_` は、2026-11-08 の R138 から今の綴りの `_`（穴）で書け、R34・R16 の読み。R86 の形の `f2 _ inc 5` は G7（仕様 §4 の R86 の注）。
 	["R86 の形 f2 _ inc 5（今の綴りの穴。G7）", r83("f2 _ inc 5"), "G7"],
-	// R91：足りない c が `!_` なので、`$c == $c` は `$!_ == $!_`（関数を指す番地の比べ、G7。`fe w w w` と同じ）。実体は長さで分ける。
+	// R91：足りない c が `!_` なので、`$c == $c` は `$!_ == $!_`（関数を指す番地の比べ、G7）。実体は長さで分ける。
 	["R91 fe 1 2（実体の形 `[N…](2)`）", r83("fe 1 2"), "G7", [["fe", "[N…](2)"]]],
 	["R91 fe 5（数は長さ1）", r83("fe 5"), "G7", [["fe", "N(1)"]]],
 	["R91 fe [1 2]", r83("fe [1 2]"), "G7", [["fe", "[N…](2)"]]],
 	["R91 fe [1 2]~（撒いた流れ1つも同じ）", r83("fe [1 2]~"), "G7", [["fe", "[N…](2)"]]],
-	["R91 fe w w w（R63 と同じ線。前の見本は `fe un un un`）", r83w("fe w w w"), "G7"],
 	// R92 の残り（§5 Q66 の残り）
 	["R92 顔 $vs == (($vs - $five) + 0x10)（差 + `0x…` は差なので、点と差の比べ）", r83a("$vs == (($vs - $five) + 0x10)"), "G21"],
 	// 2026-10-27 の片7 の R96 から、`0x… − 点` は「`0x…` を差と読むと差 − 点で行が無く、点としか読めない」所として断る（答えは同じ G21、言い分が変わった）。
@@ -7493,10 +7495,15 @@ const r111Passes = [
 	// 値の口でない所は今のまま（§5 Q83）
 	["R112 の外：参照の口の fq w は A（R90。前の綴りは `fq no`）", r111([...OB, "w : ob ' c", "fq w"]), "(apply fq w)", "A", { diagCount: 0 }],
 	["R112 の外：参照の口の pb2 w 1 は a が w で席を取る（R65・R90。前の綴りは `pb2 no 1`）", r111([...OB, "w : ob ' c", "pb2 w 1"]), "(apply pb2 (construct w 1))", "A", { diagCount: 0 }],
+	// R137・R122：最後の括りに丸ごと着いた w（括りがほかの項を受けない）は並びの項として消えず、空の器で受ける（`fq w` と同じ読み）。部分適用 `pb2 5`・`mx 1` の余りにならない。
+	["R122 最後の括りに丸ごと着いた pb2 5 w は b が空の器", r111([...OB, "w : ob ' c", "pb2 5 w"]), "(apply pb2 (construct 5 w))", "A", { diagCount: 0 }],
+	["R122 裸の口の後ろの最後の括りに丸ごと着いた mx 1 w も", r111([...OB, "w : ob ' c", "mx 1 w"]), "(apply mx (construct 1 w))", "A", { diagCount: 0 }],
+	["R137 最後の括りがほかの項も受ける pb2 5 w 1 は `pb2 5 1`", r111([...OB, "w : ob ' c", "pb2 5 w 1"]), "(apply pb2 (construct 5 1))", "A", { diagCount: 0 }],
 	// 2026-11-07 の R137 で `,` の被演算子は閉じた（§5 Q83 の1つ目の箇条）：`!_` と分かる名前は `,` の単位で消える。
 	["R137 `,` の被演算子の w , 5 は 5（前の綴りは `no , 5`、前は R112 の外で `(, no 5)`、§5 Q83）", r111([...OB, "w : ob ' c", "w , 5"]), "5", "A", { diagCount: 0 }],
-	["R112 の外：括りの中の値の隣 [w 5]（§5 Q83。前の綴りは `[no 5]`）", r111([...OB, "w : ob ' c", "[w 5]"]), "[w 5]", "A", { diagCount: 0 }],
-	["R112 の外：名前の右辺の値の隣 v : w 5（§5 Q83。前の綴りは `w : no 5`）", r111([...OB, "w : ob ' c", "v : w 5", "v"]), "(: v (construct w 5))", "A", { diagCount: 0, at: -2 }],
+	// R137：空白の並びの項（括りの中の並びの項・構築の項）の w は単位として消える。括りの葉は書いた括りのまま（§1.3）。
+	["R137 括りの中の並びの項 [w 5] は `[5]` と同じ List（葉は書いた括りのまま）", r111([...OB, "w : ob ' c", "[w 5]"]), "[w 5]", "A", { diagCount: 0 }],
+	["R137 名前の右辺の構築の項 v : w 5 は (: v 5)", r111([...OB, "w : ob ' c", "v : w 5", "v"]), "(: v 5)", "A", { diagCount: 0, at: -2 }],
 	// R111 の `$no`（零射の番地）と `inc no~`（長さ 0 の流れ）は、2026-11-08 の R138 で外した（`$w` は下の fix9bPasses）。
 	// 計算の `!_` は今のまま（R106 の値の段、§5 Q79）。U [2026-10-27 23:01 438d5b1a]「例えば、 sub (4 < 6) 1 2 であれば 3 2 と積まれるべきだね。」
 	["R106 sub (4 < 6) 1 2 は `(sub (4 < 6) 1) 2`（木は今のまま。値は 3 と 2 が積まれる）", r111("sub (4 < 6) 1 2"), "(construct (apply sub (construct [4 < 6] 1)) 2)", "A", { diagCount: 0 }],
@@ -7508,8 +7515,9 @@ const r111Passes = [
 	["R115 v : [a : 1] ⏎ v ' s は無い欄の `!_`（印 zero の A。前の綴りは `w : [a : 1 ⏎ s : !_]`）", r111(["v : [a : 1]", "v ' s"]), "(' v s)", "A"],
 	// 既定値が `_` と分かる括りの `[y : [_]]` は、片9b の確かめの直しで断る側に倒した（§5 Q84。下の「片9b の確かめの直し」の節）。
 	// R115：無い欄は `!_`
-	["R115 構造体に無い名前（前は G7 で断っていた、R24）", src([...M, "a2 : [nope] ? nope 21", "a2 m"]), "(: a2 (? [[nope]] (inst {say:L other:N} (construct nope 21))))", null, { at: -2 }],
-	["R115 [say ~r] ? (r ' say) 21 ⏎ b m（r に say は残らないので無い欄の `!_`。前は G7）", src([...M, "b : [say ~r] ? (r ' say) 21", "b m"]), "(: b (? [[say ~r]] (inst {say:L other:N} (construct [r ' say] 21))))", null, { at: -2 }],
+	// 無い欄の名前（R115）とそれを引いた `(r ' say)` は `!_` と分かる値（R49）なので、本体の並びの構築の項として消える（R137）。
+	["R115 構造体に無い名前 nope は `!_` で、本体の nope 21 は 21（R137）", src([...M, "a2 : [nope] ? nope 21", "a2 m"]), "(: a2 (? [[nope]] (inst {say:L other:N} 21)))", null, { at: -2 }],
+	["R115 [say ~r] ? (r ' say) 21 ⏎ b m（r に say は残らないので無い欄の `!_`。本体は 21、R137）", src([...M, "b : [say ~r] ? (r ' say) 21", "b m"]), "(: b (? [[say ~r]] (inst {say:L other:N} 21)))", null, { at: -2 }],
 	["R115 ob ' c は `!_`（印 zero の A。前は未知）", r111([...OB, "ob ' c"]), "(' ob c)", "A"],
 	["R115・R112 inc (ob ' c) 5 は `inc 5`（前は G7）", r111([...OB, "inc (ob ' c) 5"]), "(apply inc 5)", "A"],
 	// 書いた `!_` と `[]` を引く行（`!_ ' s`・`[] ' s`）と、未定義の名前 m の `(m ' k) 5` は、2026-11-08 の R138 で断る側（下の r111Written）へ移した。
@@ -8805,10 +8813,11 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["$[w , 5] は $5 と同じ値の持ち上げの警告（前の綴りは `un : !_` ⏎ `$[un , 5]`。前は G20）", [...W, "$[w , 5]"], "$[w , 5]", "A", ["warning/dollar-non-function@8"]],
 		["$[inc , w] は通る（前の綴りは `$[inc , nope]`。前は G20）", [...W, "$[inc , w]"], "$[inc , w]", "A", []],
 		["$[w | double] は double の番地で知らせ無し（前の綴りは `$[!_ | double]`。前は leftover-lambda と dollar-non-function）", [...W, "$[w | double]"], "$[w | double]", "A", []],
-		// 今のまま：計算の `!_` は予想のまま（§5 Q95）（`[]` と `[]` の名前の2行（§5 Q93）は 2026-11-08 の R138 で外した）、`(add 1 , inc)` は R121・R123
+		// 今のまま：計算の `!_` は予想のまま（§5 Q95）（`[]` と `[]` の名前の2行（§5 Q93）は 2026-11-08 の R138 で外した）。両側とも関数の `(add 1 , inc)` は R121・R61 の 2 で
+		// 両方 `!_`（知らせは2つ）。その括りを並びの項として消すか（仕様は R137 で `5`）は §6.4 の空白の並びの項の行（関数の積の括りの片）なので、木（want が null）は見ない。
 		["今のまま (inc , (3 < 2)) 5 は construct と leftover-lambda（計算の `!_`、値は 6）", ["(inc , (3 < 2)) 5"], "(construct [inc , [3 < 2]] 5)", "A", ["warning/leftover-lambda@6"]],
 		["今のまま ((3 < 2) inc) 5 は construct と leftover-lambda（計算の `!_`、値は 6）", ["((3 < 2) inc) 5"], "(construct [[3 < 2] inc] 5)", "A", ["warning/leftover-lambda@6"]],
-		["今のまま (add 1 , inc) 5 は construct（両側とも関数、R121・R123）", ["(add 1 , inc) 5"], "(construct [add 1 , inc] 5)", "A", ["warning/leftover-lambda@6", "warning/leftover-lambda@6"]],
+		["(add 1 , inc) 5 の知らせは add 1 と inc の leftover-lambda（両側とも関数、R121・R61 の 2。木は §6.4 の空白の並びの項の行）", ["(add 1 , inc) 5"], null, "A", ["warning/leftover-lambda@6", "warning/leftover-lambda@6"]],
 		// 根の埋め（根の `,` と同じ R107）
 		["根の gq 1 | w は gq 1 と同じく埋める（前の綴りは `gq 1 | !_`）", [...W, ...GQ, "gq 1 | w"], "(apply gq (construct 1 !_))", "未知", []],
 		["根の gq 1 ; w も同じ（前の綴りは `gq 1 ; !_`）", [...W, ...GQ, "gq 1 ; w"], "(apply gq (construct 1 !_))", "未知", []],
@@ -8829,7 +8838,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["(inc | 1 & w | 1 & w) 5 は apply（同上）", [...W, "(inc | 1 & w | 1 & w) 5"], "(apply [inc | 1 & w | 1 & w] 5)", "A", []],
 		["根の inc | 1 & w | 1 & w は (unit inc) で知らせは1つ（同上）", [...W, "inc | 1 & w | 1 & w"], "(unit inc)", "A", ["warning/leftover-lambda@8"]],
 		// 並置の下を落とすのは下が全部 `!_` と分かる時だけ。片側だけ `!_` と分かる `|` は `!_` と分からない
-		["今のまま (5 w inc) 5 は construct（値と値の並びは §5 Q83 のまま。前の綴りは `(5 nope inc) 5`）", [...W, "(5 w inc) 5"], "(construct [5 w inc] 5)", "A", ["warning/leftover-lambda@8"]],
+		["(5 w inc) 5 は construct（中の w は並びの項で消えて `(5 inc)` と同じ。値の上の inc は余り、括りは 5 で `!_` と分かる辺でない、R137・R52）", [...W, "(5 w inc) 5"], "(construct [5 w inc] 5)", "A", ["warning/leftover-lambda@8"]],
 		["今のまま (5 | 1 & w) , 3 は `,` のまま（片側だけ `!_` と分かる `|`。前の綴りは `(5 | 1 & !_) , 3`）", [...W, "(5 | 1 & w) , 3"], "(, [5 | 1 & w] 3)", "A", []],
 		// `,` の両側が `!_` と分かる綴りの2行（`un : !_` ⏎ `un , !_`・`nope , !_`。書いた `!_` の側が残る）は、2026-11-08 の R138 で外した（書いた `!_`・未定義の名前は読む段で断る）。
 		// `!_` が消えて残った辺が `_` 1つなら、行 `_` と同じ `(unit _)`（法則50 の X が `_` の組。`_` が `!_` でない相手と並ぶ `_ | 5` は、2026-11-08 から下の節の
@@ -8839,7 +8848,8 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["手続きの行の w | _ は行の _ と同じ G7（前の綴りは `!_ | _`）", [...W, "t : y ?", "\tw | _", "\ty", "", "t 3"], "G7"],
 		["手続きの行の _ ; w も G7（前の綴りは `_ ; !_`）", [...W, "t : y ?", "\t_ ; w", "\ty", "", "t 3"], "G7"],
 		// 残った辺は行の置かれた所のまま（評価する所の被演算子・手続きの行・書き込む値は、消す前と同じ知らせ）
-		["(w | inc ; double) 5 の inc は `;` の被演算子で `!_`（`(inc ; double) 5` と同じ知らせ。前の綴りは `(!_ | inc ; double) 5`）", [...W, "(w | inc ; double) 5"], "(construct [w | inc ; double] 5)", "A", ["warning/leftover-lambda@8", "warning/leftover-lambda@8"]],
+		// 括りを並びの項として消すか（仕様は R137 で `5`）は §6.4 の空白の並びの項の行（関数の積の括りの片）なので、木（want が null）は見ない。
+		["(w | inc ; double) 5 の inc は `;` の被演算子で `!_`（`(inc ; double) 5` と同じ知らせ。前の綴りは `(!_ | inc ; double) 5`）", [...W, "(w | inc ; double) 5"], null, "A", ["warning/leftover-lambda@8", "warning/leftover-lambda@8"]],
 		["手続きの行の w | inc は、行の inc と同じく `!_` で知らせる（値は `!_`。前の綴りは `!_ | inc`）", [...W, "t : y ?", "\tw | inc", "\ty", "", "t 3"], "(apply t 3)", "A", ["warning/leftover-lambda@9"]],
 		["書き込む値の w | inc は `pp # inc` と同じく `!_` で知らせる（前の綴りは `pp # !_ | inc`）", [...W, "box : 0", "pp : $box", "pp # w | inc"], "(# pp (unit inc))", "A", ["warning/dollar-non-function@9", "warning/leftover-lambda@10"]],
 		// 両側とも `!_` と分かる `|`・`;` の2行（`un : !_` ⏎ `!_ | un`・`un ; !_`。書いた `!_` の側が残る）も、2026-11-08 の R138 で外した。
@@ -8867,9 +8877,250 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		}
 		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
 		const problems = [];
-		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (want !== null && show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
 		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
 		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+}
+// 空白の並びの項の `!_` と分かる辺（R137・R112・R95・R27・R64・R91・R122。片 unit-items）：構築の項（関数の下に積んだ項も）・括りの中の並びの項・最後の括り・恒等射・
+// 点なしの可変長の口（畳む2項の点なしを除く）が受ける並びの項の、`!_` と分かる値（R49 の印 zero の名前と括り）は、`,` の辺と同じに単位として消える。並び全体が
+// 消える時は葉を1つ残す（`w w` は `w`、R61 と同じ）。恒等射と点なしの可変長の口が受けた項が全部消えれば何も受けていない関数（R95）、最後の括りが受けた並びが全部
+// 消えれば R122 の空の器（`fq w w` は `fq w`）、`||_||` は R27 の空の器。値の口は R112、畳む2項の点なしの項は名前を残す（R31）。期待値は仕様の例の木・種類・知らせ。
+// 綴りで `!_` と分かる1行の括り（`(inc , double)`・`(_ , _)`・`(i i , inc)`・`(1 & inc)`）を並びの項として消すか（仕様は R137 で `(inc , double) 5` は `5`）は
+// §6.4 の空白の並びの項の行（関数の積の括りは R101 の G20 を直す片、`(1 & inc)` は op-items の片）なので、その行は木（want が null）を見ず、種類と知らせだけを見る。
+// その括りと w を並べた形（`(inc , double) w`）は、仕様では項が全部消えて印 zero の w を残し（R137・R61）、実装は括りを消さずに残す（同じ §6.4 の行）ので、下の
+// 「同じ答え」で順と w／w~ に依らないことだけを見る。`(inc , double)` そのものは計算の `!_` で、`$` の先（R56 と R101）・最後の括り（R122 の空の器と本体を読む方）・
+// 値の口に置いた名前（R112）で印 zero の w と読みが違うので、`(inc , double) w` と `(inc , double)` を「同じ」とは置かない。
+// 単位だけの `,`・`|`・`;` の鎖（R137 の綴りで `!_` と分かる辺だけの鎖）は、印 zero の葉があれば書いた位置に依らずそれを残し（R61。`(inc , double) , w` も
+// `w , (inc , double)` も w）、それを括った物は印 zero（R49）なので並びの項として消える。長さ 0 と分かる流れを括った `(w~)` も `(w)` と同じ印 zero（R84・R49）。
+// 期待値を書かない形：`$vs 5`（仕様は `5`、dollar-non-function）は、値に当てた `$` の項を `!_` と分かる値（R49・R99）に数える所が要る。`fe 1 w 2` の値 `!_`・知らせ無し
+// （R91）は、`!_` の c に当てた `$c` を `!_` と分かる値に数える所（R56）が要るので、下の「同じ答え」で `fe 1 2` と同じかだけを見る。
+// [名前, 源の行（頭に PRE を足す）, 最後の木, 種類, 知らせ（重さ/reason@最後の行から数えて何行前か、を並べ替えた並び。null は見ない）]
+{
+	const PRE = ["inc : x ? x + 1", "double : x ? x * 2", "i : _", "p : [a : 1]", "w : p ' zz"]; // w は R115 の無い欄の名前（`!_` と分かる名前）
+	const FQ = "fq : [a ~r] ? $a == $a";
+	const PC = "pc : [a] [b] ? $a == $a";
+	const FE = "fe : [a b c] ? $c == $c";
+	const FA = "f : [a b c] ? a";
+	const LL = "warning/leftover-lambda@0";
+	const DNF1 = "warning/dollar-non-function@1";
+	const rows = [
+		// R137
+		["w 5 は 5", ["w 5"], "5", "A", []],
+		["5 w 3 は (construct 5 3)", ["5 w 3"], "(construct 5 3)", "A", []],
+		["v : w 5 は (: v 5)", ["v : w 5"], "(: v 5)", "A", []],
+		["i w 5 は (apply i 5)", ["i w 5"], "(apply i 5)", "A", []],
+		["[* 2,] 1 w 3 は `[* 2,] 1 3` と同じ", ["[* 2,] 1 w 3"], "(apply [* 2,] (construct 1 3))", "A", []],
+		["畳む2項の点なしの項は名前を残す：[+] 5 w 3（`5 + w + 3` と同じに読む、R31）", ["[+] 5 w 3"], "(apply [+] (construct 5 w 3))", "A", []],
+		["(1 & inc) 5 の知らせは inc の leftover-lambda（木は §6.4 の空白の並びの項の行、op-items の片）", ["(1 & inc) 5"], null, "A", [LL]],
+		["fq w 1 2 は `fq 1 2` と同じ（a は 1）", [FQ, "fq w 1 2"], "(apply fq (construct 1 2))", "A", [DNF1, DNF1]],
+		["w w は w（`!_` と分かる値だけの並びは葉を1つ残す）", ["w w"], "w", "A", []],
+		["inc [w w] 5 は (apply inc 5)（`[w w]` は `[w]` と同じ `!_` と分かる括り、R112）", ["inc [w w] 5"], "(apply inc 5)", "A", []],
+		["pc [w 1] 5 は `pc [1] 5` と同じ実体で a は 1", [PC, "pc [w 1] 5"], "(apply pc (construct [w 1] 5))", "A", [DNF1, DNF1]],
+		// R61 の例の括り（知らせは `,` の被演算子に丸ごと残った関数ごと、R61 の 2。恒等射は知らせない、R48。木は §6.4 の空白の並びの項の行）
+		["(inc , double) 5 の知らせは inc と double の leftover-lambda", ["(inc , double) 5"], null, "A", [LL, LL]],
+		["(inc , double , double) 5 の知らせは3つ", ["(inc , double , double) 5"], null, "A", [LL, LL, LL]],
+		["(i i , inc) 5 の知らせは inc の1つ", ["(i i , inc) 5"], null, "A", [LL]],
+		["(_ , _) 5 は知らせ無し", ["(_ , _) 5"], null, "A", []],
+		// `$` の先（R56）：`!_` と分かる値だけの並びは `$[w]` と同じ
+		["$(w w) は `$w` と同じく知らせ無し（R56）", ["$(w w)"], "$[w w]", "A", []],
+		// R95
+		["i w は (unit i)（知らせ無し）", ["i w"], "(unit i)", "A", []],
+		["i w w も (unit i)", ["i w w"], "(unit i)", "A", []],
+		["[* 2,] w は (unit [* 2,])", ["[* 2,] w"], "(unit [* 2,])", "A", [LL]],
+		["[* 2,] w w も (unit [* 2,])", ["[* 2,] w w"], "(unit [* 2,])", "A", [LL]],
+		["i w , 5 は `i , 5` と同じ (, (unit i) 5)", ["i w , 5"], "(, (unit i) 5)", "A", []],
+		// 知らせ（`1 & (i)` と同じ leftover-lambda、R48）は、`&` の被演算子の恒等射を知らせる所（§6.4 の R48 の行）が要るので、ここでは見ない。
+		["1 & (i w) は `1 & (i)` と同じ (& 1 (unit [i w]))", ["1 & (i w)"], "(& 1 (unit [i w]))", "A", null],
+		["v : [* 2,] w ⏎ v 5 は (apply v 5)（v は `[* 2,]`）", ["v : [* 2,] w", "v 5"], "(apply v 5)", "A", []],
+		// 仕様の例の名前は x。PRE の仮引数 x と重ねると name-shadow の information が出るので u にした。
+		["u : [* 2,] w ⏎ $u は関数の番地で知らせ無し", ["u : [* 2,] w", "$u"], "$u", "A", []],
+		["f : x ? [* 2,] w ⏎ f 1 は bare-function-return", ["f : x ? [* 2,] w", "f 1"], "(apply f 1)", "A", ["information/bare-function-return@1"]],
+		// R27
+		["||_|| w 5 は (apply ||_|| 5)", ["||_|| w 5"], "(apply ||_|| 5)", "A", []],
+		// R64
+		["f 1 2 3 w は知らせ無し（w は要素に数えない）", [FA, "f 1 2 3 w"], "(apply f (construct 1 2 3))", "A", []],
+		// R84・R137：長さ 0 と分かる流れを括った `(w~)` は `!_` と分かる値で、並びの項として消える。恒等射が受ければ何も受けていない i（R95）
+		["(w~) 5 は 5", ["(w~) 5"], "5", "A", []],
+		["i (w~) は (unit i)（知らせ無し、R95）", ["i (w~)"], "(unit i)", "A", []],
+		// R61・R137：単位だけの鎖は印 zero の葉を残し、書いた位置に依らない。知らせは中の鎖の leftover-lambda（R61 の 2）のまま
+		["根の (inc , double) , w は w", ["(inc , double) , w"], "w", "A", [LL, LL]],
+		["((inc , double) , w) 5 は 5（括りは印 zero の w を残した鎖で、並びの項として消える）", ["((inc , double) , w) 5"], "5", "A", [LL, LL]],
+		["inc ((inc , double) , w) 5 は (apply inc 5)（R112）", ["inc ((inc , double) , w) 5"], "(apply inc 5)", "A", [LL, LL]],
+	];
+	for (const [name, lines, want, kind, diags] of rows) {
+		total++;
+		const label = `空白の並びの項の \`!_\` と分かる辺 ${name}`;
+		const all = [...PRE, ...lines];
+		let r;
+		try {
+			r = resolve(src(all));
+		} catch (e) {
+			fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${all.length - d.line}`).sort();
+		const problems = [];
+		if (want !== null && show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (diags && JSON.stringify(got) !== JSON.stringify([...diags].sort())) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify([...diags].sort())}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+	// 同じ答え：仕様が「Y と同じ」と言う組（R91・R137・R64・R84・R95・R27・R122）。断るなら同じ理由・門・実体、通るなら同じ種類・知らせと、at の行の木（無ければ全部の行、
+	// null なら木は見ない。書いた葉は書いたままなので、`[w 1]` と `[1]`・`$[w w]` と `$[w]` は木の綴りが違う）。mode が "tree" の組は、種類と at の行の木だけを見る（定義の
+	// 行に書いた関数の数で leftover-lambda の数が違う組）。"shape" の組は、木の書いた括りの葉の中身（`[[inc , double] w]` と `[[inc , double] w~]`）を畳んで、木の形を見る。
+	// "diags" の組は、断りと知らせだけを見る（種類と木は見ない）。"leaf" の組は、残った葉の綴り w~ を w と同じに見て、種類・木・知らせを見る（単位だけの鎖で w と w~ の
+	// どちらの綴りの葉が残るかは仕様が決めていないので、印 zero の葉が残るか、順位の低い単位の括りが残るかだけを見る）。
+	const leafNorm = (s) => s.replace(/(^|[^A-Za-z0-9_])w~/g, "$1w");
+	const shape = (s) => {
+		let out = "";
+		let depth = 0;
+		for (const c of s) {
+			if (c === "[") {
+				if (depth === 0) out += "[]";
+				depth++;
+			} else if (c === "]") depth--;
+			else if (depth === 0) out += c;
+		}
+		return out;
+	};
+	const outcome = (lines, at, mode) => {
+		const all = [...PRE, ...lines];
+		try {
+			const r = resolve(src(all));
+			const trees = (at === null ? [] : at === undefined ? r.trees : [r.trees[r.trees.length + at]]).map((x) => (mode === "shape" ? shape(show(x)) : mode === "leaf" ? leafNorm(show(x)) : show(x)));
+			const diags = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${all.length - d.line}`).sort();
+			if (mode === "tree") return JSON.stringify({ kind: kindOf(r.trees[r.trees.length - 1]), trees });
+			if (mode === "diags") return JSON.stringify({ diags });
+			return JSON.stringify({ kind: kindOf(r.trees[r.trees.length - 1]), trees, diags });
+		} catch (e) {
+			return JSON.stringify({ refused: `${e.reason || e.name} ${e.gate || ""}`, inst: e.instances ? e.instances.map((x) => [x.fn, x.shape]) : null });
+		}
+	};
+	const BOX = ["box : 0", "pp : $box"]; // 書き込む値（`#` の右辺、R116）の置き場
+	const PROC = (s) => ["t : y ?", `\t${s}`, "\ty", "", "t 3"]; // 2行の手続きの最初の行（R76）
+	const same = [
+		["fe 1 w 2 は fe 1 2 と同じ（R91）", [FE, "fe 1 w 2"], [FE, "fe 1 2"]],
+		["fe 1 , w , 2 も fe 1 2 と同じ実体（R91）", [FE, "fe 1 , w , 2"], [FE, "fe 1 2"]],
+		["fq w 1 2 は fq 1 2 と同じ（R137）", [FQ, "fq w 1 2"], [FQ, "fq 1 2"]],
+		["pc [w 1] 5 は pc [1] 5 と同じ実体（定義の行の実体で見る、R137）", [PC, "pc [w 1] 5"], [PC, "pc [1] 5"], -2],
+		["f 1 2 3 w は f 1 2 3 , w と同じ（R64）", [FA, "f 1 2 3 w"], [FA, "f 1 2 3 , w"]],
+		["5 w 3 は 5 w~ 3 と同じ（R137・R84）", ["5 w 3"], ["5 w~ 3"]],
+		["i w は i w~ と同じ（R95）", ["i w"], ["i w~"]],
+		["[* 2,] w は [* 2,] w~ と同じ（R95）", ["[* 2,] w"], ["[* 2,] w~"]],
+		// 並び全体が消える時は葉を1つ残す（R137）：w だけの並びは、w 1つを置いた時と同じ口の読み
+		["fq w w は fq w と同じ R122 の空の器", [FQ, "fq w w"], [FQ, "fq w"]],
+		["fe w w w は fe w と同じ R122 の空の器（R91）", [FE, "fe w w w"], [FE, "fe w"]],
+		["||_|| w w は ||_|| w と同じ空の器（R27）", ["||_|| w w"], ["||_|| w"]],
+		["inc [w w] 5 は inc [w] 5 と同じ", ["inc [w w] 5"], ["inc [w] 5"]],
+		["$[w w] は $[w] と同じ（知らせ無し、R56）", ["$[w w]"], ["$[w]"], null],
+		// 綴りで `!_` と分かる1行の括りと w の並び：仕様は項が全部消えて w を残す（R137・R61）。実装は括りを残す（§6.4 の空白の並びの項の行）ので、順と w／w~ に
+		// 依らないことだけを見る
+		["$((inc , double) w) は $(w (inc , double)) と同じ", ["$((inc , double) w)"], ["$(w (inc , double))"], null],
+		["$((_ , _) w) は $(w (_ , _)) と同じ", ["$((_ , _) w)"], ["$(w (_ , _))"], null],
+		["fq (inc , double) w は fq w (inc , double) と同じ（最後の括り）", [FQ, "fq (inc , double) w"], [FQ, "fq w (inc , double)"]],
+		["pc 5 (_ , _) w は pc 5 w (_ , _) と同じ（最後の括り）", [PC, "pc 5 (_ , _) w"], [PC, "pc 5 w (_ , _)"]],
+		["((inc , double) w) 5 は ((inc , double) w~) 5 と同じ（R84）", ["((inc , double) w) 5"], ["((inc , double) w~) 5"], undefined, "shape"],
+		// どちらも仕様は `5` で leftover-lambda が2つ（R137・R61）
+		["((inc , double) w) 5 は ((inc , double)) 5 と同じ", ["((inc , double) w) 5"], ["((inc , double)) 5"], undefined, "shape"],
+		["[* 2,] ((_ , _) w) は [* 2,] ((_ , _) w~) と同じ（R84）", ["[* 2,] ((_ , _) w)"], ["[* 2,] ((_ , _) w~)"], undefined, "shape"],
+		["v : (inc , double) w ⏎ inc v 5 は v : w (inc , double) ⏎ inc v 5 と同じ", ["v : (inc , double) w", "inc v 5"], ["v : w (inc , double)", "inc v 5"], -1],
+		["v : (inc , double) (inc , double) ⏎ inc v 5 は v : (inc , double) ⏎ inc v 5 と同じ木", ["v : (inc , double) (inc , double)", "inc v 5"], ["v : (inc , double)", "inc v 5"], -1, "tree"],
+		// R84：長さ 0 と分かる流れを括った `(w~)` は `(w)` と同じ印 zero の括りで、置いた所の読みも同じ（R112・R137・R122・R95・R64）
+		["(w~) 5 は (w) 5 と同じ", ["(w~) 5"], ["(w) 5"], undefined, "shape"],
+		["i (w~) は i (w) と同じ（R95）", ["i (w~)"], ["i (w)"], undefined, "shape"],
+		["[* 2,] (w~) は [* 2,] (w) と同じ（R95）", ["[* 2,] (w~)"], ["[* 2,] (w)"], undefined, "shape"],
+		["fq (w~) 1 2 は fq (w) 1 2 と同じ", [FQ, "fq (w~) 1 2"], [FQ, "fq (w) 1 2"]],
+		["f 1 2 3 (w~) は f 1 2 3 (w) と同じ（R64）", [FA, "f 1 2 3 (w~)"], [FA, "f 1 2 3 (w)"]],
+		["(w~ w~) 5 は (w w) 5 と同じ", ["(w~ w~) 5"], ["(w w) 5"], undefined, "shape"],
+		["tq : (w~) ⏎ tq 5 は (w~) 5 と同じ", ["tq : (w~)", "tq 5"], ["(w~) 5"], -1],
+		// R61・R137：単位だけの `,`・`|`・`;` の鎖は、印 zero の葉を書いた位置に依らず残す。括った鎖は印 zero で、並びの項として消える
+		["(w , (inc , double)) 5 は ((inc , double) , w) 5 と同じ", ["(w , (inc , double)) 5"], ["((inc , double) , w) 5"], undefined, "shape"],
+		["((inc , double) , w) 5 は ((inc , double) , w~) 5 と同じ（R84）", ["((inc , double) , w) 5"], ["((inc , double) , w~) 5"], undefined, "shape"],
+		["(w | (inc , double)) 5 は ((inc , double) | w) 5 と同じ", ["(w | (inc , double)) 5"], ["((inc , double) | w) 5"], undefined, "shape"],
+		["((inc , double) | w) 5 は ((inc , double) | w~) 5 と同じ（R84）", ["((inc , double) | w) 5"], ["((inc , double) | w~) 5"], undefined, "shape"],
+		["(w ; (inc , double)) 5 は ((inc , double) ; w) 5 と同じ", ["(w ; (inc , double)) 5"], ["((inc , double) ; w) 5"], undefined, "shape"],
+		["((inc , double) ; w) 5 は ((inc , double) ; w~) 5 と同じ（R84）", ["((inc , double) ; w) 5"], ["((inc , double) ; w~) 5"], undefined, "shape"],
+		["(w , (_ , _)) 5 は ((_ , _) , w) 5 と同じ", ["(w , (_ , _)) 5"], ["((_ , _) , w) 5"], undefined, "shape"],
+		["((_ , _) , w) 5 は ((_ , _) , w~) 5 と同じ（R84）", ["((_ , _) , w) 5"], ["((_ , _) , w~) 5"], undefined, "shape"],
+		["(w | (_ , _)) 5 は ((_ , _) | w) 5 と同じ", ["(w | (_ , _)) 5"], ["((_ , _) | w) 5"], undefined, "shape"],
+		["(w ; (_ , _)) 5 は ((_ , _) ; w) 5 と同じ", ["(w ; (_ , _)) 5"], ["((_ , _) ; w) 5"], undefined, "shape"],
+		["fq (w , (inc , double)) 1 は fq ((inc , double) , w) 1 と同じ", [FQ, "fq (w , (inc , double)) 1"], [FQ, "fq ((inc , double) , w) 1"], undefined, "shape"],
+		["v : w , (inc , double) ⏎ v 5 は v : (inc , double) , w ⏎ v 5 と同じ", ["v : w , (inc , double)", "v 5"], ["v : (inc , double) , w", "v 5"], -1],
+		["根の w , (inc , double) は (inc , double) , w と同じ", ["w , (inc , double)"], ["(inc , double) , w"]],
+		["inc (w , (inc , double)) 5 は inc ((inc , double) , w) 5 と同じ", ["inc (w , (inc , double)) 5"], ["inc ((inc , double) , w) 5"]],
+		// 評価する所（比べ・`&` の被演算子・書き込む値・手続きの行・消えた `|`・`;` の残った根の辺）の単位だけの `,` の鎖も、行の根と同じく印 zero の葉を、書いた位置と
+		// w／w~ に依らず残す（R61・R137・R76・R116）。知らせは鎖の中の関数の leftover-lambda（R61 の 2）で、順と綴りで数も種類も変わらない
+		["w , (_ | inc) == 2 は w~ , (_ | inc) == 2 と同じ", ["w , (_ | inc) == 2"], ["w~ , (_ | inc) == 2"], undefined, "leaf"],
+		["w , (_ | inc) == 2 は (_ | inc) , w == 2 と同じ", ["w , (_ | inc) == 2"], ["(_ | inc) , w == 2"]],
+		["w , (1 & inc) == 2 は w~ , (1 & inc) == 2 と同じ", ["w , (1 & inc) == 2"], ["w~ , (1 & inc) == 2"], undefined, "leaf"],
+		["w , (inc ; double) == 2 は (inc ; double) , w == 2 と同じ", ["w , (inc ; double) == 2"], ["(inc ; double) , w == 2"]],
+		["1 & w , (_ | inc) は 1 & w~ , (_ | inc) と同じ", ["1 & w , (_ | inc)"], ["1 & w~ , (_ | inc)"], undefined, "leaf"],
+		["1 & w , (_ | inc) は 1 & (_ | inc) , w と同じ", ["1 & w , (_ | inc)"], ["1 & (_ | inc) , w"]],
+		["1 & w , (i i , inc) は 1 & w~ , (i i , inc) と同じ", ["1 & w , (i i , inc)"], ["1 & w~ , (i i , inc)"], undefined, "leaf"],
+		["pp # w , (_ | inc) は pp # w~ , (_ | inc) と同じ", [...BOX, "pp # w , (_ | inc)"], [...BOX, "pp # w~ , (_ | inc)"], undefined, "leaf"],
+		["pp # w , (_ | inc) は pp # (_ | inc) , w と同じ", [...BOX, "pp # w , (_ | inc)"], [...BOX, "pp # (_ | inc) , w"]],
+		["手続きの行の w , (_ | inc) は w~ , (_ | inc) と同じ", PROC("w , (_ | inc)"), PROC("w~ , (_ | inc)"), undefined, "leaf"],
+		["手続きの行の w , (_ | inc) は (_ | inc) , w と同じ", PROC("w , (_ | inc)"), PROC("(_ | inc) , w")],
+		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | w~ , (_ | inc) と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | w~ , (_ | inc)"], undefined, "leaf"],
+		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | (_ | inc) , w と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | (_ | inc) , w"]],
+		["根の w , (_ | inc) | (1 & inc) は w~ , (_ | inc) | (1 & inc) と同じ", ["w , (_ | inc) | (1 & inc)"], ["w~ , (_ | inc) | (1 & inc)"], undefined, "leaf"],
+		["根の w , (_ | inc) は w~ , (_ | inc) と同じ", ["w , (_ | inc)"], ["w~ , (_ | inc)"], undefined, "leaf"],
+		// `' k` の種類は §6.4 の字面の鍵の行なので見ず、断りと知らせだけを見る（R49・R26：`(w w)` も w も印 zero）
+		["(w w) ' 0 は w ' 0 と同じ", ["(w w) ' 0"], ["w ' 0"], null, "diags"],
+	];
+	for (const [name, a, b, at, mode] of same) {
+		total++;
+		const label = `空白の並びの項の \`!_\` と分かる辺 同じ答え ${name}`;
+		const x = outcome(a, at, mode);
+		const y = outcome(b, at, mode);
+		if (x === y) ok(label);
+		else fail(label, `左: ${x}`, `右: ${y}`);
+	}
+	// 行の根と評価する所で、単位だけの `,` の鎖が残す葉は同じ（R61・R137・R76・R116）：根に置いた鎖の木が、比べ・`&` の被演算子・書き込む値・手続きの行に置いた時の
+	// 被演算子の木。根の木は印 zero の葉（綴りの w~ は w と同じに見る）。leftover-lambda の数も根と同じ（R61 の 2）。葉が null の鎖は、R49 の `!_` と分かる値が2つ
+	// （w と `(1 & inc)`）あって R61 がどちらを残すかを言わないので、根の葉は見ずに揃いだけを見る。
+	const chainAt = [
+		["w , (_ | inc)", "w"],
+		["(_ | inc) , w", "w"],
+		["w~ , (_ | inc)", "w"],
+		["w , (i i , inc)", "w"],
+		["w , (inc ; double)", "w"],
+		["w , (1 & inc)", null],
+		["w , w , (_ | inc)", "w"],
+		["(w) , (_ | inc)", "[w]"],
+	];
+	const placed = (lines) => {
+		const r = resolve(src([...PRE, ...lines]));
+		return { trees: r.trees.map(show), ll: r.diagnostics.filter((d) => d.reason === "leftover-lambda").length };
+	};
+	for (const [c, leaf] of chainAt) {
+		total++;
+		const label = `空白の並びの項の \`!_\` と分かる辺 根と評価する所で残す葉が同じ ${c}`;
+		const problems = [];
+		try {
+			const root = placed([c]);
+			const t = root.trees[root.trees.length - 1];
+			if (leaf !== null && leafNorm(t) !== leaf) problems.push(`根 got: ${t}  want: ${leaf}`);
+			const places = [
+				[[`${c} == 2`], 1, `(== ${t} 2)`],
+				[[`1 & ${c}`], 1, `(& 1 ${t})`],
+				[[...BOX, `pp # ${c}`], 1, `(# pp ${t})`],
+				[PROC(c), 2, `(: t (? [y] (block ${t} y)))`],
+			];
+			for (const [lines, back, want] of places) {
+				const p = placed(lines);
+				const got = p.trees[p.trees.length - back];
+				if (got !== want) problems.push(`${lines.join(" ⏎ ")} got: ${got}  want: ${want}`);
+				if (p.ll !== root.ll) problems.push(`${lines.join(" ⏎ ")} の leftover-lambda の数 got: ${p.ll}  want: ${root.ll}`);
+			}
+		} catch (e) {
+			problems.push(`断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+		}
 		if (problems.length) fail(label, ...problems);
 		else ok(label);
 	}
@@ -8926,7 +9177,8 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["i : _ ⏎ (i | 5) 3 は今のまま", ["i : _", "(i | 5) 3"], "(construct [i | 5] 3)", "A", []],
 		["(5 | _) 3 も", ["(5 | _) 3"], "(construct [5 | _] 3)", "A", []],
 		["(_ ; 5) 3 も", ["(_ ; 5) 3"], "(construct [_ ; 5] 3)", "A", []],
-		["(_ | inc) 5 は (i | inc) 5 と同じく construct で、知らせは inc の leftover-lambda", ["(_ | inc) 5"], "(construct [_ | inc] 5)", "A", ["warning/leftover-lambda@6"]],
+		// 括りを並びの項として消すか（仕様は R137 で `5`）は §6.4 の空白の並びの項の行（関数の積の括りの片）なので、木（want が null）は見ない。
+		["(_ | inc) 5 は (i | inc) 5 と同じく、知らせは inc の leftover-lambda", ["(_ | inc) 5"], null, "A", ["warning/leftover-lambda@6"]],
 		["$[_ | 5] は $[i | 5] と同じ dollar-non-function", ["$[_ | 5]"], "$[_ | 5]", "A", ["warning/dollar-non-function@6"]],
 		["$[5 ; _] も", ["$[5 ; _]"], "$[5 ; _]", "A", ["warning/dollar-non-function@6"]],
 		["||_ | 5|| は ||i | 5|| と同じ（囲みの中）", ["||_ | 5||"], "||_ | 5||", "A", []],
@@ -8970,7 +9222,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		}
 		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`).sort();
 		const problems = [];
-		if (show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (want !== null && show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
 		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
 		if (JSON.stringify(got) !== JSON.stringify(diags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(diags)}`);
 		if (problems.length) fail(label, ...problems);
