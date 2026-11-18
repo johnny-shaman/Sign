@@ -5984,7 +5984,7 @@ const r73Passes = [
 	["R76 1 & inc | double（論理の被演算子。R137 で `(unit double)`、前は `(| (& 1 (unit inc)) (unit double))`）", std("1 & inc | double"), "(unit double)", "A", { leftoverDiag: ["inc", "double"] }],
 	["R76 i == 1（恒等射は知らせない）", r73("i == 1"), "(== (unit i) 1)", "A", { diagCount: 0 }],
 	// 「R76 inc []~ == 1（2026-10-27 の R84 で `inc !_ == 1` と同じ木）」は、2026-11-08 の R138 で書いた空の器 `[]~` を断るので消した。
-	["R76 [inc == 2] 5（括りの中の比べ。前は G7）", std("[inc == 2] 5"), "(construct [inc == 2] 5)", "A", { leftoverDiag: ["inc"] }],
+	["R76 [inc == 2] 5（括りの中の比べ。丸ごとの関数との `==` の括りは `!_` と分かる値で、並びの項として消える。R49・R137）", std("[inc == 2] 5"), "5", "A", { leftoverDiag: ["inc"] }],
 	["R76 t : y ? inc == y ⏎ t 3 4（本体の根が A に。前は G2(a)）", std(["t : y ? inc == y", "t 3 4"]), "(construct (apply t 3) 4)", "A", { leftoverDiag: ["inc"] }],
 	["R76 字下げの本体の最後が関数（前は G2(a)）", std(["t : a ?", "\ta", "\tinc", "", "t 1 inc"]), "(construct (apply t 1) (unit inc))", "A", { leftoverDiag: ["inc", "inc"] }],
 	// 確かめの直し（2026-10-26）：手続きの最後の行は `&` の右の被演算子なので、1行の `y & add y` と同じ答え。枝の値・1行だけの本体・枝の後の既定の行は返す所で
@@ -6622,10 +6622,11 @@ const r83Passes = [
 	["R93 5 fp 1 2 , 3（値の後ろに積まれた頭も同じ）", r83("5 fp 1 2 , 3"), "(construct 5 (apply fp [1 2 , 3]))", "A"],
 	// 2026-10-28 の R105 で、下の r83Refused にあった R86 の残り（G5）が通るので、この節の通る側へ移していた6行（`f2 !_ inc !_ 5`・`f2 inc !_ inc 5`・`double f2 !_ inc 5`・
 	// `add inc !_ inc 5`・`mx inc !_ inc 5`・`f2 [* 2,] !_ inc 5`）は、2026-11-08 の R138 で値の口の書いた `!_` を断る（R105 は廃止）ので外した。
-	// 片イ（R120）から、R87 の残り（区間の欠けた口・否定・段18 の `'`）は `!_` にせず書いたままで、種類の未知な項として後ろの項を積む予想で通る（前は G7）。
+	// R87 の残りの区間の欠けた口と否定は `!_` にせず書いたままで、種類の未知な項として後ろの項を積む予想で通る。段18 の引く器の側に丸ごと残った関数の
+	// `inc ' 0` は `!_` と分かる値（R49）で、並びの項として消える（R137）。inc の leftover-lambda（R87）は器の側を評価する所に入れて知らせる所が要るので、知らせは見ない。
 	["R87 [+ inc] 5（区間の被演算子は今のまま）（前は G7）", r83("[+ inc] 5"), "(construct [+ inc] 5)", "未知", { diagCount: 0 }],
 	["R87 !inc 5（否定は値の演算子でない、今のまま）（前は G7）", r83("!inc 5"), "(construct !inc 5)", "未知", { diagCount: 0 }],
-	["R87 inc ' 0 5（段18、今のまま）（前は G7）", r83("inc ' 0 5"), "(construct (' inc 0) 5)", "未知", { diagCount: 0 }],
+	["R87 inc ' 0 5（段18 の引く器の側の関数）", r83("inc ' 0 5"), "5", "A"],
 	// 片イ（R121・R123）で G3 は廃止。`,` の辺も左から畳み、辺の終わりに余った関数は `!_` と leftover-lambda（前は G3）。
 	["R93 pb2 1 , 2（最後でない括り）（前は G3）", r83("pb2 1 , 2"), "(, (unit (apply pb2 1)) 2)", "A", { leftoverDiag: ["(apply pb2 1)"] }],
 	["R93 fp inc 1 , 2（合成の最初の関数の口）（前は G3）", r83("fp inc 1 , 2"), "(, (apply (compose fp inc) 1) 2)", "A", { diagCount: 0 }],
@@ -8884,12 +8885,30 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		else ok(label);
 	}
 }
+// 下の2つの群（空白の並びの項の `!_` と分かる辺・`!_` が答えを `!_` にする演算子の項）の「同じ答え」の mode "unitLeaf" の木の書き方（unitLeafShow）：順位 2 以上の
+// `!_` と分かる葉（R61・R137 の残す葉の順位の 2 と 3）を綴りに依らず「葉」と書き、ほかの節と葉は show と同じ綴りで書く。順位 2 以上の葉は、書いた `!_` と長さ 0 と
+// 分かる流れの印（葉の cat "unit"。`w~` も）と、印 knownUnit の付いた種類が印 zero の A の葉（`w`・`(w)`・`[1 & inc]`・`[w < 3]`）。順位 1 の括り（`[_ | inc]`・
+// `[inc , double]`）は印 zero でないので綴りのまま書く。単位だけの鎖で順位 2 以上の物どうしのどれを残すかは R61 が決めていない（`w` と `w~`・`w` と `(1 & inc)`・
+// `(w < 3)` と `(1 & inc)`）ので、その葉の綴りは見ず、印 zero の物があるのに順位 1 の括りを残していないこと（R61）と、ほかの木の形は見る。書いた葉は書いたままなので、
+// `fq (w < 3)` と `fq w` の実引数の葉も、この書き方で綴りに依らず比べる。
+const unitLeafZero = (x) => x.t === "leaf" && (x.cat === "unit" || (!!x.knownUnit && !!x.kind && x.kind.k === "A" && !!x.kind.zero));
+const unitLeafShow = (x) => {
+	if (!x) return show(x);
+	if (x.t === "leaf") return unitLeafZero(x) ? "葉" : x.view && x.view.v === "block" ? `(block ${x.view.rows.map(unitLeafShow).join(" ")})` : show(x);
+	if (x.t === "op") return `(${x.sym} ${unitLeafShow(x.left)} ${unitLeafShow(x.right)})`;
+	if (x.t === "construct" || x.t === "compose") return `(${x.t} ${x.items.map(unitLeafShow).join(" ")})`;
+	if (x.t === "apply") return `(apply ${unitLeafShow(x.head)} ${unitLeafShow(x.arg)})`;
+	if (x.t === "unit") return `(unit ${unitLeafShow(x.inner)})`;
+	if (x.t === "lambda" && !x.pattern) return `(? [${x.paramsText}] ${unitLeafShow(x.body)})`;
+	return show(x);
+};
 // 空白の並びの項の `!_` と分かる辺（R137・R112・R95・R27・R64・R91・R122。片 unit-items）：構築の項（関数の下に積んだ項も）・括りの中の並びの項・最後の括り・恒等射・
 // 点なしの可変長の口（畳む2項の点なしを除く）が受ける並びの項の、`!_` と分かる値（R49 の印 zero の名前と括り）は、`,` の辺と同じに単位として消える。並び全体が
 // 消える時は葉を1つ残す（`w w` は `w`、R61 と同じ）。恒等射と点なしの可変長の口が受けた項が全部消えれば何も受けていない関数（R95）、最後の括りが受けた並びが全部
 // 消えれば R122 の空の器（`fq w w` は `fq w`）、`||_||` は R27 の空の器。値の口は R112、畳む2項の点なしの項は名前を残す（R31）。期待値は仕様の例の木・種類・知らせ。
-// 綴りで `!_` と分かる1行の括り（`(inc , double)`・`(_ , _)`・`(i i , inc)`・`(1 & inc)`）を並びの項として消すか（仕様は R137 で `(inc , double) 5` は `5`）は
-// §6.4 の空白の並びの項の行（関数の積の括りは R101 の G20 を直す片、`(1 & inc)` は op-items の片）なので、その行は木（want が null）を見ず、種類と知らせだけを見る。
+// `!_` が答えを `!_` にする演算子の項を括った `(1 & inc)` は R49 の印 zero の括りで、`w` と同じく並びの項として消える（`(1 & inc) 5` は `5`。その演算子の項は下の
+// 「`!_` が答えを `!_` にする演算子の項」の群）。綴りで `!_` と分かる関数の積の1行の括り（`(inc , double)`・`(_ , _)`・`(i i , inc)`）を並びの項として消すか（仕様は
+// R137 で `(inc , double) 5` は `5`）は §6.4 の空白の並びの項の行（R101 の G20 を直す片）なので、その行は木（want が null）を見ず、種類と知らせだけを見る。
 // その括りと w を並べた形（`(inc , double) w`）は、仕様では項が全部消えて印 zero の w を残し（R137・R61）、実装は括りを消さずに残す（同じ §6.4 の行）ので、下の
 // 「同じ答え」で順と w／w~ に依らないことだけを見る。`(inc , double)` そのものは計算の `!_` で、`$` の先（R56 と R101）・最後の括り（R122 の空の器と本体を読む方）・
 // 値の口に置いた名前（R112）で印 zero の w と読みが違うので、`(inc , double) w` と `(inc , double)` を「同じ」とは置かない。
@@ -8914,7 +8933,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["i w 5 は (apply i 5)", ["i w 5"], "(apply i 5)", "A", []],
 		["[* 2,] 1 w 3 は `[* 2,] 1 3` と同じ", ["[* 2,] 1 w 3"], "(apply [* 2,] (construct 1 3))", "A", []],
 		["畳む2項の点なしの項は名前を残す：[+] 5 w 3（`5 + w + 3` と同じに読む、R31）", ["[+] 5 w 3"], "(apply [+] (construct 5 w 3))", "A", []],
-		["(1 & inc) 5 の知らせは inc の leftover-lambda（木は §6.4 の空白の並びの項の行、op-items の片）", ["(1 & inc) 5"], null, "A", [LL]],
+		["(1 & inc) 5 は 5（括りは `!_` と分かる値で、並びの項として消える。知らせは inc の leftover-lambda）", ["(1 & inc) 5"], "5", "A", [LL]],
 		["fq w 1 2 は `fq 1 2` と同じ（a は 1）", [FQ, "fq w 1 2"], "(apply fq (construct 1 2))", "A", [DNF1, DNF1]],
 		["w w は w（`!_` と分かる値だけの並びは葉を1つ残す）", ["w w"], "w", "A", []],
 		["inc [w w] 5 は (apply inc 5)（`[w w]` は `[w]` と同じ `!_` と分かる括り、R112）", ["inc [w w] 5"], "(apply inc 5)", "A", []],
@@ -8974,7 +8993,9 @@ for (const [name, s, must, mustNot] of r131Messages) {
 	// null なら木は見ない。書いた葉は書いたままなので、`[w 1]` と `[1]`・`$[w w]` と `$[w]` は木の綴りが違う）。mode が "tree" の組は、種類と at の行の木だけを見る（定義の
 	// 行に書いた関数の数で leftover-lambda の数が違う組）。"shape" の組は、木の書いた括りの葉の中身（`[[inc , double] w]` と `[[inc , double] w~]`）を畳んで、木の形を見る。
 	// "diags" の組は、断りと知らせだけを見る（種類と木は見ない）。"leaf" の組は、残った葉の綴り w~ を w と同じに見て、種類・木・知らせを見る（単位だけの鎖で w と w~ の
-	// どちらの綴りの葉が残るかは仕様が決めていないので、印 zero の葉が残るか、順位の低い単位の括りが残るかだけを見る）。
+	// どちらの綴りの葉が残るかは仕様が決めていないので、印 zero の葉が残るか、順位の低い単位の括りが残るかだけを見る）。"unitLeaf" の組は、木を unitLeafShow で書いて
+	// （順位 2 以上の `!_` と分かる葉は綴りに依らず「葉」、順位 1 の括りは綴りのまま）、種類・木・知らせを見る（印 zero の物が2つ以上ある単位だけの鎖（w と `(1 & inc)`）で
+	// どれを残すかは R61 が決めていないので、印 zero の葉が残って、順位 1 の括りが残らないことだけを見る）。
 	const leafNorm = (s) => s.replace(/(^|[^A-Za-z0-9_])w~/g, "$1w");
 	const shape = (s) => {
 		let out = "";
@@ -8992,7 +9013,9 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		const all = [...PRE, ...lines];
 		try {
 			const r = resolve(src(all));
-			const trees = (at === null ? [] : at === undefined ? r.trees : [r.trees[r.trees.length + at]]).map((x) => (mode === "shape" ? shape(show(x)) : mode === "leaf" ? leafNorm(show(x)) : show(x)));
+			const trees = (at === null ? [] : at === undefined ? r.trees : [r.trees[r.trees.length + at]]).map((x) =>
+				mode === "shape" ? shape(show(x)) : mode === "leaf" ? leafNorm(show(x)) : mode === "unitLeaf" ? unitLeafShow(x) : show(x)
+			);
 			const diags = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${all.length - d.line}`).sort();
 			if (mode === "tree") return JSON.stringify({ kind: kindOf(r.trees[r.trees.length - 1]), trees });
 			if (mode === "diags") return JSON.stringify({ diags });
@@ -9057,7 +9080,8 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		// w／w~ に依らず残す（R61・R137・R76・R116）。知らせは鎖の中の関数の leftover-lambda（R61 の 2）で、順と綴りで数も種類も変わらない
 		["w , (_ | inc) == 2 は w~ , (_ | inc) == 2 と同じ", ["w , (_ | inc) == 2"], ["w~ , (_ | inc) == 2"], undefined, "leaf"],
 		["w , (_ | inc) == 2 は (_ | inc) , w == 2 と同じ", ["w , (_ | inc) == 2"], ["(_ | inc) , w == 2"]],
-		["w , (1 & inc) == 2 は w~ , (1 & inc) == 2 と同じ", ["w , (1 & inc) == 2"], ["w~ , (1 & inc) == 2"], undefined, "leaf"],
+		// `(1 & inc)` も w・w~ も `!_` と分かる値（R49・R84）で、印 zero の物が2つある鎖なので、残る葉の綴りは見ない（unitLeaf）
+		["w , (1 & inc) == 2 は w~ , (1 & inc) == 2 と同じ", ["w , (1 & inc) == 2"], ["w~ , (1 & inc) == 2"], undefined, "unitLeaf"],
 		["w , (inc ; double) == 2 は (inc ; double) , w == 2 と同じ", ["w , (inc ; double) == 2"], ["(inc ; double) , w == 2"]],
 		["1 & w , (_ | inc) は 1 & w~ , (_ | inc) と同じ", ["1 & w , (_ | inc)"], ["1 & w~ , (_ | inc)"], undefined, "leaf"],
 		["1 & w , (_ | inc) は 1 & (_ | inc) , w と同じ", ["1 & w , (_ | inc)"], ["1 & (_ | inc) , w"]],
@@ -9066,9 +9090,10 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["pp # w , (_ | inc) は pp # (_ | inc) , w と同じ", [...BOX, "pp # w , (_ | inc)"], [...BOX, "pp # (_ | inc) , w"]],
 		["手続きの行の w , (_ | inc) は w~ , (_ | inc) と同じ", PROC("w , (_ | inc)"), PROC("w~ , (_ | inc)"), undefined, "leaf"],
 		["手続きの行の w , (_ | inc) は (_ | inc) , w と同じ", PROC("w , (_ | inc)"), PROC("(_ | inc) , w")],
-		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | w~ , (_ | inc) と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | w~ , (_ | inc)"], undefined, "leaf"],
-		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | (_ | inc) , w と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | (_ | inc) , w"]],
-		["根の w , (_ | inc) | (1 & inc) は w~ , (_ | inc) | (1 & inc) と同じ", ["w , (_ | inc) | (1 & inc)"], ["w~ , (_ | inc) | (1 & inc)"], undefined, "leaf"],
+		// 次の3つも `(1 & inc)` と w（w~）の印 zero の物が2つある鎖で、どれを残すかは R61 が決めていないので、印 zero の葉が1つ残り、順位 1 の `[_ | inc]` が残らないことを見る
+		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | w~ , (_ | inc) と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | w~ , (_ | inc)"], undefined, "unitLeaf"],
+		["根の (1 & inc) | w , (_ | inc) は (1 & inc) | (_ | inc) , w と同じ", ["(1 & inc) | w , (_ | inc)"], ["(1 & inc) | (_ | inc) , w"], undefined, "unitLeaf"],
+		["根の w , (_ | inc) | (1 & inc) は w~ , (_ | inc) | (1 & inc) と同じ", ["w , (_ | inc) | (1 & inc)"], ["w~ , (_ | inc) | (1 & inc)"], undefined, "unitLeaf"],
 		["根の w , (_ | inc) は w~ , (_ | inc) と同じ", ["w , (_ | inc)"], ["w~ , (_ | inc)"], undefined, "leaf"],
 		// `' k` の種類は §6.4 の字面の鍵の行なので見ず、断りと知らせだけを見る（R49・R26：`(w w)` も w も印 zero）
 		["(w w) ' 0 は w ' 0 と同じ", ["(w w) ' 0"], ["w ' 0"], null, "diags"],
@@ -9106,6 +9131,201 @@ for (const [name, s, must, mustNot] of r131Messages) {
 			const root = placed([c]);
 			const t = root.trees[root.trees.length - 1];
 			if (leaf !== null && leafNorm(t) !== leaf) problems.push(`根 got: ${t}  want: ${leaf}`);
+			const places = [
+				[[`${c} == 2`], 1, `(== ${t} 2)`],
+				[[`1 & ${c}`], 1, `(& 1 ${t})`],
+				[[...BOX, `pp # ${c}`], 1, `(# pp ${t})`],
+				[PROC(c), 2, `(: t (? [y] (block ${t} y)))`],
+			];
+			for (const [lines, back, want] of places) {
+				const p = placed(lines);
+				const got = p.trees[p.trees.length - back];
+				if (got !== want) problems.push(`${lines.join(" ⏎ ")} got: ${got}  want: ${want}`);
+				if (p.ll !== root.ll) problems.push(`${lines.join(" ⏎ ")} の leftover-lambda の数 got: ${p.ll}  want: ${root.ll}`);
+			}
+		} catch (e) {
+			problems.push(`断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+		}
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+}
+// `!_` が答えを `!_` にする演算子の項（R49・R48・R56・R112・R137・R61。片 op-items）：`&`・中置の比べ（`!=` も）・`==`・`!==`・範囲の被演算子と、段18 の引く器の側
+// （`'` の左・`@` の右）と中置 `#` の左に、丸ごとの関数（恒等射も、R87）か `!_` と分かる値を持つ項（`1 & inc`・`inc == 5`・`w < 3`・`w != 3`・`inc !== 5`・`inc ' 0`・`0 @ inc`・
+// `inc # 5`・`w # 5`）と、それを1行で括った物と、それを右辺に持つ名前は `!_` と分かる値（印 zero）。置いた所の読みは w と同じ：`,`・`|`・`;` の辺と空白の並びの項では
+// 単位として消え（R61・R137）、値の口では消え（R112）、`$` の先なら dollar-non-function を出さない（R56）。計算の `!_`（`3 < 2`）と、数の算術（`inc + 1` は 1）・番地を
+// 被演算子に持つ算術（`$vs + 0x10` は吸った `!_`、R62）の答えは印 zero でない。期待値は仕様の例の木・種類・知らせ。
+// 知らせを見ない行（null）：段18 の器の側と中置 `#` の左に残った関数の leftover-lambda（R87。`(inc ' 0) , 1`・`(inc # 5) , 1`・`inc (inc ' 0) 5`・`(0 @ inc) , 1`）と、
+// `&`・範囲・段18 の器の側の恒等射の leftover-lambda（R48。`(1 ~ i) | 5`・`(1 & i) , 1`・`(i ' 0) , 1`）は、その所を評価する所に入れて知らせる所（§6.4 の段18 の引く器の
+// 側の行と、名前の id の行）が要る。木と種類はここで見る。
+// [名前, 源の行（頭に PRE を足す）, 最後の木（null は見ない）, 種類, 知らせ（重さ/reason@最後の行から数えて何行前か、を並べ替えた並び。null は見ない）]
+{
+	const PRE = ["inc : x ? x + 1", "double : x ? x * 2", "i : _", "p : [a : 1]", "w : p ' zz"]; // w は R115 の無い欄の名前（`!_` と分かる名前）
+	const LL = "warning/leftover-lambda@0";
+	const rows = [
+		// R49 の例
+		["(inc ' 0) , 1 は 1", ["(inc ' 0) , 1"], "1", "A", null],
+		["(w < 3) , 5 は 5（`(1 & w) , 5` と同じ）", ["(w < 3) , 5"], "5", "A", []],
+		["(1 & w) , 5 は 5", ["(1 & w) , 5"], "5", "A", []],
+		["(w != 3) , 5 は 5", ["(w != 3) , 5"], "5", "A", []],
+		// 段13 のほかの比べ（`=` は `<`・`<=`・`>=`・`>` と同じ族の等しさ、R49）と、段12 の範囲の族（演算子表の段12・13）
+		["(w = 3) , 5 は 5", ["(w = 3) , 5"], "5", "A", []],
+		["(w <= 3) , 5 は 5", ["(w <= 3) , 5"], "5", "A", []],
+		["(w >= 3) , 5 は 5", ["(w >= 3) , 5"], "5", "A", []],
+		["(w > 3) , 5 は 5", ["(w > 3) , 5"], "5", "A", []],
+		["(1 ~+ w) , 5 は 5", ["(1 ~+ w) , 5"], "5", "A", []],
+		["(1 ~- w) , 5 は 5", ["(1 ~- w) , 5"], "5", "A", []],
+		["(1 ~* w) , 5 は 5", ["(1 ~* w) , 5"], "5", "A", []],
+		["(1 ~/ w) , 5 は 5", ["(1 ~/ w) , 5"], "5", "A", []],
+		["(1 ~^ w) , 5 は 5", ["(1 ~^ w) , 5"], "5", "A", []],
+		["inc (w != 3) 5 は (apply inc 5)（R112）", ["inc (w != 3) 5"], "(apply inc 5)", "A", []],
+		["inc (inc ' 0) 5 は (apply inc 5)（R112）", ["inc (inc ' 0) 5"], "(apply inc 5)", "A", null],
+		["$(w != 3) は知らせ無し（R56）", ["$(w != 3)"], null, "A", []],
+		["(inc !== 5) , 1 は 1 で leftover-lambda", ["(inc !== 5) , 1"], "1", "A", [LL]],
+		["(inc # 5) , 1 は 1", ["(inc # 5) , 1"], "1", "A", null],
+		["$(1 & inc) は $[1 & inc] で、知らせは中の inc の leftover-lambda だけ（R56・R103）", ["$(1 & inc)"], "$[1 & inc]", "A", [LL]],
+		["$(w < 3) は知らせ無し", ["$(w < 3)"], null, "A", []],
+		// R48・R87 の例
+		["(1 ~ i) | 5 は 5（R137）", ["(1 ~ i) | 5"], "5", "A", null],
+		["(inc ' 0) | 5 は 5", ["(inc ' 0) | 5"], "5", "A", null],
+		["inc ' 0 5 は 5（`inc ' 0` は並びの項として消える）", ["inc ' 0 5"], "5", "A", null],
+		// R49 が挙げる項の `,` の辺
+		["(inc == 5) , 1 は 1", ["(inc == 5) , 1"], "1", "A", [LL]],
+		["(1 < inc) , 1 は 1", ["(1 < inc) , 1"], "1", "A", [LL]],
+		["(1 ~ inc) , 1 は 1", ["(1 ~ inc) , 1"], "1", "A", [LL]],
+		["(0 @ inc) , 1 は 1", ["(0 @ inc) , 1"], "1", "A", null],
+		["(1 & i) , 1 は 1", ["(1 & i) , 1"], "1", "A", null],
+		["(i ' 0) , 1 は 1", ["(i ' 0) , 1"], "1", "A", null],
+		["(w == 5) , 1 は 1", ["(w == 5) , 1"], "1", "A", []],
+		["(1 ~ w) , 1 は 1", ["(1 ~ w) , 1"], "1", "A", []],
+		["(w # 5) , 1 は 1", ["(w # 5) , 1"], "1", "A", []],
+		// `|`・`;` の辺と、辺の順（R137・R61）
+		["(w < 3) | 5 は 5", ["(w < 3) | 5"], "5", "A", []],
+		["(w < 3) ; 5 は 5", ["(w < 3) ; 5"], "5", "A", []],
+		["5 | (w != 3) は 5", ["5 | (w != 3)"], "5", "A", []],
+		["5 , (w < 3) は 5", ["5 , (w < 3)"], "5", "A", []],
+		["5 , (inc == 5) は 5", ["5 , (inc == 5)"], "5", "A", [LL]],
+		// 空白の並びの項（R137）と値の口（R112）
+		["(w < 3) 5 は 5", ["(w < 3) 5"], "5", "A", []],
+		["5 (w < 3) 3 は (construct 5 3)（`5 w 3` と同じ）", ["5 (w < 3) 3"], "(construct 5 3)", "A", []],
+		["inc (w < 3) 5 は (apply inc 5)", ["inc (w < 3) 5"], "(apply inc 5)", "A", []],
+		["inc (1 & inc) 5 は (apply inc 5)（知らせは中の inc）", ["inc (1 & inc) 5"], "(apply inc 5)", "A", [LL]],
+		["inc (inc == 5) 5 は (apply inc 5)", ["inc (inc == 5) 5"], "(apply inc 5)", "A", [LL]],
+		// 括らない項も、それを1行で括った物と同じ（R49 は項そのものを挙げる）
+		["w < 3 , 5 は 5", ["w < 3 , 5"], "5", "A", []],
+		["w < 3 5 は 5", ["w < 3 5"], "5", "A", []],
+		["inc w != 3 5 は (apply inc 5)", ["inc w != 3 5"], "(apply inc 5)", "A", []],
+		// `$` の先（R56）
+		["$(1 & w) は知らせ無し", ["$(1 & w)"], null, "A", []],
+		// それを右辺に持つ名前（R49）
+		["q : w < 3 ⏎ q , 5 は 5", ["q : w < 3", "q , 5"], "5", "A", []],
+		["q : (w < 3) ⏎ inc q 5 は (apply inc 5)", ["q : (w < 3)", "inc q 5"], "(apply inc 5)", "A", []],
+		["q : 1 & inc ⏎ q 5 は 5（知らせは q の行の inc）", ["q : 1 & inc", "q 5"], "5", "A", ["warning/leftover-lambda@1"]],
+		["q : w != 3 ⏎ $q は知らせ無し（R56）", ["q : w != 3", "$q"], "$q", "A", []],
+		// 印 zero でない答え：計算の `!_`（R61 の例）・数の算術の答え（`!_` は単位で値 1、R87）・番地の算術の吸った答え（R62 の例）・関数の答え・仮引数の比べ
+		["(3 < 2) , 5 は `,` のまま", ["(3 < 2) , 5"], "(, [3 < 2] 5)", "A", []],
+		["(inc + 1) , 5 は `,` のまま", ["(inc + 1) , 5"], "(, [inc + 1] 5)", "A", [LL]],
+		["($vs + 0x10) , 5 は `,` のまま", ["vs : 1 , 2 , 3", "($vs + 0x10) , 5"], "(, [$vs + 0x10] 5)", "A", ["warning/dollar-non-function@0"]],
+		["ff : x ? x < 3 ⏎ ff 1 , 5 は `,` のまま", ["ff : x ? x < 3", "ff 1 , 5"], "(, (apply ff 1) 5)", "A", []],
+		["ff : x ? (x < 3) , 5 の本体は `,` のまま", ["ff : x ? (x < 3) , 5"], "(: ff (? [x] (, [x < 3] 5)))", "A", []],
+	];
+	for (const [name, lines, want, kind, diags] of rows) {
+		total++;
+		const label = `\`!_\` が答えを \`!_\` にする演算子の項 ${name}`;
+		const all = [...PRE, ...lines];
+		let r;
+		try {
+			r = resolve(src(all));
+		} catch (e) {
+			fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${all.length - d.line}`).sort();
+		const problems = [];
+		if (want !== null && show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (diags && JSON.stringify(got) !== JSON.stringify([...diags].sort())) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify([...diags].sort())}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+	// 同じ答え：通るなら同じ種類・知らせと at の行の木（無ければ全部の行、null なら木は見ない。書いた葉は書いたままなので、`$[inc , (w < 3)]` と `$[inc , w]` は木の綴りが
+	// 違う）、断るなら同じ理由・門・実体。mode が "tree" の組は種類と at の行の木だけ（leftover-lambda の書いた行か数が違う組：名前の右辺に書いた関数の知らせは名前の行に
+	// 出る。段18 の器の側の関数の知らせ（`inc ' 0`）と、`(1 & inc)` の inc の知らせは、w の版に無い）。"unitLeaf" の組は、木を unitLeafShow で書く（順位 2 以上の `!_` と
+	// 分かる葉は綴りに依らず「葉」、順位 1 の括りは綴りのまま）：印 zero の物が2つ以上ある単位だけの鎖（w と `(1 & inc)`・`(w < 3)` と w）でどれを残すかは R61 が決めて
+	// いないので、辺の順を入れ替えても、印 zero の葉が1つ残り、種類と知らせが同じことだけを見る。
+	const outcome = (lines, at, mode) => {
+		const all = [...PRE, ...lines];
+		try {
+			const r = resolve(src(all));
+			const trees = (at === null ? [] : at === undefined ? r.trees : [r.trees[r.trees.length + at]]).map((x) => (mode === "unitLeaf" ? unitLeafShow(x) : show(x)));
+			const kind = kindOf(r.trees[r.trees.length - 1]);
+			if (mode === "tree") return JSON.stringify({ kind, trees });
+			return JSON.stringify({ kind, trees, diags: r.diagnostics.map((d) => `${d.severity}/${d.reason}@${all.length - d.line}`).sort() });
+		} catch (e) {
+			return JSON.stringify({ refused: `${e.reason || e.name} ${e.gate || ""}`, inst: e.instances ? e.instances.map((x) => [x.fn, x.shape]) : null });
+		}
+	};
+	const FQ = "fq : [a ~r] ? $a == $a";
+	const PC = "pc : [a] [b] ? $a == $a";
+	const same = [
+		["w , (1 & inc) と (1 & inc) , w", ["w , (1 & inc)"], ["(1 & inc) , w"], undefined, "unitLeaf"],
+		["w , (1 & inc) と w~ , (1 & inc)", ["w , (1 & inc)"], ["w~ , (1 & inc)"], undefined, "unitLeaf"],
+		["(w < 3) , w と w , (w < 3)", ["(w < 3) , w"], ["w , (w < 3)"], undefined, "unitLeaf"],
+		["(1 & inc) , (w < 3) と (w < 3) , (1 & inc)", ["(1 & inc) , (w < 3)"], ["(w < 3) , (1 & inc)"], undefined, "unitLeaf"],
+		["(1 & inc) | (w < 3) と (w < 3) | (1 & inc)", ["(1 & inc) | (w < 3)"], ["(w < 3) | (1 & inc)"], undefined, "unitLeaf"],
+		["(1 & inc) ; (w != 3) と (w != 3) ; (1 & inc)", ["(1 & inc) ; (w != 3)"], ["(w != 3) ; (1 & inc)"], undefined, "unitLeaf"],
+		["(w < 3) (1 & inc) と (1 & inc) (w < 3)（並びの項が全部消えて葉を1つ残す、R137）", ["(w < 3) (1 & inc)"], ["(1 & inc) (w < 3)"], undefined, "unitLeaf"],
+		["((1 & inc) , w) 5 と (w , (1 & inc)) 5", ["((1 & inc) , w) 5"], ["(w , (1 & inc)) 5"]],
+		["inc ((w < 3) , w) 5 と inc (w , (w < 3)) 5", ["inc ((w < 3) , w) 5"], ["inc (w , (w < 3)) 5"]],
+		["$((w < 3) , w) と $(w , (w < 3))（R56）", ["$((w < 3) , w)"], ["$(w , (w < 3))"], null],
+		["v : (w < 3) , w ⏎ v 5 と v : w , (w < 3) ⏎ v 5", ["v : (w < 3) , w", "v 5"], ["v : w , (w < 3)", "v 5"], -1],
+		// 名前は右辺を書いたのと同じ（`:` はメタ）
+		["q : w < 3 ⏎ q , 5 と (w < 3) , 5", ["q : w < 3", "q , 5"], ["(w < 3) , 5"], -1],
+		["q : 1 & inc ⏎ inc q 5 と inc (1 & inc) 5", ["q : 1 & inc", "inc q 5"], ["inc (1 & inc) 5"], -1, "tree"],
+		["q : inc ' 0 ⏎ q , 1 と (inc ' 0) , 1", ["q : inc ' 0", "q , 1"], ["(inc ' 0) , 1"], -1, "tree"],
+		// 置いた所の読みは w と同じ（R49）：`$` の先（R56・R101）・後置 `~`（R84）・値の口（R112）・括りの関数の口（R137・R122）
+		["$[inc , (w < 3)] と $[inc , w]", ["$[inc , (w < 3)]"], ["$[inc , w]"], null],
+		["$[inc , w < 3] と $[inc , w]", ["$[inc , w < 3]"], ["$[inc , w]"], null],
+		["$[(w < 3) inc] と $[w inc]", ["$[(w < 3) inc]"], ["$[w inc]"], null],
+		["$[w < 3 , 5] と $[w , 5]", ["$[w < 3 , 5]"], ["$[w , 5]"], null],
+		["(inc ' 0)~ 5 と w~ 5", ["(inc ' 0)~ 5"], ["w~ 5"], undefined, "tree"],
+		["inc (inc ' 0)~ 5 と inc w~ 5", ["inc (inc ' 0)~ 5"], ["inc w~ 5"], undefined, "tree"],
+		["pc (w < 3) 5 と pc w 5", [PC, "pc (w < 3) 5"], [PC, "pc w 5"], undefined, "unitLeaf"],
+		["pc (1 & inc) 5 と pc w 5（定義の行の実体で見る）", [PC, "pc (1 & inc) 5"], [PC, "pc w 5"], -2, "tree"],
+		["fq (w < 3) と fq w", [FQ, "fq (w < 3)"], [FQ, "fq w"], undefined, "unitLeaf"],
+	];
+	for (const [name, a, b, at, mode] of same) {
+		total++;
+		const label = `\`!_\` が答えを \`!_\` にする演算子の項 同じ答え ${name}`;
+		const x = outcome(a, at, mode);
+		const y = outcome(b, at, mode);
+		if (x === y) ok(label);
+		else fail(label, `左: ${x}`, `右: ${y}`);
+	}
+	// 行の根と評価する所（比べ・`&` の被演算子・書き込む値・手続きの行）で、`,` の鎖が残す物は同じ（R61・R137・R76・R116）：根に置いた鎖の木が、評価する所に置いた時の
+	// 被演算子の木で、leftover-lambda の数も同じ。根の葉が null の鎖は、印 zero の物が2つあって R61 がどちらを残すかを言わないので、揃いだけを見る。
+	const BOX = ["box : 0", "pp : $box"];
+	const PROC = (s) => ["t : y ?", `\t${s}`, "\ty", "", "t 3"];
+	const chainAt = [
+		["(w < 3) , 5", "5"],
+		["(1 & inc) , 5", "5"],
+		["5 , (inc == 5)", "5"],
+		["(w < 3) , w", null],
+		["(1 & inc) , (w < 3)", null],
+	];
+	const placed = (lines) => {
+		const r = resolve(src([...PRE, ...lines]));
+		return { trees: r.trees.map(show), ll: r.diagnostics.filter((d) => d.reason === "leftover-lambda").length };
+	};
+	for (const [c, leaf] of chainAt) {
+		total++;
+		const label = `\`!_\` が答えを \`!_\` にする演算子の項 根と評価する所で残す物が同じ ${c}`;
+		const problems = [];
+		try {
+			const root = placed([c]);
+			const t = root.trees[root.trees.length - 1];
+			if (leaf !== null && t !== leaf) problems.push(`根 got: ${t}  want: ${leaf}`);
 			const places = [
 				[[`${c} == 2`], 1, `(== ${t} 2)`],
 				[[`1 & ${c}`], 1, `(& 1 ${t})`],
