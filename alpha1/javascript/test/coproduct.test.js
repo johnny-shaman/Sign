@@ -17,8 +17,9 @@
  * `(f3 1)` は `[f3 1]`）。
  *
  * 綴りの注（2026-11-08 の R138）：この先の頭の注は記録で、`_`・`!_` は書いた時の綴り（`_` が void、`!_` が恒等射と穴）。今の綴りは逆（`_` が id、`!_` が void）で、試験の源と木は今の綴り。
- * 片2（2026-11-09 の R138 の試験）：手で書いた `!_`・書いた空の器・未定義の名前（枝の条件の名前も）は読む段で断るので、その行は節と断り方ごとに1〜3本の
- * 代表を断る側へ移し（言い分の頭と行も見る）、残りは消した。値の振る舞いを見る行は計算の `!_`（`(3 < 2)`）か `!_` と分かる名前 w（R115、W115）で、
+ * 片2（2026-11-09 の R138 の試験）：手で書いた `!_`・書いた空の器は読む段で断るので、その行は節と断り方ごとに1〜3本の
+ * 代表を断る側へ移し（言い分の頭と行も見る）、残りは消した。未定義の名前は `!_` と分かる値で、読む段は書いた所ごとに warning の name-undefined を
+ * 知らせて通す（R21）。本体の枝（条件か値）と既定値に置けば、定義の所の G22（R128・R139）。値の振る舞いを見る行は計算の `!_`（`(3 < 2)`）か `!_` と分かる名前 w（R115、W115）で、
  * 穴の行は今の綴りの `_` で、名前の要る行はその名前を定義して書き直した。
  * §6.3 の表の後ろに、表の外の規則の見本（「追加」）、実装を確かめた2つの workflow（仕様どおりか・反証）の指摘を
  * 当てた所（「確かめ」）、変異試験で壊しても落ちなかった所を見分ける入力（「穴」）を置く。「確かめ」の行は、直す
@@ -146,8 +147,8 @@ const passes = [
 	// 根に残った関数は `!_`（R42。木は `(unit …)` で包む）。前は L の根。値は U 09-12 00:15 の「行末で `_`」（前の綴り）と同じ。
 	["use inc 5（根に残った関数は `!_`、R42）", std("use inc 5"), "(unit (apply (compose use inc) 5))", "A"],
 	["use 5 inc（同じ、R42）", std("use 5 inc"), "(unit (compose (apply use 5) inc))", "A"],
-	// 2026-11-09 の R138：未定義の名前は名前の門（P2）で断るので、a・b・c は本体の裸の仮引数で書いた（前は根の未定義の名前で、R111 の `!_` と分かる値。
-	// その前は R21 の「b, c は値」の読み）。前置 `@` の先は覗かない（R82 の peekDesc）ので、木と種類は今のまま。
+	// a・b・c は本体の裸の仮引数で、中身の見えない値（未定義の名前は `!_` と分かる値で、この行の意図に合わない、R21）。前置 `@` の先は覗かない
+	// （R82 の peekDesc）ので、根は未知。
 	["本体 @a b c（a・b・c は裸の仮引数。`@a` の先は覗かず、未知の根。前は根の未定義の名前で R111 の `!_` と分かる値）", std("t : a b c ? @a b c"), "(apply @a (construct b c))", "未知", { body: true }],
 	["本体 g x（g, x は裸の仮引数）", std("t : g x ? g x", { omit: ["g"] }), "(construct g x)", "A", { body: true }],
 	["本体 @g x（未知の根）", std("t : g x ? @g x", { omit: ["g"] }), "(apply @g x)", "未知", { body: true }],
@@ -173,8 +174,9 @@ const passes = [
 	["go _ xs（前は G13）", std(["go : ys ? ys", "xs : 1 , 2", "go _ xs"]), "(apply go xs)", "A"],
 	["f4 _ 2 _ 3（穴2つ、R16。根なので `!_`、R42。前は手で書いた `!_` の `f4 !_ 2 !_ 3` で、R105 の `f4 2 3`）", std("f4 _ 2 _ 3"), "(unit (? [$p0 $p1] (apply f4 (construct $p0 2 $p1 3))))", "A"],
 	["[add _ 10] 5（前は `[add !_ 10] 5`）", std("[add _ 10] 5"), "(apply [add _ 10] 5)", "A"],
-	// 2026-11-09 の R138：手で書いた `!_` の行（`!_ \a`・`!_ !_`・`inc !_`・`([+ 1] !_) 5`・`[!_] !_`・`1 !_ 2`・`\a !_`・`!_ inc 5`・`add 1 !_`・`inc 1 !_`）と、
-	// 根の未定義の名前の行（`f !_ !_`・`!_ + 1 f`・`say 5`）はどれも断る（void-written・name-undefined）。代表の `!_ 1 2`・`say 5` を下の refused へ移し、残りは消した。
+	// 手で書いた `!_` の行（`!_ \a`・`!_ !_`・`inc !_`・`([+ 1] !_) 5`・`[!_] !_`・`1 !_ 2`・`\a !_`・`!_ inc 5`・`add 1 !_`・`inc 1 !_`）は断る（void-written、R138。
+	// 代表は下の refused の `!_ 1 2`）。根の未定義の名前は `!_` と分かる値で、`w : pw ' zz` の w と同じに読み、読む段が warning の name-undefined で知らせる（R21）。
+	["say 5（say は未定義の名前で `!_` と分かる値、R21。`!_ 5` と同じ 5）", std("say 5"), "5", "A", { undef: ["say@17"] }],
 	["[x ? x + 1] 5", std("[x ? x + 1] 5"), "(apply [x ? x + 1] 5)", "A"],
 	["map $[* 2] 1 2 3 4 5（最後の括りが残りの並びを受ける。R24、2026-10-19）", std("map $[* 2] 1 2 3 4 5"), "(apply map (construct $[* 2] 1 2 3 4 5))", "A"],
 	["n 1 2 3（括り1つの関数は並び全体を受ける。R24、2026-10-19）", std("n 1 2 3"), "(apply n (construct 1 2 3))", "A"],
@@ -248,7 +250,6 @@ const refused = [
 	// 2026-11-09 の R138 の代表（上の passes から移した行）。言い分の頭と行（e.line）も見る。
 	["add !_ 10（R138 で手で書いた `!_` は断る。前は R105 で `add 10`、その前は R16 の穴）", std("add !_ 10"), "void-written", { line: 17, x: "!_" }],
 	["!_ 1 2（R138。前は値の隣の `!_` が消えて `(construct 1 2)`）", std("!_ 1 2"), "void-written", { line: 17, x: "!_" }],
-	["say 5（say は未定義の名前で、R138 で断る。前は R112 で `!_ 5` と同じ 5、その前は `(construct say 5)`）", std("say 5"), "name-undefined", { line: 17, x: "say" }],
 ];
 
 const GATE_REASON = {
@@ -291,8 +292,8 @@ const fail = (name, ...lines) => console.log(`FAIL ${name}\n${lines.map((l) => `
 
 // 通る行を確かめる。extra：body（本体の木を見る）・at（見る行の番号）・leftover（根が、余りを後ろに積んだ構築か。R35。前の印
 // excess の行は、2026-10-22 にこの印へ移した。2026-10-23 の左からの畳み込み（R40）で節の印 leftover は無くなったので、木の形で見る：
-// 根が構築で、最初の子が適用の節（前から n 個を当てた適用の後ろに余りが並ぶ形）・diag（undefined-name が出る名前）・
-// diagText（その名前の undefined-name のどれかの文面に含まれる文字列）・diagCount（出る診断の数）・pfInfo（pointfree-not-folded
+// 根が構築で、最初の子が適用の節（前から n 個を当てた適用の後ろに余りが並ぶ形）・undef（warning の name-undefined を「名前@行」で出る順に
+// 並べた物。R21）・diagCount（出る診断の数）・pfInfo（pointfree-not-folded
 // の information が出る点なしの綴り。R32）・leftoverDiag（leftover-lambda の warning が出る、余ったラムダの木の綴りの並び。出ない
 // ことを見るなら []。R48、2026-10-24。重さは同じ日の §5 Q44 の答えで information から warning に上げた）・severities（出る診断の
 // 「重さ/reason」を並べ替えた並び。重さの1か所 DIAG_SEVERITY を見る）。
@@ -312,11 +313,14 @@ const checkPass = (name, src, want, kind, extra = {}) => {
 	if (kind !== null && kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
 	const leftover = !!t && t.t === "construct" && t.items[0].t === "apply";
 	if ("leftover" in extra && leftover !== extra.leftover) problems.push(`leftover got: ${leftover}  want: ${extra.leftover}`);
-	if (extra.diag && !r.diagnostics.some((d) => d.reason === "undefined-name" && d.severity === "information" && d.name === extra.diag)) {
-		problems.push(`undefined-name（${extra.diag}）が出ていない: ${JSON.stringify(r.diagnostics)}`);
-	}
-	if (extra.diagText && !r.diagnostics.some((d) => d.reason === "undefined-name" && d.name === extra.diag && d.message.includes(extra.diagText))) {
-		problems.push(`undefined-name（${extra.diag}）の文面に「${extra.diagText}」が無い: ${JSON.stringify(r.diagnostics)}`);
+	if ("undef" in extra) {
+		// R21：name-undefined の warning を、書いた所ごとに「名前@行」で並べた物（出る順）。言い分の頭と「§4 R21」も見る。
+		const nu = r.diagnostics.filter((d) => d.reason === "name-undefined");
+		const got = nu.map((d) => `${d.name}@${d.line}`);
+		if (JSON.stringify(got) !== JSON.stringify(extra.undef)) problems.push(`name-undefined got: ${JSON.stringify(got)}  want: ${JSON.stringify(extra.undef)}`);
+		for (const d of nu) {
+			if (d.severity !== "warning" || !d.message.startsWith(`名前 \`${d.name}\` は、ここから見える所に定義がありません。`) || !d.message.includes("§4 R21")) problems.push(`name-undefined の重さか文面が違う: ${JSON.stringify(d)}`);
+		}
 	}
 	if (extra.pfInfo && !r.diagnostics.some((d) => d.reason === "pointfree-not-folded" && d.severity === "information" && d.name === extra.pfInfo && d.message.includes("おすすめはしません"))) {
 		problems.push(`pointfree-not-folded（${extra.pfInfo}）が出ていない: ${JSON.stringify(r.diagnostics)}`);
@@ -348,6 +352,10 @@ const R138_HEAD = {
 	"empty-written": (x) => `書いた空の器 \`${x}\` があります。`,
 	"name-undefined": (x) => `名前 \`${x}\` は、`,
 };
+// R128・R139：本体の枝と既定値に書いた `!_` と分かる値の G22 は { line, zero, law }。断った行と、その値 zero の名指しと、法則の番号（枝は R128、
+// 既定値は R139）を比べる。
+const G22_HEAD = (x) => `\`${x}\` は、書いた所で \`!_\` と分かる値です（未定義の名前・\`!_\` と分かる名前・無い欄など、§4 R49・R21）。`;
+const unitRowOk = (e, at) => e.gate === "G22" && e.line === at.line && String(e.message).includes(G22_HEAD(at.zero)) && String(e.message).includes(`§4 ${at.law}`);
 const checkRefused = (name, src, want, inst) => {
 	total++;
 	try {
@@ -359,8 +367,8 @@ const checkRefused = (name, src, want, inst) => {
 		const at = inst && !Array.isArray(inst) ? inst : null;
 		const gotInst = e.instances ? JSON.stringify(e.instances.map((i) => [i.fn, i.shape])) : "なし";
 		const instOk = !inst || !!at || gotInst === JSON.stringify(inst);
-		const head = at && R138_HEAD[want] ? R138_HEAD[want](at.x) : null;
-		const atOk = !at || (e.line === at.line && !!head && String(e.message).startsWith(head) && String(e.message).includes("§4 R138"));
+		const head = at && at.zero !== undefined ? G22_HEAD(at.zero) : at && R138_HEAD[want] ? R138_HEAD[want](at.x) : null;
+		const atOk = !at || (at.zero !== undefined ? unitRowOk(e, at) : e.line === at.line && !!head && String(e.message).startsWith(head) && String(e.message).includes("§4 R138"));
 		if (e.reason === wantReason && (isName || e.gate === want) && instOk && atOk) ok(`${name} → ${want}`);
 		else {
 			fail(
@@ -380,8 +388,7 @@ for (const [name, src, want, inst] of refused) checkRefused(name, src, want, ins
 // §6.3 の外：仕様の規則（§4・§3.4・P2）の見本で、上の表に無いもの。
 const extraPasses = [
 	// R12 の見本は `|x| f`。`f` は標準の定義に無い（`use` の仮引数を隠す）ので、アリティ1の `inc` で書く。R12 は 2026-10-24 に廃止
-	// （R47）：inc は `|x|` の後ろに積まれて余り、根で `!_`（R42・R48）。前は `(apply inc |x| ·rev)`。2026-11-09 の R138 で未定義の名前は断るので、囲む値を
-	// ファイルの名前 z にした（前は未定義の名前 x の `|x| inc`）。
+	// （R47）：inc は `|x|` の後ろに積まれて余り、根で `!_`（R42・R48）。囲む値はファイルの名前 z（未定義の名前なら `!_` と分かる値で、知らせが付く、R21）。
 	["R12 |z| inc（z はファイルの名前。前は未定義の名前 x の `|x| inc`）（R47。前は逆適用）", std(["z : 5", "|z| inc"]), "(construct |z| (unit inc))", "A"],
 	// R47 で `1 (d 2)`（2026-10-22 の強さの順と同じ木）。2026-10-23 は逆適用で `(d 1) 2`。
 	["R7 1 d 2（R47。前は `(d 1) 2`）", std("1 d 2"), "(construct 1 (apply d 2))", "A"],
@@ -562,19 +569,22 @@ const gapPasses = [
 	["#ff : y ? y の後で ff 5", std(["#ff : y ? y", "ff 5"]), "(apply ff 5)", "A"],
 	["ff : [y ? ff y]（輪にしない）", std(["ff : [y ? ff y]", "ff 5"]), "(apply ff 5)", "A"],
 	["$_ 5", std("$_ 5"), "(construct $_ 5)", "A"],
-	// undefined-name を名前ごとに1回だけ出すことを見ていた `[say say]`（前は根の `say say`）は、2026-11-09 の R138 で未定義の名前を断る（name-undefined）ので、
-	// 下の gapRefused へ移した。
+	// 未定義の名前は `!_` と分かる値で、読む段は書いた所ごとに warning の name-undefined を出す（R21）。`[say say]` は2回。
+	["[say say]（say は未定義の名前で、書いた所ごとに name-undefined、R21）", std("[say say]"), "[say say]", "A", { undef: ["say@17", "say@17"] }],
+	// 本体 `[yy : a] yy` の括りの行は器の欄（local-field）で、外からは引かない。括りの外の yy は未定義の名前で `!_` と分かる値（R21）なので、空白の並びの
+	// 単位として消える（R137）。
+	["本体の括りの欄の名前を括りの外で書く [yy : a] yy（括りの外の yy は未定義の名前、R21）", std("h : a ? [yy : a] yy"), "(: h (? [a] [yy : a]))", "A", { undef: ["yy@17"] }],
 	// 片イ（R120、2026-11-03）から、下の gapRefused の G2(a) と種類の未知な項の G7 の行は通る（木は畳みの予想、R118）。仮置きの取り消しと本体の根が
 	// 未知なことは、根の種類（未知）で見る（仮置きの A が残れば根は A になる）。
 	["[+ inc] 5（前は G7）", std("[+ inc] 5"), "(construct [+ inc] 5)", "未知"],
 	["相互再帰：仮置きの取り消し（前は G2(a)）", std(["fq : k ? (gq k) ' 0", "gq : k ? fq k", "gq 1 inc"]), "(construct (apply gq 1) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
 	["相互再帰：依っている答えを戻す（前は G2(a)）", std(["fq : k ? ([gq k] * [hq k]) ' 0", "gq : k ? fq k", "hq : k ? gq k", "hq 1 inc"]), "(construct (apply hq 1) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
 	["字下げの本体の最後の行の根が未知（前は G2(a)）", std(["t : a ?", "\ta", "\t[,] a", "", "t 1 inc"]), "(construct (apply t 1) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
-	// 寄せ1（R128）から `⇥yy : 5` は条件 yy の枝で、本体の根は A。2026-11-09 の R138 で未定義の名前は断るので、yy はファイルで定義した（前は未定義の名前で `!_`、
-	// その前は定義か枝か決まらず未知）。
+	// 寄せ1（R128）から `⇥yy : 5` は条件 yy の枝で、本体の根は A。条件が未定義の名前なら `!_` と分かる値で定義の所で G22（R128・R21）なので、yy はファイルで
+	// 定義した。
 	["枝のある字下げの本体の名前1つの条件の行（yy はファイルの名前。前は未定義の名前 yy、その前は枝の無い本体の yy : 5）（前は G2(a)）", std(["yy : 0", "t : a ?", "\ta > 0 : 1", "\tyy : 5", "\ta", "", "t 1 inc"]), "(construct (apply t 1) (unit inc))", "A", { leftoverDiag: ["inc"] }],
-	// 寄せ1（R128）：括りの欄の名前は外からは引かない（local-field）ので、本体の括りの外の yy は未定義の名前（前は本体の局所の名前で G7）。2026-11-09 の R138 から
-	// 未定義の名前は断るので、下の gapRefused へ移した。
+	// 寄せ1（R128）：括りの欄の名前は外からは引かない（local-field）ので、本体の括りの外の yy は未定義の名前で `!_` と分かる値（R21）。その行は上の
+	// `[yy : a] yy` の行で、読む段は name-undefined を知らせて通る。
 	["-_ 5（R138 の識別子の id：括らない値の印の `_` は `i : _` の i と同じで、`-i` と同じ解なしの `!_`。木は書いたまま A。前は未知、その前は G7）", std("-_ 5"), "(construct -_ 5)", "A"],
 	["say@ 5（前は G7）", std("say@ 5"), "(construct say@ 5)", "未知"],
 	["本体 [@h] 5（前は G7）", std("t : h ? [@h] 5"), "(construct [@h] 5)", "未知", { body: true }],
@@ -594,10 +604,8 @@ const gapRefused = [
 	// `[~_] 5`（前の綴り。G7）は、2026-10-27 の R88（§5 Q14 の残りの答え：`~_` は書いた `[_]` と同じ項。同じ日の確かめの直しの前は「書いた `[]` と同じ」）で通る側（いちばん後ろの「R83〜R93」の節）へ移した。
 	// `[inc == 2] 5`（G7：辺が関数の `==` は未知）は、2026-10-26 の R76（§5 Q37 の答え：比べの被演算子は評価する所）で inc が `_`（前の綴り）になり、通る側（いちばん後ろの
 	// 「R73〜R79」の節）へ移した。
-	// 2026-10-26 の R80（§5 Q10 の答え）で、枝の無い本体の局所の定義 `yy : inc` ⏎ `yy a` は右辺の種類で読んで通った。寄せ1（R128、2026-11-04）で R80 をやめ、
-	// 本体の `:` の行は枝なので、`yy : inc` ⏎ `yy : double` ⏎ `yy a` は条件 yy の枝2つと既定の行で通る（同じ条件の枝が2つでも断らない。いちばん後ろの
-	// 「R80〜R82」の節）。本体 `[yy : a] yy` の括りの行は器の欄（local-field）で、外からは引かない。寄せ1（R128）で関数の本体の範囲は局所の名前を数えなく
-	// なったので、括りの外の yy は未定義の名前（`!_`、R111）で通る（上の gapPasses。前は括りの欄の名前を本体の範囲の局所の名前にも数えて G7）。
+	// 本体の `:` の行は枝で名前を定義しない（R128）。`yy : inc` ⏎ `yy a` の条件 yy は未定義の名前で `!_` と分かる値なので、定義の所で G22（R128・R21、
+	// いちばん後ろの「R80〜R82」の節の代表）。本体 `[yy : a] yy` の括りの外の yy は未定義の名前（`!_`、R21）で通る（上の gapPasses）。
 	["仮引数の重複", std("ff : x x ? x"), "name-duplicate"],
 	["括りの中の取り込み", std(["[io@]", "say 5"]), "G7"],
 	// 仮置きを取り消す仕組み：gq の根は fq の仮置き A の上で A と出るが、fq の根は gq から引いた物で未知なので、仮置きが外れて
@@ -623,8 +631,6 @@ const gapRefused = [
 	["門は行の順に断る", std(["uu : x ? [,] x", "uu 5 3", "tt : a ? _ == 5"]), "G7"],
 	// 2026-11-09 の R138 の代表（上の gapPasses から移した行）。
 	["[] 5（R138 で書いた空の器は断る。前は `(construct [] 5)` の A）", std("[] 5"), "empty-written", { line: 17, x: "[]" }],
-	["[say say]（R138 で未定義の名前は断る。前は undefined-name を1回だけ出して `[say say]`）", std("[say say]"), "name-undefined", { line: 17, x: "say" }],
-	["本体の括りの欄の名前を括りの外で書く [yy : a] yy（R138 で未定義の名前は断る。前は undefined-name の `(construct [yy : a] yy)`、その前は G7）", std("h : a ? [yy : a] yy"), "name-undefined", { line: 17, x: "yy" }],
 ];
 for (const [name, src, want, kind, extra] of gapPasses) checkPass(`穴 ${name}`, src, want, kind, extra);
 for (const [name, src, want, inst] of gapRefused) checkRefused(`穴 ${name}`, src, want, inst);
@@ -896,8 +902,8 @@ for (const [name, src, want] of holeCountRefused) checkRefused(`穴と実引数�
 // 未定義の名前を被演算子に書く R30（`[-a]`）にしたが、主の Claude の3つの道の2つ目（前の `_` の綴りに戻して R30 を外す）への
 // U〔答え〕2026-10-21 08:20「これがよさそうだね。 / その方が統一的に扱えると思う。」で戻した。括った `[!_]` は恒等射ではなく
 // 否定の点なし（U 08:24「[!_] は否定の点無しにしないの？ 恒等射なら括らなくていい。」、残す理由は U 08:26）。恒等射は括らない
-// `_`（上の「印と穴」）。`[-a]` は R30 の前と同じく、値の印を当てた項の括り。2026-11-09 の R138 で未定義の名前は断る（name-undefined）ので、a は本体の
-// 仮引数で書く（前は未定義の a で A、information は R21 の文面。片9b の R111 からは「定義が無い名前は `!_`」の文面）。
+// `_`（上の「印と穴」）。`[-a]` は R30 の前と同じく、値の印を当てた項の括り。見本の a は本体の
+// 仮引数で書く（未定義の名前の a は `!_` と分かる値で、読む段が name-undefined を知らせる、R21）。
 const unaryPasses = [
 	// 通る：前置・後置の点なしの単項（前は G14）
 	["[-_] 5", std("[-_] 5"), "(apply [-_] 5)", "A", { diagCount: 0 }],
@@ -928,8 +934,7 @@ const unaryPasses = [
 	["p : [-_] の後で p 5", std(["p : [-_]", "p 5"]), "(apply p 5)", "A"],
 	// 名前を書かないので、取り込みのある範囲でも同じ（R30 では名前が未定義か分からず、使えなかった）
 	["io@ の後で [-_] 5", std(["io@", "[-_] 5"]), "(apply [-_] 5)", "A"],
-	// R30 を廃止した：`[-a]` は値の印を当てた項の括り（R30 の前と同じ）。2026-11-09 の R138 で未定義の名前は断るので、a は本体の仮引数で書く（前は未定義の a で、
-	// information は未定義の名前の文面。片9b の R111 から「定義が無い名前は `!_`」）。
+	// `[-a]` は値の印を当てた項の括り。見本の a は本体の仮引数で書く（未定義の名前の a は `!_` と分かる値で、知らせが付く、R21）。
 	["本体 [-a] 5（値の括りと 5 の構築。a は仮引数）", std("t : a ? [-a] 5"), "(construct [-a] 5)", "A", { body: true, diagCount: 0 }],
 	["本体 (-a) 5（丸い括りも同じ）", std("t : a ? (-a) 5"), "(construct [-a] 5)", "A", { body: true, diagCount: 0 }],
 	["本体 [-a]（値）", std("t : a ? [-a]"), "[-a]", "A", { body: true, diagCount: 0 }],
@@ -1037,7 +1042,8 @@ const foldPfPasses = [
 	["[>=] 3 3 1", std("[>=] 3 3 1"), "(apply [>=] (construct 3 3 1))", "A"],
 	["[>] 3 2 1", std("[>] 3 2 1"), "(apply [>] (construct 3 2 1))", "A"],
 	["[==] 1 1（前は G7、Q19）", std("[==] 1 1"), "(apply [==] (construct 1 1))", "A"],
-	// `[&] a b c`（a b c は未定義の名前）は、2026-11-09 の R138 で断る（下の foldPfRefused）。
+	// a b c は未定義の名前で `!_` と分かる値（R21）。書いた所ごとに name-undefined を知らせ、木は w の `[&] w w w` と同じ。
+	["[&] a b c（a b c は未定義の名前、R21）", std("[&] a b c"), "(apply [&] (construct a b c))", "A", { undef: ["a@17", "b@17", "c@17"] }],
 	// List 1つは要素を並びとして畳む（`[+] [1 2 3]` は 6、案内の `[+] [1 __ 3]` は 4）。前は未知。
 	["[+] [1 2 3]（前は未知）", std("[+] [1 2 3]"), "(apply [+] [1 2 3])", "A"],
 	["[+] [1 (3 < 2) 3]（計算の `!_` の要素。前は手で書いた `[+] [1 !_ 3]`）（前は未知）", std("[+] [1 (3 < 2) 3]"), "(apply [+] [1 [3 < 2] 3])", "A"],
@@ -1103,8 +1109,7 @@ const foldPfRefused = [
 	// `[:]`・`[?]` は今のまま外す（Q19）。片イ（R119）から読む段の pointfree-tree-notation。
 	["今のまま [?] 1 2（Q19）（前は G7、R119）", std("[?] 1 2"), "pointfree-tree-notation"],
 	// 片側の欠けた段1〜9 の点なしは R31 の外（Q19）。片イ（R120）から種類の未知な項として通る（上の foldPfPasses）。
-	// 2026-11-09 の R138 の代表（上の foldPfPasses から移した行）。
-	["[&] a b c（a b c は未定義の名前で、R138 で断る。前は R111 で `!_` と分かる値、その前は R21 の「未定義の名前＝値」）", std("[&] a b c"), "name-undefined", { line: 17, x: "a" }],
+	// R138 の代表（手で書いた `!_`）。
 	["[+] 1 !_（R138 で手で書いた `!_` は断る。前は `1 + !_` の A、その前は G5）", std("[+] 1 !_"), "void-written", { line: 17, x: "!_" }],
 ];
 for (const [name, s, want, kind, extra] of foldPfPasses) checkPass(`畳む ${name}`, s, want, kind, extra);
@@ -1466,15 +1471,17 @@ const answerPasses = [
 	// `n [vs~ 1]` は撒く項を含む器を1つ渡す形で、別の読み（R24 の「構造体とも List とも読めないが中身の見える器」）。
 	["R24 n vs~ 1（撒く項を含む並びは未知の根）", src(["n : [~x] ? x", "vs : 1 , 2", "n vs~ 1"]), "(apply n (construct vs~ 1))", "未知"],
 	["R24 n 4 vs~ 5 では実体を作らない", src(["n : [~x] ? x", "vs : 1 , 2", "n 4 vs~ 5"]), "(: n (? [[~x]] (defer {x})))", null, { at: 0 }],
-	// R25：呼ばれない括りの関数は、本体を書いたまま残して断らない。2026-11-09 の R138 から、読まない本体でも未定義の名前は断る（name-undefined。下の answerRefused）
-	// ので、Hello・World をファイルで定義した（guide の example.sn の 31・32 行目と同じ。前は本体の未定義の名前に information も出さなかった）。
+	// R25：呼ばれない括りの関数は、本体を書いたまま残して断らない。読まない本体の未定義の名前も、書いた所で warning の name-undefined を知らせる（R21。
+	// 下の「1行だけ」）。Hello・World をファイルで定義した行（guide の example.sn の 31・32 行目と同じ）は知らせ無し。
+	["R25 hello : [say] ? say Hello World の1行だけ（Hello・World は未定義の名前で、読まない本体でも知らせる、R21）", "hello : [say] ? say Hello World", "(: hello (? [[say]] (defer {say Hello World})))", null, { undef: ["Hello@1", "World@1"] }],
 	// §6.3 の「hello : [say] ? say Hello World の本体」「f : [x ~xs] ? [f xs] x の本体」（G7）をここへ移した。
 	["R25 hello : [say] ? say Hello World だけ（Hello・World の定義を添えた）", src(["Hello : `Hello`", "World : `World`", "hello : [say] ? say Hello World"]), "(: hello (? [[say]] (defer {say Hello World})))", null, { diagCount: 0 }],
 	["R25 #hello（公開しても同じ）", src(["Hello : `Hello`", "World : `World`", "#hello : [say] ? say Hello World"]), "(: #hello (? [[say]] (defer {say Hello World})))", null, { diagCount: 0 }],
 	["R25 f : [x ~xs] ? [f xs] x だけ", REC, "(: f (? [[x ~xs]] (defer {[f xs] x})))", null],
 	["R25 標準の定義と hello（§6.3 の行。Hello・World の定義を添えた）", std(["Hello : `Hello`", "World : `World`", "hello : [say] ? say Hello World"]), "(: hello (? [[say]] (defer {say Hello World})))", null, { diagCount: 0 }],
 	["R25 字下げの本体の defer", src(["t : [a] ?", "\ta", "\t5", ""]), "(: t (? [[a]] (defer {a ⏎ 5})))", null],
-	// 実体の本体の中の未定義の名前（前は1回だけ information を出した `k : [x ~xs] ? zz x`）は、2026-11-09 の R138 で断る（下の answerRefused）。
+	// 実体の本体の中の未定義の名前は、実体を幾つ作っても、書いた所で1回だけ知らせる（R21）。
+	["R25 実体の本体の未定義の名前は書いた所で1回（R21）", src(["k : [x ~xs] ? zz x", "k [1 2]", "k `ab`"]), "(apply k `ab`)", "A", { undef: ["zz@1"] }],
 	// Zipper の map（pattern_guide.md）。f は裸の仮引数なので A、[x ~y] は List。map f y は同じ形で自分を呼ぶ。
 	["R24 map $[* 2] [1 2 3 4 5]", src(["map : f [x ~y] ? (@f x) , (map f y)", "map $[* 2] [1 2 3 4 5]"]), "(apply map (construct $[* 2] [1 2 3 4 5]))", "A"],
 	// R49（2026-10-24）：f は `$[* 2]` を指す番地の印を持つ（形 `$L`。前は `A`）。`@f x` は `[* 2] x` で A、`map f y` は同じ印の f で
@@ -1526,7 +1533,7 @@ const answerPasses = [
 	// R26 の外の鍵は今までどおり未知（根なら通る）。
 	["R26 m ' 0（構造体に整数の鍵）は未知", src([...M, "m ' 0"]), "(' m 0)", "未知"],
 	["R26 vs ' say（List に名前の鍵）は未知", std("vs ' say"), "(' vs say)", "未知"],
-	["R26 m @ 0 は未知（前は未定義の名前を右に置いた `m @ say`。R138 で `@` の右の名前は断る）", src([...M, "m @ 0"]), "(@ m 0)", "未知"],
+	["R26 m @ 0 は未知（`@` の右に未定義の名前を置いた `m @ say` は、器が `!_` と分かる値で答えも `!_` なので（R21・R49）、器に字面の 0 を置いて見る）",src([...M, "m @ 0"]), "(@ m 0)", "未知"],
 	// 数と、数だけを括った `[3]` は、長さ1の List として受ける（R24、利用者 2026-10-19「それでいいはずだよ」）。
 	// 名前はその数、`~rest` は同じ要素の List。数でない中身の見えない A（裸の仮引数・`$` の番地・範囲）は持ち上げない。
 	["R24 f [3]（長さ1の括りは長さ1の List）", src(["f : [x ~xs] ? x 1", "f [3]"]), "(apply f [3])", "A"],
@@ -1889,9 +1896,6 @@ const answerRefused = [
 	// 上限が大きい（書いた形が深いか、括りの関数が多い）と、1段ずつ深くなる再帰は、深さの門より先に入れ子の数の守り（再帰の
 	// 入れ子 256）に当たる。断るのは変わらない（確かめ 2026-10-20 の4回目）。
 	["深さ 形が1段ずつ深くなる再帰（別の所に 200 段の字面）", src(["f : [x ~xs] ? f [xs xs]", `w : ${NEST(200)}`, "f [1 2]"]), "instance-nest-limit", [["f", ""]]],
-	// 2026-11-09 の R138 の代表（上の answerPasses から移した行）。未定義の名前は、呼ばれない括りの関数の本体でも、実体の本体でも断る。
-	["R25 hello : [say] ? say Hello World の1行だけ（R138 で未定義の名前 Hello を断る。前は本体を読まずに通った）", "hello : [say] ? say Hello World", "name-undefined", { line: 1, x: "Hello" }],
-	["R25 実体の本体の未定義の名前（R138 で断る。前は1回だけ information を出した）", src(["k : [x ~xs] ? zz x", "k [1 2]", "k `ab`"]), "name-undefined", { line: 1, x: "zz" }],
 ];
 for (const [name, s, want, kind, extra] of answerPasses) checkPass(`答え ${name}`, s, want, kind, extra);
 for (const [name, s, want, inst] of answerRefused) checkRefused(`答え ${name}`, s, want, inst);
@@ -1975,9 +1979,7 @@ law("本体の根が違う関数は別の実体", () => {
 });
 // R25：呼ぶ行を定義の前に置いても後に置いても、全部の木と診断が同じ（行の順は違うので、並べ替えて比べる）。
 law("呼ぶ行を定義の前に置いても後に置いても、全部の木が同じ", () => {
-	// 2026-10-28 の片9b：a の本体は前は `say zz`（未定義の名前 zz を値の口に）。R111・R112 で zz は値の口の `_`（前の綴り）で消え、本体の根に say が残る G16 になるので、
-	// 未定義の名前を括りの中に置いた `say [zz 7]`（括りの中の値の隣は今のまま、§5 Q83。知らせ undefined-name は残る）に替えた。
-	// 2026-11-09 の R138 で未定義の名前は断る（name-undefined）ので、本体を字面の `say 7` にした（見るのは行の順に依らないことで、未定義の名前ではない）。
+	// a の本体は字面の `say 7`（見るのは行の順に依らないことで、未定義の名前ではない）。
 	const defs = [...M, "a : [say] ? say 7", REC, "c : [~rest] ? (rest ' say) 21"];
 	const calls = ["a m", "f [1 2 3]", "f `ab`", "c m", "outer : v ? [[say] ? say v] m"];
 	const look = (s) => {
@@ -3544,8 +3546,8 @@ for (const [name, s, want, inst] of recheckRefused) checkRefused(`確かめ ${na
 		// 2026-11-08（R137 の恒等射の片）から 2026-11-16 まで、`,` が単位で消えて `|`・`;` の被演算子に残った葉の `_` の G7 は、そう言っていた（`_ , _ ; 7`・`_ , _ | 6`）。
 		// 2026-11-16 の恒等射の片から、恒等射は `,` のほかの関数と同じ因子で、`_ , _` は `inc , double` と同じく `!_` と分かる辺（R123）なので、`_ , _ ; 7` は 7、
 		// `_ , _ | 6` は 6 で通る（黙った誤答の組の恒等射の表）。その2行は外した。`#`・`&`・`==`・`!==` の被演算子の `_` の G7 は、そう言わない。
-		// 名前を通した `!_` が `,` で消えて残った `_` の行（`nope , _ !_ ; 6`）は、2026-11-09 の R138 で未定義の名前 nope と手で書いた `!_` を断るので外した（`!_` と分かる
-		// 名前 w の `w , _ ; 6` は、R71 で void を選んで 6 で通る）。
+		// 名前を通した `!_` が `,` で消えて残った `_` の行は、手で書いた `!_` を R138 で断るので置かない。`!_` と分かる名前 w の `w , _ ; 6` は `(; (unit _) 6)` で
+		// 通る（未定義の名前 nope の `nope , _ ; 6` も、同じ木に name-undefined を知らせる、R21）。
 		["`==` の被演算子の `_` の G7 は `,` の残りと言わない（_ == 1）", msgOf(std("_ == 1")), (m) => m.startsWith("G7 ") && m.includes("中置 `==` の被演算子にあります") && !m.includes("単位で消えて残った")],
 		// 2026-10-23：段18 の点なしに余りが届く形は通る（前は G12(c) で k ≠ 1 を名指し。上の recheckPasses）。恒等射の2つの行は G18 で、
 		// 言い分は R29 と単位律を名指しし、後ろの関数を名指しする（前は G12(c) と G12(a)）。
@@ -4625,8 +4627,8 @@ const r52Passes = [
 	["v : 5 inc（Q50 の答えから知らせる。前は `(construct 5 inc)` で知らせなかった）", std("v : 5 inc"), "(: v (construct 5 (unit inc)))", null, { diagCount: 1, leftoverDiag: ["inc"] }],
 	["st : ⏎ k : 5 inc（欄の右辺も。前は知らせなかった）", src([INC, "st :", "\tk : 5 inc", "\tj : 2", ""]), "(: st (block (: k (construct 5 (unit inc))) (: j 2)))", "A", { at: 1, diagCount: 1, leftoverDiag: ["inc"] }],
 	// 2026-10-26 の R80（§5 Q10 の答え）から、局所の名前 y は右辺（x の後ろに inc が余り、x）の種類で、局所の定義の行は値の行に数えないので本体は A（前は、局所の
-	// 名前が未知で本体も未知）。寄せ1（R128、2026-11-04）から `⇥y : x inc` は条件 y の枝で、右辺は枝の値の並び（inc が余る）。2026-11-09 の R138 で未定義の名前は
-	// 断るので、条件の名前をファイルの名前 yy にした（前は未定義の名前 y で `!_`、undefined-name）。
+	// 名前が未知で本体も未知）。寄せ1（R128、2026-11-04）から `⇥y : x inc` は条件 y の枝で、右辺は枝の値の並び（inc が余る）。条件の名前は
+	// ファイルの名前 yy にした（未定義の名前の条件は `!_` と分かる値で、定義の所の G22、R128・R21）。
 	["q : x ? ⏎ yy : x inc ⏎ yy（枝の値の並びも。yy はファイルの名前。前は未定義の名前 y の条件、その前は R80 の局所の定義。その前は知らせなかった）", std(["yy : 1", "q : x ?", "\tyy : x inc", "\tyy", "", "q 3"]), "(apply q 3)", "A", { diagCount: 1, leftoverDiag: ["inc"] }],
 	// `:` の右辺の `,` が恒等射で消えて残った並びも、右辺の並び（R45）なので、`v : 5 inc` と同じく R52（前は、`v : 5 inc` と同じく R52 の外）
 	["v : 5 inc , _（辺 `5 inc` は R52 で知らせ、恒等射は `,` の因子で知らせない。2026-11-16 の前は R45 で `,` が消えて `v : 5 inc` と同じ右辺、その前は知らせなかった）", std("v : 5 inc , _"), "(: v (, (construct 5 (unit inc)) (unit _)))", null, { diagCount: 1, leftoverDiag: ["inc"] }],
@@ -4701,8 +4703,8 @@ const closedRhsPasses = [
 	["Q50 v : 1 2 inc ⏎ tl v ⏎ tl [1 2]（実体は1つ）", std(["tl : [a ~r] ? r", "v : 1 2 inc", "tl v", "tl [1 2]"]), "(: tl (? [[a ~r]] (inst [N…] r)))", "A", { at: -4, leftoverDiag: ["inc"] }],
 	// 欄・局所の定義（R52 の片では外だった）
 	["Q50 st : ⏎ k : 5 inc（欄）", src([INC, "st :", "\tk : 5 inc", "\tj : 2", ""]), "(: st (block (: k (construct 5 (unit inc))) (: j 2)))", "A", { at: 1, diagCount: 1, leftoverDiag: ["inc"] }],
-	// 寄せ1（R128）から本体の `⇥yy : x inc` は条件 yy の枝で、右辺は枝の値の並び（前は R80 の局所の定義で、局所の名前は右辺の種類）。2026-11-09 の R138 で未定義の
-	// 名前は断るので、yy はファイルで定義した（前は未定義の名前 y）。
+	// 本体の `⇥yy : x inc` は条件 yy の枝で、右辺は枝の値の並び（R128）。条件が未定義の名前なら `!_` と分かる値で、定義の所で G22（R128・R21）なので、
+	// yy はファイルで定義した。
 	["Q50 q : x ? ⏎ yy : x inc ⏎ yy（枝の値。yy はファイルの名前。前は未定義の名前 y の条件、その前は R80 の局所の定義）", std(["yy : 1", "q : x ?", "\tyy : x inc", "\tyy", "", "q 3"]), "(apply q 3)", "A", { diagCount: 1, leftoverDiag: ["inc"] }],
 	// 括りの欄も（主の Claude が 09:48 の Q51 の表で「対象外、知らせない」と挙げた形。2026-10-24 の確かめの指摘で足した）
 	["Q50 [a : 5 inc]（括りの欄。R52 の片では知らせなかった）", std("[a : 5 inc]"), "[a : 5 inc]", "A", { diagCount: 1, leftoverDiag: ["inc"] }],
@@ -4726,8 +4728,8 @@ const closedRhsPasses = [
 	// Q44：重さ（DIAG_SEVERITY の1か所）。warning でも断らない
 	["Q44 5 inc（leftover-lambda は warning）", std("5 inc"), "(construct 5 (unit inc))", "A", { severities: ["warning/leftover-lambda"] }],
 	["Q44 (5 inc) 3（R52 の知らせも warning）", std("(5 inc) 3"), "(construct [5 inc] 3)", "A", { severities: ["warning/leftover-lambda"] }],
-	// 2026-10-28 の片9b：根の値の隣の未定義の名前 zz は R112 で書いた `!_` と同じに消えた（前は `(construct zz 5 (unit inc))`）。2026-11-09 の R138 で未定義の名前は
-	// 断る（下の closedRhsRefused）ので、undefined-name の重さはここでは見ない。
+	// 根の値の隣の未定義の名前 zz は `!_` と分かる値で、空白の並びの単位として消える（R21・R137）。name-undefined も warning で、断らない。
+	["Q44 zz 5 inc（zz は未定義の名前で値の隣で消える。name-undefined も warning）", std("zz 5 inc"), "(construct 5 (unit inc))", "A", { undef: ["zz@17"], severities: ["warning/leftover-lambda", "warning/name-undefined"] }],
 	["Q44 [<<] 3 4 inc（pointfree-not-folded は information のまま）", std("[<<] 3 4 inc"), "(construct (apply [<<] (construct 3 4)) (unit inc))", "A", { severities: ["information/pointfree-not-folded", "warning/leftover-lambda"] }],
 	// 名前が 5 になったので、5 を置いた並びと同じ答え（`go 5 i`・`_ 5 inc` と同じ）。片イ（R120）で種類の未知な `go v` の後ろの i は積む予想、（R126）で
 	// `_ v inc` は恒等射を消した `v inc` で、根に余った inc は `!_`（v の右辺の inc は定義の行で知らせる）。
@@ -4751,8 +4753,6 @@ const closedRhsRefused = [
 	["R53 p : $[(5 inc)]（前は1項の括りを重ねた中身で知らせ、`$[5 inc]` と知らせが割れた。§5 Q53）", std("p : $[(5 inc)]"), "G20"],
 	["R53 p : $[k : 5 inc]（前は中身の欄の右辺で知らせた。§5 Q53）", std("p : $[k : 5 inc]"), "G20"],
 	["R53 p : $[5 > 1 : 5 inc]（前は中身の枝の値で知らせた。§5 Q53）", std("p : $[5 > 1 : 5 inc]"), "G20"],
-	// 2026-11-09 の R138 の代表（上の closedRhsPasses から移した行）。
-	["Q44 zz 5 inc（R138 で未定義の名前は断る。前は undefined-name の information で、片9b で zz は根の値の隣で消えた）", std("zz 5 inc"), "name-undefined", { line: 17, x: "zz" }],
 ];
 for (const [name, s, want, kind, extra] of closedRhsPasses) checkPass(`閉じた右辺 ${name}`, s, want, kind, extra);
 for (const [name, s, want, inst] of closedRhsRefused) checkRefused(`閉じた右辺 ${name}`, s, want, inst);
@@ -4863,19 +4863,17 @@ for (const [name, s, must, mustNot] of dollarMessages) {
 //   1引数の恒等射 `[x ? x]` の印を持つ（`$!_` の `[x ? !_]` と対）。
 // - R57 `$` とほかの印：後置の印の付いた形（`$inc~`・`$fs~`・`$inc!`・`$inc@`）は G20。前置の印の組み合わせと囲みは先で決める（`$||inc||`・印のある `$@f` は通る）。
 // - 法則は coproduct_laws.test.js の法則18（`$N`・`$[右辺]`・本体の行の後に置いた `$N`）と法則17（`$N`・`$[N]`）。
-// - 2026-11-04 の寄せ1（R128〜R130）：本体の字下げの `:` の行は、左が名前1つでも枝（match_case）で、本体に局所の定義は無い（R80 は廃止。R54 の本体の局所の所も
-//   消えた）。下の「R54 本体の …」の行は、1行目が条件の名前（未定義の名前で `!_`）の枝で、値の `z ? z * z` などは返す所に残った裸の関数で `(unit …)`（R125）。
-//   `$sq` は本体の行を見ず、未定義の名前の零射の番地（R56・R111）なので、map の実体は `map $un x` と同じ（細目7）。前に G20・name-cycle・G7 で断った本体の行の
-//   形は、ファイルに同じ形を書いた時と同じ答えで通る（`$[sq double]` は R59 の G20 のまま）。使う行を枝の前に置いた形は R130 で断る。
-// - 2026-11-09 の R138：未定義の名前は断る（name-undefined。枝の条件の名前も R128 から未定義に数える）ので、上の「条件の名前（未定義の名前で `!_`）の枝」の
-//   行は、断る代表（`$sq`・`$w`・`$h` の行）を断る側に置き、残りは消した。手で書いた `!_`（`$!_`・`un : !_`・`⇥w : !_`）も断る（void-written）。条件がファイルの
-//   名前・仮引数の行と、輪でないことの行（`w : v` ⏎ `v : w`）は、名前をファイルで定義して残した。
+// - 寄せ1（R128〜R130）：本体の字下げの `:` の行は、左が名前1つでも枝（match_case）で、名前を定義しない。値の `z ? z * z` などは返す所に残った裸の関数で
+//   `(unit …)`（R125）。使う行を枝の前に置いた形は R130 で断る。
+// - 未定義の名前は `!_` と分かる値（R21）。本体の枝の条件か値が `!_` と分かる値なら、呼ばない定義でも定義の所で G22（R128。代表は下の oneFnRefused の
+//   `$sq`・`$h`・`$lf` の行）。手で書いた `!_`（`$!_`・`un : !_`・`⇥w : !_`）は断る（void-written、R138）。条件がファイルの名前・仮引数の行と、輪でないことの行
+//   （`w : v` ⏎ `v : w`）は、名前をファイルで定義した。
 const oneFnPasses = [
-	// R54：局所の定義（前はどれも G20。局所の名前は種類が未知だった）→ 寄せ1（R128）から枝の行で、`$sq` は未定義の名前の零射の番地だった。2026-11-09 の R138 で
-	// 未定義の名前は断るので、`map $sq x` の行（代表）を下の oneFnRefused へ移し、その実体の行は消した。
+	// R54：本体の `⇥sq : z ? z * z` は枝の行で、名前を定義しない（R128）。条件 sq は未定義の名前で `!_` と分かる値なので、定義の所で G22（代表の
+	// `map $sq x` の行は下の oneFnRefused）。
 	// 「使う行を定義の行より前に置いても同じ（順序に依らない）」は R80 の読みの比べで、寄せ1 で比べる相手が無くなった。使う行を枝の前に置いた形は R130 で断る（下の oneFnRefused）。
 	// 括りの中の局所の名前（`[sq : z ? z * z ⏎ $sq]`・`[sq : z ? z * z ⏎ map $sq vs]`）は、作る途中の版では通したが、確かめの直しで G20 に戻した（下の断る側）。
-	// 未定義の条件の名前の行（`$pl`・`$k`・`$q`・`$c`・`$a`・`$[sq]`・`w0` と並べた行）は、2026-11-09 の R138 で断るので消した。
+	// 未定義の条件の名前の枝（`$pl`・`$k`・`$q`・`$c`・`$a`・`$[sq]`・`w0` と並べた行）も同じ G22（R128・R21）。
 	// R55：別名の印（前は印が無く、実体の `@f` が開けなかった）
 	["R55 cc : add inc ⏎ fold $cc vs（前は G19）", trial(["cc : add inc", "fold $cc vs"]), "(apply fold (construct $cc vs))", "A"],
 	["R55 その fold の実体（`fold $[add inc] vs` と同じ）", trial(["cc : add inc", "fold $cc vs"]), "(: fold (? [f [~h]] (inst $L [N…] (apply @f h~))))", null, { at: 8 }],
@@ -4904,8 +4902,8 @@ const oneFnPasses = [
 	["Q56 map $[!_] vs（否定の写像。今までどおり）", trial("map $[!_] vs"), "(apply map (construct $[!_] vs))", "A"],
 	["Q56 i : _ ⏎ map $i vs（別名も同じ印。前は G7）", trial(["i : _", "map $i vs"]), "(apply map (construct $i vs))", "A"],
 	["Q56 i : _ ⏎ map $[i] vs（`$[i]` は `$i` と同じ先。R55 の片は G7、HEAD b08feb4f は括りの中身の印で A）", trial(["i : _", "map $[i] vs"]), "(apply map (construct $[i] vs))", "A"],
-	// 寄せ1（R128）から本体の `⇥h : _` は条件 h の枝で、値の `_` は返す所に残った関数で `(unit _)`。2026-11-09 の R138 で条件の未定義の名前 h は断る（下の
-	// oneFnRefused）。前は `$h` が零射の番地、その前は R80 の局所の恒等射の別名。
+	// 本体の `⇥h : _` は条件 h の枝で、値の `_` は返す所に残った関数で `(unit _)`（R128）。条件 h は未定義の名前で `!_` と分かる値なので、定義の所で G22
+	// （下の oneFnRefused）。
 	// `map2 $_ vs`・`fold $_ vs`・`fold $i vs`（前は G19）は、口が1つの `@f` が受けた流れの書き下し（R51、2026-10-25）で、実体の中の t の数が見えない
 	// ので未知（`map2 $[x ? x] vs` と同じ）。
 	["Q56 map2 $_ vs（書き下しで未知。前は G19）", trial("map2 $_ vs"), "(apply map2 (construct $_ vs))", "未知"],
@@ -4918,12 +4916,10 @@ const oneFnPasses = [
 	// この行は R49 の印（実体の中の `@f` が指す関数そのもの）に頼る。印が無ければ `$@f` は先の種類が未知で G20（§7.23 の戻す道。R49 は 2026-10-25 に決定）。
 	["R57 tw : f [~r] ? map $@f r ⏎ tw $inc vs（呼ばれた所の実体で f の指す関数が分かる）", trial(["tw : f [~r] ? map $@f r", "tw $inc vs"]), "(: tw (? [f [~r]] (inst $L [N…] (apply map (construct $@f r)))))", null, { at: -2 }],
 	// 片イ（R120）：写す関数の所が値（`$v` の 5）・口が2つの関数（pl）の `[@f,]` は種類の未知な項で、map の実体で断らない（前は G7）。寄せ1（R128）から `⇥v : 5`・
-	// `⇥pl : a b ? a + b` は枝で、`$v`・`$pl` は未定義の名前の零射の番地だった（前は R60 の局所の値の参照と、局所の2引数の関数の `map $add vs` と同じ未知）。
-	// 2026-11-09 の R138 で条件の未定義の名前は断るので、この2行は消した（断る代表は下の oneFnRefused の `$sq` の行）。
+	// `⇥pl : a b ? a + b` は枝で、条件 v・pl は未定義の名前なので G22（R128・R21。代表は下の oneFnRefused の `$sq` の行）。
 	// 前に「R54：局所の名前で言い切れない所」として G20・name-cycle・G7 で断った本体の行の形（下の oneFnRefused にあった）。寄せ1（R128）から本体の行は枝で、
-	// 名前は未定義の名前（`$` は零射の番地）か、ファイルの定義・仮引数なので、ファイルに同じ形を書いた時と同じ答えで通った（細目7）。2026-11-09 の R138 で未定義の
-	// 名前は断るので、未定義の条件の名前の行（自分・互いを `$` で指す枝、同じ条件 sq の枝2つ、括りの外の `$sq`、枝の値のブロックの中の枝、`sq : inc`、枝の値の中の
-	// `map $sq vs`、同じ条件 w の枝2つ、`w : [w]`、`sq x`）は消した。条件がファイルの定義の名前・仮引数の行と、名前をファイルで定義した輪でないことの行は残した。
+	// 条件の名前はファイルの定義・仮引数なら、ファイルに同じ形を書いた時と同じ答えで通る（細目7）。未定義の条件の名前の枝（自分・互いを `$` で指す枝、同じ条件 sq の
+	// 枝2つ、枝の値のブロックの中の枝、`sq : inc`、同じ条件 w の枝2つ、`w : [w]`）は G22（R128・R21）。
 	// 条件の inc はファイルの関数で、評価する所に残った関数として `!_`（細目4、leftover-lambda）。`$inc` はファイルの inc の番地（前は隠しで G20、その前は黙ってファイルの inc）。
 	["寄せ1 本体の行の条件がファイルの定義の名前 inc（前は隠しで G20）", trial(["tt : x ?", "\tinc : z ? z * z", "\tmap $inc x"]), "(: tt (? [x] (block (: (unit inc) (unit (? [z] (* z z)))) (apply map (construct $inc x)))))", null, { leftoverDiag: ["inc"] }],
 	// 条件の x は仮引数で、`$x` は仮引数の持ち上げ（値なので dollar-non-function）。
@@ -4931,8 +4927,8 @@ const oneFnPasses = [
 	["寄せ1 w : v ⏎ v : w ⏎ $v は輪でない（どちらも枝。w・v はファイルの名前。前は未定義の名前の条件、その前は R80 で name-cycle、その前は G20）", trial(["w : 1", "v : 2", "tt : x ?", "\tw : v", "\tv : w", "\t$v"]), "(: tt (? [x] (block (: w v) (: v w) $v)))", null],
 	// 片イ（R125）：実体の `@f` が関数として開き、本体の返す所に残った裸の関数は `!_` と bare-function-return（前は G16）。
 	["R55 p : inc ⏎ tw : f [~r] ? @f ⏎ tw $p vs（`tw $inc vs` と同じ）（前は G16、その前は通る・未知）", trial(["p : inc", "tw : f [~r] ? @f", "tw $p vs"]), "(apply tw (construct $p vs))", "A", { severities: ["information/bare-function-return"] }],
-	// 2026-11-07 の R137（§5 Q91 の答え）：未定義の名前 sq・zz は `!_` と分かる値で、その上に積んだ double は並置の単位で残った（`$[sq double]` は double の番地。前は
-	// 値 `_` の上に積まれて余った double で R59 の G20）。2026-11-09 の R138 で未定義の名前は断るので、`$[sq double]`・`$[zz double]` の2行は消した。
+	// R137（§5 Q91 の答え）：未定義の名前 zz は `!_` と分かる値（R21）で、その上に積んだ double は並置の単位で残る（`$[zz double]` は double の番地）。
+	["R137 $[zz double]（zz は未定義の名前で並置の単位、R21）", std("$[zz double]"), "$[zz double]", "A", { undef: ["zz@17"] }],
 ];
 const oneFnRefused = [
 	// R57：後置の印の付いた形（R53 では `$inc~`・`$inc!`・`$fs~` は未知で、根・`,` の辺・`:` の右辺では通っていた）
@@ -4947,7 +4943,7 @@ const oneFnRefused = [
 	// R57：印の無い前置 `@` の項は先が未知（素の関数の仮引数には印が届かない、§5 Q45）
 	// 「R57 tg : g ? use $@g 5（印の無い `@g`）」（G20）は、2026-10-27 の片8 の R99 で、先の種類の分からない持ち上げとして通る（いちばん後ろの「R99〜R104」の節）。
 	// R54：局所の名前で言い切れない所。寄せ1（R128）から本体の行の分（自分を `$` で指す局所の関数・局所の定義どうしの輪・同じ範囲に2つ・入れ子の括りの中だけ）は
-	// 通った（2026-11-09 の R138 で未定義の条件の名前は断るので、その行は消した）。残るのは括りと構造体のブロックの中の名前（local-field）。
+	// 通った（条件に未定義の名前を置いた行は、`!_` と分かる値の条件で定義の所の G22、R128・R21）。残るのは括りと構造体のブロックの中の名前（local-field）。
 	// 使う行を枝の前に置いた本体（前は R80 で「順序に依らない」の比べ）は、枝の前の裸の行で R130 の断り（寄せ1）。2026-11-09 の R138 から sq はファイルで定義した。
 	["寄せ1 使う行 map $sq x を枝 sq : z ? z * z の前に置く（R130。sq はファイルの名前。前は未定義の名前の条件、その前は R80 で後に置いたのと同じ）", trial(["sq : z ? z * z", "tt : x ?", "\tmap $sq x", "\tsq : z ? z * z", "", "tt vs"]), "body-bare-row-between"],
 	// 局所の値 `v : 5` の `$v` は、2026-10-25 の R60 から値を読む参照として通り（下の「R58〜R61」の節）、写す関数の所が値なので map の実体の `[@f,]` で
@@ -4977,16 +4973,15 @@ const oneFnRefused = [
 	// ファイルに置いた `sq : z ? w` ⏎ `w : [$sq]` は通る（`?` の定義は本体を解かずに L）。R54 から出た物ではない。
 	["w : [sq : z ? w ⏎ $sq]（値を含む輪。HEAD から同じ）", std(["w : [sq : z ? w", "$sq]"]), "name-cycle"],
 	// 2026-10-26 の R80（§5 Q10 の答え）で、枝の無い本体の局所の関数を裸で書いた所（`sq x`・`$[sq double]`）は右辺の種類で通った（いちばん後ろの「R80〜R82」の節）。
-	// 局所の定義として読めない所（枝のある本体・同じ範囲に2つ）は未知で G7 だった。寄せ1（R128）から sq は未定義の名前（`!_`）で、枝のある本体の `sq x` は通る
-	// （上の oneFnPasses）。`$[sq double]` は値 `_`（前の綴り）の上に積まれて余った double で、ファイルに書いた `$[zz double]`（zz は未定義の名前）と同じ R59 の G20 だった。
-	// 2026-11-07 の R137（§5 Q91 の答え）から、`!_` と分かる sq・zz は並置の単位で消えて `$[sq double]` は double の番地になり、通る（上の oneFnPasses の終わり）。
+	// 局所の定義として読めない所（枝のある本体・同じ範囲に2つ）は未知で G7 だった。寄せ1（R128）から本体の `⇥sq : …` は枝で、条件 sq は未定義の名前なので G22
+	// （R128・R21、下の代表）。ファイルに書いた `$[zz double]`（zz は未定義の名前）は、`!_` と分かる zz が並置の単位で消えて double の番地で通る（R137、上の oneFnPasses の終わり）。
 	// 2引数の局所の関数を map に渡すのは、ファイルの `map $add vs` と同じく実体の `[@f,]` で G7（R50）
 	// 片イ（R120）で、この行は上の oneFnPasses へ移した。
-	// 2026-11-09 の R138 の代表（上の oneFnPasses から移した行）。未定義の条件の名前と、手で書いた `!_` は断る。
-	["R54 本体の ? の値の枝の後で map $sq x（R138 で条件の未定義の名前 sq を断る。前は寄せ1 から零射の番地、その前は G20、R80 の局所の定義）", trial(["tt : x ?", "\tsq : z ? z * z", "\tmap $sq x"]), "name-undefined", { line: 11, x: "sq" }],
+	// 代表：未定義の条件の名前の枝は定義の所で G22（R128・R21）、手で書いた `!_` は void-written（R138）。
+	["R54 本体の ⇥sq : z ? z * z の枝の後で map $sq x（条件 sq は未定義の名前で `!_` と分かる値、G22。R128・R21）", trial(["tt : x ?", "\tsq : z ? z * z", "\tmap $sq x"]), "G22", { line: 11, zero: "sq", law: "R128" }],
 	["R56 $!_（R138 で手で書いた `!_` は `$` の下でも断る。前は零射の番地で A、R53 では G20）", std("$!_"), "void-written", { line: 17, x: "$!_" }],
 	["R56 本体の w : !_ ⏎ map $w x（R138 で手で書いた `!_` は枝の値でも断る。前は `!_` の枝が消えて `$w` は零射の番地）", trial(["tt : x ?", "\tw : !_", "\tmap $w x"]), "void-written", { line: 11, x: "!_" }],
-	["Q56 本体の h : _ の枝の後で map $h vs（R138 で条件の未定義の名前 h を断る。前は `$h` が零射の番地、その前は G7、その後 R80 の局所の別名）", trial(["tt : x ?", "\th : _", "\tmap $h vs"]), "name-undefined", { line: 11, x: "h" }],
+	["Q56 本体の ⇥h : _ の枝の後で map $h vs（条件 h は未定義の名前、G22。R128・R21）", trial(["tt : x ?", "\th : _", "\tmap $h vs"]), "G22", { line: 11, zero: "h", law: "R128" }],
 ];
 for (const [name, s, want, kind, extra] of oneFnPasses) checkPass(`1つの関数 ${name}`, s, want, kind, extra);
 for (const [name, s, want, inst] of oneFnRefused) checkRefused(`1つの関数 ${name}`, s, want, inst);
@@ -5084,8 +5079,8 @@ const r59Passes = [
 	// 恒等射は余っても落としても値が同じなので拾わない（R48 の知らせと同じ）。
 	["R59 $[add (5 _)]（余るのが恒等射なら通る）", std("$[add (5 _)]"), "$[add [5 _]]", "A"],
 	["R59 p : add (5 inc) ⏎ p 3（`$` の無い名前は今までどおり、定義の行で知らせる）", std(["p : add (5 inc)", "p 3"]), "(apply p 3)", "A", { leftoverDiag: ["inc"] }],
-	// 2026-11-04 の寄せ1（R128）：本体の `⇥lf : …` は条件 lf の枝で、`$lf` は本体の行を見ずに零射の番地だった（細目7。前は R80 の局所の定義の右辺を辿って G20、
-	// 下の r59Refused にあった）。2026-11-09 の R138 で条件の未定義の名前 lf は断る（下の r59Refused の代表）ので、`lf : z ? z inc` の行は消した。
+	// 寄せ1（R128）：本体の `⇥lf : …` は条件 lf の枝で、名前を定義しない。条件 lf は未定義の名前で `!_` と分かる値なので、定義の所で G22（R128・R21。
+	// 下の r59Refused の代表）。
 ];
 const r59Refused = [
 	["R59 $[add (5 inc)]（前は通って inc を知らせた。§5 Q53）", std("$[add (5 inc)]"), "G20"],
@@ -5102,9 +5097,8 @@ const r59Refused = [
 	["R59 p : add (5 inc) ⏎ $[p]（[x] ≅ x）", std(["p : add (5 inc)", "$[p]"]), "G20"],
 	["R59 p : add (5 inc) ⏎ q : p ⏎ $q（別名は右辺の名前の物を引き継ぐ）", std(["p : add (5 inc)", "q : p", "$q"]), "G20"],
 	["R59 sq : x ? x inc ⏎ $sq（本体に余る関数。前は通った）", std(["sq : x ? x inc", "$sq"]), "G20"],
-	// 本体の局所の `lf : add (5 inc)`・`lf : z ? z inc` の `$lf`（G20）は、寄せ1（R128）で本体に局所の定義が無くなり、上の r59Passes へ移した。
-	// 2026-11-09 の R138 の代表（上の r59Passes から移した行）。
-	["R59 本体の lf : add (5 inc) の枝の後の $lf（R138 で条件の未定義の名前 lf を断る。前は寄せ1 から零射の番地、その前は G20）", trial(["tt : x ?", "\tlf : add (5 inc)", "\t$lf"]), "name-undefined", { line: 11, x: "lf" }],
+	// 本体の `⇥lf : add (5 inc)` は枝で、条件 lf は未定義の名前なので G22（R128・R21）。
+	["R59 本体の ⇥lf : add (5 inc) の枝の後の $lf（条件 lf は未定義の名前、G22。R128・R21）", trial(["tt : x ?", "\tlf : add (5 inc)", "\t$lf"]), "G22", { line: 11, zero: "lf", law: "R128" }],
 ];
 for (const [name, s, want, kind, extra] of r59Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r59Refused) checkRefused(name, s, want, inst);
@@ -5112,8 +5106,8 @@ for (const [name, s, want, inst] of r59Refused) checkRefused(name, s, want, inst
 // R60：先が値の `$` は値を読む参照（R53〜R57 では G20、その前は A。行の名前の「前は」は R53 の前の答え、「R53 は」は R53〜R57 の答え）。
 const r60Passes = [
 	["R60 $vs（値の定義。R53 は G20、前は A）", std("$vs"), "$vs", "A"],
-	// 2026-10-28 の片9b の確かめの直し：R111 から未定義の名前は `!_` で、`$zz` は `$un` と同じ零射の番地（R100 の警告を出さない）だった。2026-11-09 の R138 で
-	// 未定義の名前は `$` の下でも断る（下の r60Refused）。行の名前の前の「値で、その参照」は R21・R60 の読み。
+	// 未定義の名前 zz の `$zz` は `$w`（w : pw ' zz）と同じ木で、読む段は `$` の下でも name-undefined を知らせる（R21。行はこの節の終わりの `$zz`）。
+	// 行の名前の前の「値で、その参照」は R21・R60 の読み。
 	["R60 [$vs,]（写す F が値なので写像にならず未知の根。R53 は G20）", std("[$vs,]"), "[$vs,]", "未知"],
 	["R60 p : $inc ⏎ $p（番地を読む参照。R53 は G20、前は A）", std(["p : $inc", "$p"]), "$p", "A"],
 	["R60 tw : f [~t] ? map $f t ⏎ tw $inc vs（STD の map の本体は x で、`$f` は番地を読む参照。R53 は G20、前は G7）", std(["tw : f [~t] ? map $f t", "tw $inc vs"]), "(apply tw (construct $inc vs))", "A"],
@@ -5150,11 +5144,13 @@ const r60Passes = [
 	// 実体の鍵：指す値の形が鍵に入る（入らないと `rd2 $st 0` と `rd2 $vs 0` が実体を分け合い、先に解いた方の答えを後の方が黙って使う）。
 	["R60 鍵 rd2 $st 0 ⏎ rd2 $vs 0 の2行目は未知（List からは名前の鍵で引けない）", trial(["rd2 : f [~t] ? @f ' k", "st : [k : 1]", "rd2 $st 0", "rd2 $vs 0"]), "(apply rd2 (construct $vs 0))", "未知"],
 	["R60 鍵 rd2 $vs 0 ⏎ rd2 $st 0 の2行目は A（構造体の欄 k）", trial(["rd2 : f [~t] ? @f ' k", "st : [k : 1]", "rd2 $vs 0", "rd2 $st 0"]), "(apply rd2 (construct $st 0))", "A"],
-	// `⇥v : 5` ⏎ `⇥$v`（本体の局所の値の参照、R54 の片は G20。寄せ1 から条件 v の枝）は、2026-11-09 の R138 で条件の未定義の名前 v を断るので消した。
+	// `⇥v : 5` ⏎ `⇥$v` は、寄せ1 から条件 v の枝で、未定義の名前 v の条件は `!_` と分かる値なので定義の所の G22（R128・R21）。この節には置かない。
 	["R60 $[w , 5]（w は `!_` と分かる名前で、中身は R61 で 5、その参照。前は手で書いた `!_` の `$[!_ , 5]`）", std([...W115, "$[w , 5]"]), "$[w , 5]", "A"],
 	// 片イ（R120）：写す関数の所が値を読む参照（`@f` が vs・`$f` の番地）の `[@f,]` は種類の未知な項で、map の実体で断らない（前は G7）。`$` の warning は今のまま。
 	["R60 map $vs vs（R53 は G20）（前は実体の `[@f,]` で G7）", trial("map $vs vs"), "(apply map (construct $vs vs))", "未知", { severities: ["warning/dollar-non-function"] }],
 	["R60 tw : f [~t] ? map $f t ⏎ tw $inc vs（番地を読む参照を写す関数に置く。R53 は G20）（前は G7）", trial(["tw : f [~t] ? map $f t", "tw $inc vs"]), "(apply tw (construct $inc vs))", "未知", { severities: ["warning/dollar-non-function"] }],
+	// 未定義の名前 zz は `!_` と分かる値（R21）で、`$zz` は `$w`（w : pw ' zz）と同じ木。`$` の下でも知らせる。
+	["R60 の行だった $zz（zz は未定義の名前、R21）", std("$zz"), "$zz", "A", { undef: ["zz@17"] }],
 ];
 const r60Refused = [
 	// 細かい所（§5 Q59）：Reader は数ではない。項の `$` も、`$` を指す名前（`:` はメタ）も。
@@ -5176,8 +5172,7 @@ const r60Refused = [
 	// 名前は §5 Q30 の `v : f 1`・`f : x ? x , $v` と同じ形（STD の仮引数 f と重ならないように f9 にした）。
 	// `v : f9 1` ⏎ `f9 : x ? x , $v`（今のまま name-cycle、§5 Q60）は、2026-10-26 の R73（§5 Q60 の答え：Reader は v をその場で評価しない）で通る（いちばん後ろの
 	// 「R73〜R79」の節へ移した）。
-	// 2026-11-09 の R138 の代表（上の r60Passes から移した行）。
-	["R60 の行だった $zz（R138 で未定義の名前は `$` の下でも断る。前は R111 で `$un` と同じ零射の番地、R53 は G20）", std("$zz"), "name-undefined", { line: 17, x: "zz" }],
+	// R138 の代表（書いた空の器）。
 	["R60 $[]（R138 で書いた空の器は `$` の下でも断る。前は空の括りの参照で A）", std("$[]"), "empty-written", { line: 17, x: "$[]" }],
 ];
 for (const [name, s, want, kind, extra] of r60Passes) checkPass(name, s, want, kind, extra);
@@ -5255,18 +5250,20 @@ for (const [name, s, gateId, must, mustNot] of r58to61Messages) {
 //   なった（R59 の片の書く人の版の断りすぎ。HEAD は通す）。行の名前の「前の版」は、この片の書く人の版。
 // 嘘か、今のままにした指摘：名前を通した `_` の積（`un , 5`）は R15・R56 の「顔が位置で違う」の線で今のまま（§5 Q61 の注）。合成の途中の恒等射
 // （`inc !_ add vs~`）は、書き並べの `inc !_ add 1 2` も G18 なので、断る側のまま（§5 Q58 の注）。（この2行は前の綴り）
-// 2026-11-08 の R138：手で書いた `!_`・書いた空の器・未定義の名前は、読む段で断る（ファイルごと止めて、書いた行を名指す）。この節から「R28 の書き直し」の節までの
-// 行のうち、項の主題がそれらだった物は、節と類ごとに代表の行だけを断りの行（理由・書いた行・名指す項）にして、残りは消した。ほかの主題の行に書いてあった物は、
-// 同じ働きの書ける物（`!_` と分かる名前は R115 の無い欄の名前 wv、恒等射と穴は `_`、条件は定義した名前）に替えて、元の主題を見続ける。
+// R138：手で書いた `!_`・書いた空の器は、読む段で断る（ファイルごと止めて、書いた行を名指す）。未定義の名前は `!_` と分かる値で、読む段は warning の
+// name-undefined で知らせる（R21）。本体の枝と既定値に書いた `!_` と分かる値は、定義の所で G22（R128・R139）。この節から「R28 の書き直し」の節までは、それらが
+// 項の主題の行を節と類ごとに代表の行（理由・書いた行・名指す項）にし、ほかの主題の行は同じ働きの書ける物（`!_` と分かる名前は R115 の無い欄の名前 wv、恒等射と
+// 穴は `_`、条件は定義した名前）で、元の主題を見る。
 // wv は欄 a だけの構造体 oz の無い欄 zz を引いた名前で、`!_` と分かる（仕様 R115。R112 の名前の読みと R63 の印 zero は、R91・R115・R102 の名前に残る）。
 const R115W = ["oz : [a : 1]", "wv : oz ' zz"];
-// 断りの行を確かめる：書いた行は源の終わりから数える（fromEnd が 0 なら最後の行）。x は言い分が名指す項（null なら見ない）。
+// 断りの行を確かめる：書いた行は源の終わりから数える（fromEnd が 0 なら最後の行）。x は言い分が名指す項（null なら見ない）。理由が "G22" なら、本体の枝か
+// 既定値に書いた `!_` と分かる値の断り（R128・R139）で、門（e.gate）と、その値 x の名指しを見る。
 const checkWrittenAt = (name, s, reason, fromEnd, x) => {
 	total++;
 	const line = s.split("\n").length - fromEnd;
 	const e = refusalOfSrc(s);
-	const named = x === null ? "" : { "void-written": `手で書いた \`!_\` の項 \`${x}\``, "empty-written": `書いた空の器 \`${x}\``, "name-undefined": `名前 \`${x}\`` }[reason];
-	if (e && e.reason === reason && e.line === line && String(e.message).includes(named)) ok(`R138 ${name} → ${reason} line ${line}`);
+	const named = x === null ? "" : reason === "G22" ? G22_HEAD(x) : { "void-written": `手で書いた \`!_\` の項 \`${x}\``, "empty-written": `書いた空の器 \`${x}\`` }[reason];
+	if (e && (reason === "G22" ? e.gate === "G22" : e.reason === reason) && e.line === line && String(e.message).includes(named)) ok(`R138 ${name} → ${reason} line ${line}`);
 	else fail(`R138 ${name}`, !e ? "断るはずが通った" : `got: ${e.reason} ${e.gate || ""} line ${e.line}  want: ${reason} line ${line}`, e ? String(e.message) : "");
 };
 const reviewPasses = [
@@ -5313,7 +5310,7 @@ const reviewPasses = [
 	["確かめ inc _ add 1 2（書き並べ。`inc add 1 2` と同じ）（前は G18）", trial("inc _ add 1 2"), "(apply add (construct (apply inc 1) 2))", "A"],
 	// 2026-11-04 の寄せ1（R128）：本体の `⇥lq : p , _` は条件 lq（未定義の名前）の枝で、`$lq` は本体の行を見ずに零射の番地（細目7）。枝の値に残った p は
 	// 返す所の裸の関数で `(unit p)`。前は R80 の局所の定義の右辺を辿って p の余る関数で G20（下の reviewRefused にあった）。
-	// → 2026-11-08 の R138 から、条件の lq は未定義の名前で断る（下の reviewWritten へ移した）。
+	// → 条件の lq は未定義の名前で `!_` と分かる値なので、定義の所の G22（R128・R21。下の reviewWritten）。
 	// 2026-11-16（恒等射の片の直し）：`q : p , _` の q は `q : p , ff` と同じ（恒等射は `,` のほかの関数と同じ因子）。`$q` の知らせは期待値に書かず、下の「恒等射の片」の
 	// ID61P で ff の版と比べる（片1 の2周目。前はここで dollar-non-function を決め打ちしていた。関数だけの `,` の鎖を右辺に持つ名前に当てた `$` が、R56 の `!_` と分かる
 	// 名前で知らせ無しか、R99 の値に当てた `$` で知らせるかは、仕様の文面が割れている）。
@@ -5413,10 +5410,10 @@ const reviewRefused = [
 ];
 for (const [name, s, want, kind, extra] of reviewPasses) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of reviewRefused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138 の代表の断り（この節で主題が書いた `!_`・未定義の名前だった行）。
+// 代表の断り（この節で主題が書いた `!_`（R138）と、本体の枝の条件の未定義の名前（G22、R128・R21）だった行）。
 const reviewWritten = [
 	["確かめ un : !_ ⏎ un , 5 の un : !_（`!_` を右辺に書いた名前。R138 の前は R137 で消えて 5）", std(["un : !_", "un , 5"]), "void-written", 1, "!_"],
-	["確かめ 本体の lq : p , _ の枝の条件 lq（R128 で定義でない。R138 の前は寄せ1 から零射の番地、その前は G20）", trial(["p : add (5 inc)", "tt : x ?", "\tlq : p , _", "\tmap $lq x"]), "name-undefined", 1, "lq"],
+	["確かめ 本体の ⇥lq : p , _ の枝の条件 lq（未定義の名前で `!_` と分かる値、G22。R128・R21）", trial(["p : add (5 inc)", "tt : x ?", "\tlq : p , _", "\tmap $lq x"]), "G22", 1, "lq"],
 ];
 for (const [name, s, reason, fromEnd, x] of reviewWritten) checkWrittenAt(name, s, reason, fromEnd, x);
 // 2026-10-26 の R62・R63 から、値を読む参照の言い分は G21 で R62 と §5 Q66 を名指しし（前は G7 で §5 Q59）、実体で渡された形の見えない値の言い分は R63 を
@@ -5575,7 +5572,8 @@ const r62Refused = [
 	["R62 ($vs - $five) - $vs（差 − 点）", r62("($vs - $five) - $vs"), "G21"],
 	["R62 $vs == ($vs - $five)（点と差の比べ）", r62("$vs == ($vs - $five)"), "G21"],
 	["R62 ($vs - $five) == 0x10（差と字面の比べ）", r62("($vs - $five) == 0x10"), "G21"],
-	// 2026-11-08 の R138 から、書いた `!_`（前の `$vs + !_`）と未定義の名前（前の `$vs + zz`、顔の分からない値）は読む段で断る（類ごとの代表は下の r62Written）。
+	// 書いた `!_` は読む段で断る（R138。類ごとの代表は下の r62Written）ので、`!_` と分かる値は R115 の名前 wv で見る。未定義の名前の `$vs + zz` も、zz が
+	// `!_` と分かる値（R21）で同じ G21。
 	["R62 $vs + wv（`!_` と分かる R115 の名前。R138 の前は書いた `!_` の `$vs + !_`）", r62([...R115W, "$vs + wv"]), "G21"],
 	["R62 $vs ~ $five（範囲）", r62("$vs ~ $five"), "G21"],
 	["R62 $vs << 0x1", r62("$vs << 0x1"), "G21"],
@@ -5620,7 +5618,8 @@ const r62Refused = [
 	["R62 印を落とす所 pw : [y] ? $vs - $five ⏎ pw [1]", r62(["pw : [y] ? $vs - $five", "pw [1]"]), "G21", [["pw", "N"]]],
 	["R62 印を落とす所 he : [x ~xs] ? x ⏎ he [($vs + 0x10) ($vs + 0x10)]（揃った要素は印を持つが、答えで落ちる）", r62(["he : [x ~xs] ? x", "he [($vs + 0x10) ($vs + 0x10)]"]), "G21", [["he", "[$+…]"]]],
 	// 「印を落とす所 tt : y ? ⏎ ww : $vs + 0x10 ⏎ ww + 1（本体の局所の定義の右辺）」と、その字下げのブロックの形（`ww : [` ⏎ `$vs + 0x10` ⏎ `]` ⏎ `ww * 2`）は、
-	// 2026-11-04 の寄せ1（R128）で本体の行は枝になり、2026-11-08 の R138 から枝の条件の未定義の名前 ww は読む段で断る（代表は下の r62Written）。
+	// 寄せ1（R128）で本体の行は枝で、枝の条件の未定義の名前 ww は `!_` と分かる値（G22、R128・R21）、枝の値は点が関数の答えに落ちる所（G21）で、同じ行に2つの
+	// 断りが当たる。同じ行の順は仕様が決めていないので、この2つの形は試験に書かない。代表は下の r62Written（G21 の無い `ww : $vs` と、行を分けた順）。
 	["R62 印を落とす所 tt : y ? ⏎ y > 1 : $vs + 0x10 ⏎ 5（枝の値）", r62(["tt : y ?", "\ty > 1 : $vs + 0x10", "\t5"]), "G21"],
 	["R62 印を落とす所 (1 & ($vs + 0x10) | $vs) + 1（論理の枝）", r62("(1 & ($vs + 0x10) | $vs) + 1"), "G21"],
 	["R62 印を落とす所 (3 < 2) | ($vs - $five)（2026-11-08 の R138 の前は書いた `!_` の `!_ | ($vs - $five)`）", r62("(3 < 2) | ($vs - $five)"), "G21"],
@@ -5662,10 +5661,11 @@ const r62Refused = [
 ];
 for (const [name, s, want, kind, extra] of r62Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r62Refused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138 の代表の断り（この節で主題が書いた `!_`・未定義の名前だった行）。
+// 代表の断り（この節で主題が書いた `!_`（R138）と、本体の枝の条件の未定義の名前（G22、R128・R21）だった行）。
 const r62Written = [
 	["R63 hb [s : !_]（欄の右辺の書いた `!_`。R138 の前は R81 で A）", r62(["hb : [s] ? use $s 1", "hb [s : !_]"]), "void-written", 0, "!_"],
-	["R62 tt : y ? ⏎ ww : $vs + 0x10 ⏎ ww + 1（本体の枝の条件の未定義の名前 ww。R138 の前は G21）", r62(["tt : y ?", "\tww : $vs + 0x10", "\tww + 1"]), "name-undefined", 1, "ww"],
+	["R62 tt : y ? ⏎ ⇥ww : $vs ⏎ ⇥ww + 1（本体の枝の条件の未定義の名前 ww、G22。R128・R21）", r62(["tt : y ?", "\tww : $vs", "\tww + 1"]), "G22", 1, "ww"],
+	["R62 tt : y ? ⏎ ⇥ww : 5 ⏎ ⇥y > 1 : $vs + 0x10 ⏎ ⇥5（先の行の G22 が、後の行の G21 より先。R127）", r62(["tt : y ?", "\tww : 5", "\ty > 1 : $vs + 0x10", "\t5"]), "G22", 2, "ww"],
 ];
 for (const [name, s, reason, fromEnd, x] of r62Written) checkWrittenAt(name, s, reason, fromEnd, x);
 const r62Messages = [
@@ -5996,10 +5996,8 @@ const r73Passes = [
 	["R76 手続きの行の名前の恒等射は知らせない（1行の `i & y` と同じ、§5 Q15）", r73(["t7 : y ?", "\ti", "\ty", ""]), "(: t7 (? [y] (block (unit i) y)))", "A", { diagCount: 0 }],
 	["R76 1行の i & y（上と同じ）", r73(["t7 : y ? i & y"]), "(: t7 (? [y] (& (unit i) y)))", "A", { diagCount: 0 }],
 	["R76 枝の値の値の上に積まれた関数は R52 のまま", std(["t : y ?", "\ty > 0 : 5 inc", "\ty", ""]), "(: t (? [y] (block (: (> y 0) (construct 5 (unit inc))) y)))", "A", { leftoverDiag: ["inc"] }],
-	// 2026-11-04 の寄せ1（R128）から本体の `⇥w : inc inc` は条件 w（未定義の名前）の枝で、右辺は枝の値（返す所、R125）。合成は返す所に残った裸の関数で
-	// `(unit …)` と bare-function-return（前は R80 の局所の定義の右辺で、評価する所から除いて `(compose inc inc)` のまま知らせなかった）。
-	// 2026-11-08 の R138 から、枝の条件の未定義の名前 w は読む段で断る（name-undefined。代表は下の r73Written）。返す所の読みを見続けるため、w をファイルで定義した
-	// （前は w が未定義で、知らせに information/undefined-name も出ていた）。
+	// 寄せ1（R128）から本体の `⇥w : inc inc` は条件 w の枝で、右辺は枝の値（返す所、R125）。合成は返す所に残った裸の関数で `(unit …)` と bare-function-return。
+	// 条件 w が未定義の名前なら `!_` と分かる値で、定義の所で G22（R128・R21）なので、返す所の読みを見るため w をファイルで定義した。
 	["R76 本体の w : inc inc は枝の値で返す所（寄せ1。前は局所の定義の右辺は除く、Q50。R138 の前は w が未定義）", std(["w : 1", "t : y ?", "\tw : inc inc", "\ty", ""]), "(: t (? [y] (block (: w (unit (compose inc inc))) y)))", "A", { severities: ["information/bare-function-return"] }],
 	["R76 名前の定義の右辺は今のまま L（Q50）", std(["c1 : inc inc", "c1 5"]), "(apply c1 5)", "A"],
 	// 片イ（R123）：`,` の被演算子に丸ごと残った関数は `!_`（木は `(unit inc)`）と leftover-lambda（前は `(, inc 3)` で、器の要素は関数を値として持った）。
@@ -6091,7 +6089,7 @@ const r73Passes = [
 	["R77 [@ 0] [1 2] 5（`@` で引いた物は未知。前は未知の根）（前は G2(a)）", std("[@ 0] [1 2] 5"), "(construct (apply [@ 0] [1 2]) 5)", "未知"],
 	["R77 [' 0] vs~（書き下しの頭から引いた物が未知で余りがある）（前は G2(a)、その前は G19）", std("[' 0] vs~"), "(apply [' 0] vs~)", "未知"],
 	// 片イ（R126）：G6 は廃止。先の分からない `@x` は種類の未知な項と同じに畳み、値の後ろに積む予想（x は未定義で undefined-name）。
-	// 2026-11-08 の R138 から、未定義の x の `5 @x` は読む段で断る（代表は下の r73Written）。先の分からない `@` は、本体の裸の仮引数を開いた形で見る。
+	// 未定義の x の `5 @x` は下の R78 の注（`@x` は `!_` と分かる値、R21・R49）。先の分からない `@` は、本体の裸の仮引数を開いた形で見る。
 	["R78 t : h ? 5 @h（裸の仮引数 h を開いた先は分からない。R138 の前は未定義の x の `5 @x`、その前は G6）", std("t : h ? 5 @h"), "(construct 5 @h)", "未知", { body: true }],
 ];
 const r73Refused = [
@@ -6150,13 +6148,14 @@ const r73Refused = [
 ];
 for (const [name, s, want, kind, extra] of r73Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r73Refused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138 の代表の断り（この節で主題が書いた `!_`・書いた空の器・未定義の名前だった行）。
+// R138 の代表の断り（この節で主題が書いた `!_`・書いた空の器だった行）。
 const r73Written = [
 	["R74 i inc !_（末尾の書いた `!_`。R138 の前は R28 で inc が残り `(unit inc)`）", r73("i inc !_"), "void-written", 0, "!_"],
 	["R75 mp2 $[[x] ? x inc] []（書いた空の器。R138 の前は `(apply mp2 (construct $[[x] ? x inc] []))` と bare-function-return）", r73("mp2 $[[x] ? x inc] []"), "empty-written", 0, "[]"],
-	["R78 5 @x（未定義の名前 x。R138 の前は `(construct 5 @x)` の未知と undefined-name）", std("5 @x"), "name-undefined", 0, "x"],
 ];
 for (const [name, s, reason, fromEnd, x] of r73Written) checkWrittenAt(name, s, reason, fromEnd, x);
+// R78 `5 @x`：x は未定義の名前で、読む段は name-undefined を知らせる（R21）。`@x` は `@w`（w : pw ' zz）と同じく `!_` と分かる値（R49、§5 Q109 の答え）で、
+// 空白の並びの単位として消えて 5 になるのが仕様の答え。実装は `@w` と同じく `(construct 5 @x)` の未知（`@` の先が `!_` と分かる値の片がまだ）なので、期待は書かない。
 const r73Messages = [
 	["R76 評価する所の知らせ", std("inc == 5"), "leftover-lambda", ["`inc`", "評価する所", "R76", "§5 Q37", "`$`"]],
 	// 確かめの直し（2026-10-26）：比べの被演算子では `$inc == 5` が G7（R62）なので、`$` を付ける案内をしない。論理の被演算子・手続きの行では案内する
@@ -6208,13 +6207,10 @@ for (const [name, s, gateId, must, mustNot] of r73GateMessages) {
 // R80：枝の無い関数の本体の、左が名前1つの `:` の行は局所の定義で、どの使い方でも右辺の種類で読む（R54 は `$名前` の先だけ）。局所の定義の行は手続きの行に
 // 数えない。局所の値の輪は name-cycle、局所の関数の再帰は今のまま未知。R81：素の関数も実引数の印で実体を作る（印の無い実引数は今のまま本体を1回だけ）。
 // R82：前置 `@` の値の定義の名前も右辺の印を読む（`@p` は `@[p]` と同じ）。
-// 2026-11-04 の寄せ1（R128〜R130）で R80 は廃止：本体の字下げの `:` の行は、左が名前1つでも枝（match_case）で、本体に局所の定義は無い。下の「R80」の行は、
-// 1行目が条件の名前（未定義の名前で `!_`、undefined-name）の枝で、`$名前` は本体の行を見ずに零射の番地（細目7）、値の `z ? z * z` などは返す所に残った裸の
-// 関数で `(unit …)`（R125・R129）。答えはファイルに同じ形を書いた時と同じ（局所の値の輪・局所の関数の番地は通り、`$[sq double]`・番地の字面の n9 と ww は
-// ファイルの未定義の名前と同じく G20・G21）。使う行を枝の前に置いた形は R130 で断る。名前の「局所の …」は R80 の時の読みの記録。
-// → 2026-11-08 の R138 から、本体の枝の条件の未定義の名前（下の行の `⇥sq : …`・`⇥w : …`・`⇥v : …`・`⇥yy : …` ほかの左）と、ファイルの未定義の名前（`zz`）は、
-// 読む段で断る（name-undefined。R127 の 7.）。下の節で主題がそれだった行（未定義の条件の名前の枝とその `$名前`・裸の名前・番地の字面・輪でない形）は消し、類の代表を
-// r80Written に置いた。ほかの主題の行は、書ける物（定義した条件・括りの仮引数・R115 の wv）に替えて見続ける。
+// 2026-11-04 の寄せ1（R128〜R130）で R80 は廃止：本体の字下げの `:` の行は、左が名前1つでも枝（match_case）で、本体に局所の定義は無い。値の
+// `z ? z * z` などは返す所に残った裸の関数で `(unit …)`（R125・R129）。使う行を枝の前に置いた形は R130 で断る。名前の「局所の …」は前の読みの記録。
+// 本体の枝の条件の未定義の名前（下の行の `⇥sq : …`・`⇥w : …`・`⇥v : …`・`⇥yy : …` ほかの左）は `!_` と分かる値で、呼ばない定義でも定義の所で G22
+// （R128・R21。類の代表は r80Written）。ほかの主題の行は、書ける物（定義した条件・括りの仮引数・R115 の wv）で見る。
 const r80Passes = [
 	// R80
 	// 「使う行が定義の行の前（順序非依存）」と `$[sq double]` は、寄せ1 で R130 と R59 の G20 に変わった（下の r80Refused）。
@@ -6262,13 +6258,13 @@ const r80Passes = [
 	// 局所の定義の覚えの2行は、h の定義の行の `uu (p [x])`（種類の未知な項の G7）で見ていたが、片イ（R120）でその G7 が無くなり通る。今は、並べ方に依らず
 	// 同じ根（`p [zz]` の zz は未定義で、括りの口には空の器が届き、最後の括りなので本体を読まずに `!_`、R122）で通ることだけを見る（前は G7）。
 	// 寄せ1（R128）から `⇥v : h 1` は条件 v の枝で、v も未定義の名前（undefined-name が v と zz の2つ）。
-	// 2026-11-08 の R138 から、枝の条件の v と実引数の zz は未定義の名前で断るので、条件を p の括りの仮引数 k に、実引数を R115 の wv にした（`[wv]` は R90 で本体を読まない）。
+	// 条件は p の括りの仮引数 k、実引数は R115 の wv（`[wv]` は R90 で本体を読まない）。枝の条件に未定義の名前を置けば `!_` と分かる値で、定義の所の G22（R128・R21）。
 	["R80 局所の定義の覚えは解き直しで消す（p が先）（前は G7。R138 の前は `⇥v : h 1` ⏎ `⇥v` の `p [zz]`）", src([...R115W, "uu : x ? [,] x", "p : [k] ?", "\tk : h 1", "\tk", "", "h : x ? uu (p [x])", "p [wv]"]), "(apply p [wv])", "A"],
 	["R80 局所の定義の覚えは解き直しで消す（h が先）（前は G7。R138 の前は `⇥v : h 1` ⏎ `⇥v` の `p [zz]`）", src([...R115W, "uu : x ? [,] x", "h : x ? uu (p [x])", "p : [k] ?", "\tk : h 1", "\tk", "", "p [wv]"]), "(apply p [wv])", "A"],
 	// 片イ（R125）：実体の本体の根の `@f x`（add の部分適用）は `!_` と bare-function-return（R125 の文面の `use $add 5 3` の例と同じ。前は G16）。
 	// 2026-11-07 の R137（§5 Q91 の答え）：未定義の名前 sq は `!_` と分かる値で、その上に積んだ double は並置の単位で残る（ファイルの `$[zz double]` と同じ）。
 	// 前は値 `_` の上に積まれて余った double で R59 の G20（下の r80Refused にあった）。知らせは undefined-name と、枝の値の bare-function-return（どれも information）。
-	// 2026-11-08 の R138 から本体の未定義の sq は断るので、`!_` と分かる名前は R115 の wv で見る（ファイルの行。前の知らせの2つは、未定義の名前と本体の枝の分）。
+	// `!_` と分かる名前は R115 の wv で見る（ファイルの行）。未定義の名前の `$[zz double]` も同じ木で、読む段は name-undefined を知らせる（R21）。
 	["R137 $[wv double]（`!_` と分かる名前の上に積んだ double は並置の単位で残る。R138 の前は本体の未定義の sq の `$[sq double]`、その前は R59 の G20、その前は R80 で A）", std([...R115W, "$[wv double]"]), "$[wv double]", "A", { diagCount: 0 }],
 	["R81 use $add 5（実体の本体の根が口の開いた関数、括りの関数の実体と同じ）（前は G16、その前は未知の根）", std("use $add 5"), "(apply use (construct $add 5))", "A", { severities: ["information/bare-function-return"] }],
 ];
@@ -6277,7 +6273,7 @@ const r80Refused = [
 	// G7 は、2026-11-04 の寄せ1（R128）で本体の行が枝になり、通る（上の r80Passes の「寄せ1」の行）。
 	// 局所の関数の再帰（G7）と値の行が局所の関数1つ（G16）は、片イ（R120・R125）で上の r80Passes へ移した。
 	// 寄せ1 から `⇥ww : $vs + 0x10` は枝で、その値（返す所）の点が関数の答えに落ちる所で G21（前は局所の名前 ww の点 + 1 で、ファイルの定義と同じ G21）。
-	// → 2026-11-08 の R138 から条件の ww は未定義の名前で断るので、この行（`⇥ww : $vs + 0x10` ⏎ `⇥ww + 1`、G21）は消した。枝の値の点が関数の答えに落ちる G21 は、
+	// → 条件の ww は未定義の名前で `!_` と分かる値なので、`⇥ww : $vs + 0x10` ⏎ `⇥ww + 1` は定義の所の G22（R128・R21。代表は下の r80Written）。枝の値の点が関数の答えに落ちる G21 は、
 	// R62 の「印を落とす所 tt : y ? ⏎ y > 1 : $vs + 0x10 ⏎ 5（枝の値）」が見る。
 	// 寄せ1（R130）：使う行を枝の前に置いた本体は、枝の前の裸の行でファイルごと止める（前は R80 で「順序非依存」として通った）。
 	["寄せ1 裸の行 ⇥inc x を枝 ⇥x > 0 : 1 の前に置く（R130 の文面の例。R138 の前は未定義の名前 sq の `⇥sq x` ⏎ `⇥sq : z ? z * z`、その前は R80 で順序非依存）", trial(["tt : x ?", "\tinc x", "\tx > 0 : 1", "\t0", "", "tt 3"]), "body-bare-row-between"],
@@ -6285,8 +6281,8 @@ const r80Refused = [
 	// 2026-11-07 の R137 から、sq は `!_` と分かる値で並置の単位で消え、通る（上の r80Passes の終わりへ移した）。
 	// 番地の字面の n9 とずらした点の ww は、寄せ1 から未定義の名前（`!_`）で、ファイルに書いた `($vs + zz) == $vs`・`(zz - $vs) == ($vs - $vs)` と同じ G21（右か左が
 	// 点か差か数か分からない値。前は R80 の局所の定義の右辺の顔で通った）。
-	// → 2026-11-08 の R138 から、条件の n9・ww とファイルの zz は未定義の名前で断るので、ここにあった3行（`⇥n9 : 0x10` ⏎ `⇥($vs + n9) == $vs`・
-	// `t : y ? ($vs + zz) == $vs`・`⇥ww : $vs + 0x10` ⏎ `⇥(ww - $vs) == ($vs - $vs)`、どれも G21）は消した（代表は下の r80Written）。
+	// → 条件の n9・ww は未定義の名前で `!_` と分かる値なので、`⇥n9 : 0x10` ⏎ `⇥($vs + n9) == $vs`・`⇥ww : $vs + 0x10` ⏎ `⇥(ww - $vs) == ($vs - $vs)` は
+	// 定義の所の G22（R128・R21。代表は下の r80Written）。ファイルの zz の `t : y ? ($vs + zz) == $vs` は、zz が `!_` と分かる値（R21）で G21。
 	// 局所の定義の覚えは、範囲の本体を解き始めるたびに消す（resolve.js の localInfo の注）。消さないと、h の仮置き（A）の上で解いた p の実体の局所の名前 v が
 	// 覚えに残り、仮置きが外れて p の実体を解き直しても v は A のまま、`(p [x])` が A に固まって h の `uu (p [x])` を黙って通した（作る途中の変異で見つけた）。
 	// 正しくは `(p [x])` は未知で、h の定義の行で G7。並べ方に依らない。
@@ -6306,10 +6302,10 @@ const r80Refused = [
 ];
 for (const [name, s, want, kind, extra] of r80Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r80Refused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138 の代表の断り（この節で主題が本体の枝の条件の未定義の名前・書いた `!_` だった行）。
+// 代表の断り（この節で主題が本体の枝の条件の未定義の名前（G22、R128・R21）と書いた `!_`（R138）だった行）。
 const r80Written = [
-	["R80 本体の ⇥sq : z ? z * z ⏎ ⇥sq x の条件 sq（R128 で定義でない。R138 の前は `!_` の条件の枝で `(apply tt 3)` の A）", trial(["tt : x ?", "\tsq : z ? z * z", "\tsq x", "", "tt 3"]), "name-undefined", 3, "sq"],
-	["R80 本体の ⇥w : !_ ⏎ ⇥hx [1] $w の書いた `!_`（R127 の 3. が 7. の未定義の名前 w より先。R138 の前は零射の番地で hx の実体 `N $L`）", std(["hx : [k] f ? @f 1", "t : y ?", "\tw : !_", "\thx [1] $w"]), "void-written", 1, "!_"],
+	["R80 本体の ⇥sq : z ? z * z ⏎ ⇥sq x の条件 sq（R128 で定義でない未定義の名前、G22）", trial(["tt : x ?", "\tsq : z ? z * z", "\tsq x", "", "tt 3"]), "G22", 3, "sq"],
+	["R80 本体の ⇥w : !_ ⏎ ⇥hx [1] $w の書いた `!_`（R127 の 3.。書いた `!_` は読む段が先に断る）", std(["hx : [k] f ? @f 1", "t : y ?", "\tw : !_", "\thx [1] $w"]), "void-written", 1, "!_"],
 ];
 for (const [name, s, reason, fromEnd, x] of r80Written) checkWrittenAt(name, s, reason, fromEnd, x);
 const r80GateMessages = [
@@ -6343,7 +6339,7 @@ for (const [name, s, gateId, must, mustNot] of r80GateMessages) {
 // - 外の関数の局所の名前と同じ名前の、内の関数の局所の定義は、外の名前を隠す行として今のまま断る（local-shadow）。
 // - `$` で入った辺のある局所の定義の輪は、どの名前から解き始めても R54 の local-cycle（G20）。
 // - G6 の言い分は、`@x` に印が届かない本当の理由を言う。
-// - → 2026-11-08 の R138 から、書いた `!_` を右辺に持つ un と、本体の枝の条件の未定義の名前（`⇥w : …`・`⇥sq : …`・`⇥v : …`・`⇥f9 : …`）は読む段で断る。
+// - → 書いた `!_` を右辺に持つ un は読む段で断り（R138）、本体の枝の条件の未定義の名前（`⇥w : …`・`⇥sq : …`・`⇥v : …`・`⇥f9 : …`）は `!_` と分かる値で定義の所の G22（R128・R21）。
 //   下の節で主題がそれだった行（未定義の条件の別名の `$w`・裸の w・隠す内の行・輪でない形）は消し、類の代表を r80FixWritten に置いた。欄の実体の行は、別名を通さず
 //   `$s` と R115 の名前を括った `[wv]` で見る。
 const r80FixPasses = [
@@ -6393,9 +6389,9 @@ const r80FixRefused = [
 ];
 for (const [name, s, want, kind, extra] of r80FixPasses) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r80FixRefused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138 の代表の断り（この節で主題が本体の枝の条件の未定義の名前だった行）。
+// 代表の断り（この節で主題が本体の枝の条件の未定義の名前（G22、R128・R21）だった行）。
 const r80FixWritten = [
-	["直し 仮引数の別名の札 ⇥w : a ⏎ ⇥w + b の条件 w（R128 で定義でない。R138 の前は `!_` の条件の枝で `(apply [g4 $5 _] 1)` の A、その前は G21）", std(["g4 : a b ?", "\tw : a", "\tw + b", "", "(g4 $5 _) 1"]), "name-undefined", 3, "w"],
+	["直し 仮引数の別名の札 ⇥w : a ⏎ ⇥w + b の条件 w（R128 で定義でない未定義の名前、G22）", std(["g4 : a b ?", "\tw : a", "\tw + b", "", "(g4 $5 _) 1"]), "G22", 3, "w"],
 ];
 for (const [name, s, reason, fromEnd, x] of r80FixWritten) checkWrittenAt(name, s, reason, fromEnd, x);
 const r80FixMessages = [
@@ -6503,7 +6499,7 @@ for (const [name, s, reason, fromEnd, x] of r28Written) checkWrittenAt(`R28 ${na
 //   原則が重要！」。R93（§5 Q68）：U〔答え〕[2026-10-26 23:39 29bed94e]「その読みでいい。書いた形のまま `[[1 2] 3]` を渡し、付けた括りの形（`[a b c]` か `[[a b] c]`
 //   か）が受けられるかを決める。次の片に入れて。」（ボタンの文は主の Claude の物）。
 // 前の答えで断っていて通る側へ移した行は、元の所に注を残して、ここに置く。
-// 2026-11-08 の R138（片2）：手で書いた `!_`・書いた空の器・未定義の名前は、読む段で断る。この節と下の「R94・R95」「R99〜R104」の節の主題の行（書いた `[]~`・`!_~`・
+// R138：手で書いた `!_`・書いた空の器は、読む段で断る。この節と下の「R94・R95」「R99〜R104」の節の主題の行（書いた `[]~`・`!_~`・
 // `~!_`・値の口の書いた `!_`・`[]`・`e0 : []`・`un : !_` の名前）は、類ごとに代表の断りの行（r83WrittenRows・r94WrittenRows・r99WrittenRows。理由・書いた行・名指す項を見る）
 // に替えて残りは消した。同じ断りの位置と包みは法則の側（coproduct_laws.test.js）が見る。値の働きを見る行は、R115 の無い欄の名前 `w`（R83W の `wp : [a : 1]` ⏎ `w : wp ' zz`。
 // `!_` と分かる名前で、R112 の名前の読みが今も通る）と、それを撒いた空の流れ `w~` に書き替えた。R88・R94・R105 は廃止（当たる形が無い）。前置きから `e0 : []`・`un : !_` を外した。
@@ -6516,17 +6512,19 @@ const r83 = (lines) => std([...R83D, ...[].concat(lines)]);
 const r83w = (lines) => r83([...R83W, ...[].concat(lines)]);
 const r83a = (lines) => std(["five : 5", ...[].concat(lines)]); // 番地の組（R92）
 // R138 の断りの行を確かめる：[名前, 源, 理由, 名指す項（名前なら名）, 書いた行（最後の行から数えて何行前か。0 は最後の行）]。
-// 理由（e.reason）・書いた行（e.line）と、言い分が名指す項と「§4 R138」を見る。
+// 理由（e.reason）・書いた行（e.line）と、言い分が名指す項と「§4 R138」を見る。理由が "G22" なら、本体の枝の条件か値に書いた `!_` と分かる値の
+// 断り（R128）で、門（e.gate）と、その値の名指しと「§4 R128」を見る。
 const r83Written = (name, src, reason, x, fromEnd = 0) => {
 	total++;
 	const line = src.split("\n").length - fromEnd;
-	const named = { "void-written": `項 \`${x}\``, "empty-written": `器 \`${x}\``, "name-undefined": `名前 \`${x}\`` }[reason];
+	const named = reason === "G22" ? G22_HEAD(x) : { "void-written": `項 \`${x}\``, "empty-written": `器 \`${x}\`` }[reason];
+	const law = reason === "G22" ? "§4 R128" : "§4 R138";
 	try {
 		const r = resolve(src);
 		fail(name, `断るはずが通った: ${show(r.trees[r.trees.length - 1])}`);
 	} catch (e) {
 		const text = String(e.message);
-		if (e.reason === reason && e.line === line && text.includes(named) && text.includes("§4 R138")) ok(`${name} → ${reason}`);
+		if ((reason === "G22" ? e.gate === "G22" : e.reason === reason) && e.line === line && text.includes(named) && text.includes(law)) ok(`${name} → ${reason}`);
 		else fail(name, `got: ${e.reason} ${e.gate || ""} 行 ${e.line}  want: ${reason} 行 ${line}（${named}）`, text);
 	}
 };
@@ -6564,7 +6562,7 @@ const r83Passes = [
 	["R87 -inc 5（値の印も同じ。前は G7）", r83("-inc 5"), "(construct -inc 5)", "A", { leftoverDiag: ["inc"] }],
 	["R87 [-inc] 5（前は G7）", r83("[-inc] 5"), "(construct [-inc] 5)", "A", { leftoverDiag: ["inc"] }],
 	// U [2026-10-25 22:11 e20e5341] の式「x + sum _ = x + sum = x + _」の末尾の `_` は前の綴りの void で、今の綴りの `!_` は R138 で断るので、式の中の `x + sum` で見る
-	// （前は `x + sum !_` の根で、x は未定義の名前。R138 で未定義の名前も断るので、x は仮引数にした）。後ろの `!_` が値の隣で消えるのを見ていた `5 + inc !_`（前は G7、
+	// （x は中身の見えない値の仮引数。未定義の名前は `!_` と分かる値（R21）で、この行の意図に合わない）。後ろの `!_` が値の隣で消えるのを見ていた `5 + inc !_`（前は G7、
 	// §5 Q74 (b)）も、書いた `!_` の行なので外した（`5 + inc` は上の行）。
 	["R87 h87 : x ? x + sum は `x + !_`（U [2026-10-25 22:11 e20e5341] の式の `x + sum`。前は根の `x + sum !_`）", r83("h87 : x ? x + sum"), "(+ x (unit sum))", "A", { body: true, leftoverDiag: ["sum"] }],
 	["R87 i + 1（恒等射は知らせない）", r83("i + 1"), "(+ (unit i) 1)", "A", { diagCount: 0 }],
@@ -6852,9 +6850,8 @@ const r96Passes = [
 	["R96 今のまま @(0x40000000 + 0x100)（印の無い前置 `@`。最初の版は G21）", r96("@(0x40000000 + 0x100)"), "@[0x40000000 + 0x100]", "未知"],
 	["R96 今のまま (0x10 + 0x8) / 0x8（点も差も無い。最初の版は差 / 差で G21）", r96("(0x10 + 0x8) / 0x8"), "(/ [0x10 + 0x8] 0x8)", "A"],
 	["R96 確かめ $vs + (nx + 0x8)（字面の名前と字面の和）", r96("$vs + (nx + 0x8)"), "(+ $vs [nx + 0x8])", "A"],
-	// 「R96 確かめ tt : y ? ⏎ n5 : 0x10 + 0x8 ⏎ ($vs + n5) == $vs（局所の名前の和）」は、2026-11-04 の寄せ1（R128）で `⇥n5 : 0x10 + 0x8` が枝になり n5 が未定義の名前に
-	// なったので、ファイルの `($vs + zz) == $vs` と同じ G21（下の r96Refused へ移した）。2026-11-08 の R138 から未定義の名前は読む段が断る（name-undefined、
-	// 下の r96WrittenRows へ移した）。
+	// 「R96 確かめ tt : y ? ⏎ n5 : 0x10 + 0x8 ⏎ ($vs + n5) == $vs（局所の名前の和）」は、寄せ1（R128）から `⇥n5 : 0x10 + 0x8` が枝で、条件 n5 は未定義の名前なので
+	// 定義の所で G22（R128・R21。下の r96WrittenRows）。
 	// R97：幅の倍数の差・幅を見ない所
 	["R97 $vs + 0x8（幅の倍数）", r96("$vs + 0x8"), "(+ $vs 0x8)", "A"],
 	["R97 $v + 0x8（1つの要素の領域の外は値の段。倍数なので断らない）", r96("$v + 0x8"), "(+ $v 0x8)", "A"],
@@ -6894,8 +6891,7 @@ const r96Passes = [
 	["R98 今のまま 0x10 / 1.5（点も差も無い組。数にはしない、§5 Q76。最初の版は数）", r96("0x10 / 1.5"), "(/ 0x10 1.5)", "A"],
 ];
 const r96Refused = [
-	// 寄せ1（R128）から本体の `⇥n5 : 0x10 + 0x8` は枝で、n5 は未定義の名前（右は点か差か数か分からない値）。前は R80 の局所の名前の和で通った。
-	// 2026-11-08 の R138 から未定義の名前は読む段が断るので、この行（前は G21）は下の r96WrittenRows の name-undefined へ移した。
+	// 寄せ1（R128）から本体の `⇥n5 : 0x10 + 0x8` は枝で、条件 n5 は未定義の名前なので定義の所で G22（R128・R21。下の r96WrittenRows）。
 	// R96：点としか読めない所
 	["R96 0x1000 - $vs は点としか読めない（前も G21、言い分が変わった）", r96("0x1000 - $vs"), "G21"],
 	["R96 (0x10 + 0x8) - $vs（字面の和 − 点も点としか読めない。確かめ：最初の版は差 − 点の §5 Q66）", r96("(0x10 + 0x8) - $vs"), "G21"],
@@ -6931,7 +6927,7 @@ const r96Refused = [
 	["R97 ($vs + 0x4) + 0x4（畳み込みの順に依らず断る。前は通った）", r96("($vs + 0x4) + 0x4"), "G21"],
 	["R97 ($vs + 0x3) + ($vs - $five)（§5 Q77 の順の割れの片側。`$vs + (0x3 + ($vs - $five))` は通る）", r96("($vs + 0x3) + ($vs - $five)"), "G21"],
 	// 本体の局所の名前の点と字面の2行（`tt : y ?` ⏎ `⇥lp : $vs` ⏎ `⇥(lp + 0x3) == $vs`・`tt : y ?` ⏎ `⇥n5 : 0x3` ⏎ `⇥($vs + n5) == $vs`、前は G21）は、寄せ1（R128）から
-	// `⇥lp : …`・`⇥n5 : …` が枝で名前が未定義になり、2026-11-08 の R138 から読む段の name-undefined で断る。同じ類の代表は下の r96WrittenRows の1行に置いて、この2行は外した
+	// `⇥lp : …`・`⇥n5 : …` が枝で、条件の名前が未定義なので定義の所で G22（R128・R21）。同じ類の代表は下の r96WrittenRows の1行に置いた
 	// （名前で運ぶ点の幅は上の `$vs + w4`、仮引数で運ぶ点は下の言い分の `hb [1] $vs` が見る）。
 	["R97 $vs + (0x13 - 0x13)（値 0x0 でも字面 0x13 が倍数でない、§5 Q77）", r96("$vs + (0x13 - 0x13)"), "G21"],
 	["R97 $vs + (nx + 0x3)（字面の名前と字面の和、値 0x13）", r96("$vs + (nx + 0x3)"), "G21"],
@@ -6977,9 +6973,9 @@ const r96Refused = [
 ];
 for (const [name, s, want, kind, extra] of r96Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r96Refused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138：本体の枝の条件の名前（寄せ1、R128）は未定義の名前で、読む段が枝の行で断る（前は G21）。
+// 本体の枝の条件の名前（寄せ1、R128）が未定義の名前なら `!_` と分かる値で、定義の所で枝の行の G22（R128・R21）。
 const r96WrittenRows = [
-	["R138 寄せ1 tt : y ? ⏎ n5 : 0x10 + 0x8 ⏎ ($vs + n5) == $vs は枝の行の n5 で name-undefined（前は G21、その前は局所の名前の和で通った）", r96(["tt : y ?", "\tn5 : 0x10 + 0x8", "\t($vs + n5) == $vs"]), "name-undefined", "n5", 1],
+	["寄せ1 tt : y ? ⏎ ⇥n5 : 0x10 + 0x8 ⏎ ⇥($vs + n5) == $vs は枝の行の n5 で G22（R128・R21）", r96(["tt : y ?", "\tn5 : 0x10 + 0x8", "\t($vs + n5) == $vs"]), "G22", "n5", 1],
 ];
 for (const [name, s, reason, x, fromEnd] of r96WrittenRows) r83Written(name, s, reason, x, fromEnd);
 const r96Messages = [
@@ -7084,9 +7080,8 @@ const r99Passes = [
 	["R100 hz2 : [s] ? $[s , w] ⏎ hz2 [s : (inc 5)]（単位律で `$s`。2026-11-16 の前は `$[s , _]`、その前は G20）", r99w(["hz2 : [s] ? $[s , w]", "hz2 [s : (inc 5)]"]), "(apply hz2 [s : [inc 5]])", "A", { severities: WARN }],
 	["R100 hz3 : [s] ? $[w , s] ⏎ hz3 [s : (inc 5)]（前の見本は書いた `!_` の `$[!_ , s]`。その前は G20）", r99w(["hz3 : [s] ? $[w , s]", "hz3 [s : (inc 5)]"]), "(apply hz3 [s : [inc 5]])", "A", { severities: WARN }],
 	["R100 kk2 : g8 [~l] ? $[g8 , w] ⏎ kk2 5 [1]（2026-11-16 の前は `$[g8 , _]`。その前は G20）", std([...R83W, "kk2 : g8 [~l] ? $[g8 , w]", "kk2 5 [1]"]), "(apply kk2 (construct 5 [1]))", "A", { severities: WARN }],
-	// 2026-11-04 の寄せ1（R128）から `⇥w : s` は条件 w（未定義の名前）の枝で、`$w` は零射の番地なので `use $w 1` は A で警告しない（前は局所の別名で `$s` と同じ
-	// 警告と未知）。2026-11-08 の R138 から未定義の名前は読む段が枝の行で断るので、この行（`hb7 : [s] ?` ⏎ `⇥w : s` ⏎ `⇥use $w 1` ⏎ `hb7 [s : (inc 5)]`、
-	// 寄せ1 からは零射の番地で A と information）は下の r99WrittenRows の name-undefined へ移した。
+	// 寄せ1（R128）から `⇥w : s` は条件 w の枝で名前を定義しない。条件 w は未定義の名前で `!_` と分かる値なので、`hb7 : [s] ?` ⏎ `⇥w : s` ⏎ `⇥use $w 1` は
+	// 定義の所で G22（R128・R21。下の r99WrittenRows）。
 	// 実体の鍵は分かれる：関数を受けた実体は指す関数の番地（知らせない）、形の見えない値を受けた実体は持ち上げ（知らせる。前は `{s:A}` の実体が G20）。
 	// （前の版は `hz [s : _]`（零射の番地）で見ていたが、欄の `[s : _]` は片9 で答えが変わるので、2026-10-28 の確かめの直しで `[s : inc]` に替えた。前の綴り。）
 	["R100 hz [s : inc] ⏎ hz [s : (inc 5)] の hz の実体は2つ", std(["hz : [s] ? $s", "hz [s : inc]", "hz [s : (inc 5)]"]), "(: hz (? [[s]] (inst {s:A} $s) (inst {s:L} $s)))", null, { at: -3, severities: WARN }],
@@ -7137,9 +7132,8 @@ const r99Passes = [
 	// 片イ（R125）で G16 は廃止。下ろした関数を本体の根に返す形は `!_` と bare-function-return（前は G16）。
 	["R102 hw [s : $inc]（前は G16）", r99("hw [s : $inc]"), "(apply hw [s : $inc])", "A", { severities: ["information/bare-function-return"] }],
 	["R102 t : y ? $inc ' 0（下ろした関数を本体の根に返す）（前は G16）", r99("t : y ? $inc ' 0"), "(: t (? [y] (unit (' $inc 0))))", null, { severities: ["information/bare-function-return"] }],
-	// 2026-11-04 の寄せ1（R128）：本体の `⇥p : 1 , $[p + 1]` は条件 p（未定義の名前）の枝で、持ち上げの中の p も未定義の名前なので輪は無い（前は局所の定義の輪で
-	// G20、下の r99Refused にあった。§5 Q78 (b) の本体の分は消えた）。2026-11-08 の R138 から未定義の名前は読む段が枝の行で断るので、この行（寄せ1 からは
-	// `(apply t 1)` の A と p の知らせ）は下の r99WrittenRows の name-undefined へ移した。
+	// 寄せ1（R128）：本体の `⇥p : 1 , $[p + 1]` は条件 p の枝で、持ち上げの中の p も未定義の名前なので輪は無い（§5 Q78 (b) の本体の分は無い）。条件 p は
+	// 未定義の名前で `!_` と分かる値なので、定義の所で G22（R128・R21。下の r99WrittenRows）。
 	// 2026-11-07 の R137（§5 Q91 の答え）：括った `(inc , double)` は、R123 で両方の辺が `!_` の `,`（`!_ , !_`）を括った物で、`!_` と分かる値として `,` の単位で消える。
 	// `$` の先は five で、値の持ち上げの警告（上の `$[w , 5]` と同じ。前の見本は `un : !_` ⏎ `$[un , 5]`）。前は R101 の G20 で `[$five , [$inc , $double]]` を案内していた（下の r99Messages にあった）。
 	// 括らない `$[inc , double]` は今のまま G20（`,` の被演算子の丸ごとの関数は R123 の `(unit …)` で、`,` は消えない）。
@@ -7192,7 +7186,7 @@ const r99Refused = [
 	// 片イ（R121）で G3 は廃止したので、書いた `,` の積の `$`（R101 の G20）に当たる（前は G3）。
 	["確かめ R101 v : 1 , $[inc v , 2]（G20）（前は G3）", std(["v : 1 , $[inc v , 2]", "v"]), "G20"],
 	// 関数の本体の局所の定義の輪が持ち上げを通る：局所の `$名前` の輪と同じ G20（前は値の輪の name-cycle）。→ 2026-11-04 の寄せ1（R128）で `⇥p : 1 , $[p + 1]` は
-	// 条件 p の枝になり、p は未定義の名前で輪が無いので通る（上の r99Passes の終わり。§5 Q78 (b) の本体の分は消えた）。
+	// 条件 p の枝になって輪は無く、条件 p は未定義の名前なので定義の所で G22（R128・R21、下の r99WrittenRows）。
 	// 持ち上げの中で始まって中で閉じる輪（輪のいちばん下の枠が持ち上げより後）は、持ち上げを通らない本物の輪なので今までどおり name-cycle
 	["R103 p : $[q1 2] ⏎ q1 : q2 , 1 ⏎ q2 : q1 , 1（持ち上げの中で閉じる本物の輪）", std(["p : $[q1 2]", "q1 : q2 , 1", "q2 : q1 , 1"]), "name-cycle"],
 	// R102：下ろした関数を本体の根に返すと裸の関数（R33 の G16。前は未知の根で通った）。この2行は、片イ（R125）で上の r99Passes の終わりへ移した。
@@ -7206,12 +7200,12 @@ const r99Refused = [
 ];
 for (const [name, s, want, kind, extra] of r99Passes) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of r99Refused) checkRefused(name, s, want, inst);
-// 2026-11-08 の R138：R104 の書いた長さ 0 の流れの `$` と、本体の枝の条件の名前（寄せ1、R128）は、読む段が断る。
+// R104 の書いた長さ 0 の流れの `$` は読む段が断る（R138）。本体の枝の条件の名前（寄せ1、R128）が未定義の名前なら、定義の所で G22（R128・R21）。
 const r99WrittenRows = [
 	["R138 R104 $[]~ は empty-written（名指す項は `$` の項ごと。前は `$!_` と同じ零射の番地で A、その前は R57 の G20）", std("$[]~"), "empty-written", "$[]~"],
 	["R138 R104 $!_~ は void-written（前は零射の番地で A）", std("$!_~"), "void-written", "$!_~"],
-	["R138 寄せ1 hb7 : [s] ? ⏎ ⇥w : s ⏎ ⇥use $w 1 ⏎ hb7 [s : (inc 5)] は枝の行の w で name-undefined（前は零射の番地で A、その前は局所の別名で警告、その前は G20）", std(["hb7 : [s] ?", "\tw : s", "\tuse $w 1", "", "hb7 [s : (inc 5)]"]), "name-undefined", "w", 3],
-	["R138 寄せ1 確かめ R103 t : y ? ⏎ ⇥p : 1 , $[p + 1] ⏎ ⇥p ⏎ t 1 は枝の行の p で name-undefined（前は寄せ1 から輪でない A、その前は局所の定義の輪で G20）", std(["t : y ?", "\tp : 1 , $[p + 1]", "\tp", "", "t 1"]), "name-undefined", "p", 3],
+	["寄せ1 hb7 : [s] ? ⏎ ⇥w : s ⏎ ⇥use $w 1 ⏎ hb7 [s : (inc 5)] は枝の行の w で G22（R128・R21）", std(["hb7 : [s] ?", "\tw : s", "\tuse $w 1", "", "hb7 [s : (inc 5)]"]), "G22", "w", 3],
+	["寄せ1 確かめ R103 t : y ? ⏎ ⇥p : 1 , $[p + 1] ⏎ ⇥p ⏎ t 1 は枝の行の p で G22（R128・R21）", std(["t : y ?", "\tp : 1 , $[p + 1]", "\tp", "", "t 1"]), "G22", "p", 3],
 ];
 for (const [name, s, reason, x, fromEnd] of r99WrittenRows) r83Written(name, s, reason, x, fromEnd);
 const r99Messages = [
@@ -7476,10 +7470,9 @@ for (const [name, s, gateId, must, mustNot] of r9cMessages) {
 // 期待値の木は、同じ位置に書いた `!_` の綴りの答え（法則42〜44 が期待値を書かずに両側を比べる）。値の後ろに関数を置いた字面は足さない（R47）。
 // 2026-11-04 の寄せ2（R131）から既定値は仮引数のブロックに書く（括りの既定値は param-default-bracket）ので、gq をブロックの綴りにした（前は 1行の
 // `gq : x [y : 1] ? x + y`。使う所の木・種類・知らせは同じ）。
-// 2026-11-08 の R138（片2）：未定義の名前・手で書いた `!_`・書いた空の器は読む段で断る（name-undefined・void-written・empty-written、§4 R138）。R111・R113・R114 は
-// 廃止、R112 は R115・R102 の名前（`w : ob ' c` の w。下の OB）とそれを括った物だけに狭め、値の口ではその名前を消した綴りと同じ（`sub w 1 2` は `sub 1 2`）。
-// un・no・e0・q・e6・e8・cc の行は w の綴りに直すか外し、断りの見本を下の r111Written に残した。R111D からは `e0 : []`・`q : [cc]`・`e6 : ~!_`・`e8 : ~[]`・
-// `cc : (!_ , !_)` を外した。期待値の木は、名前を消した綴りの答え（前は同じ位置に書いた `!_` の綴りの答え）。
+// R138：手で書いた `!_`・書いた空の器は読む段で断る（void-written・empty-written、§4 R138。断りの見本は下の r111Written）。R112 の名前は R115・R102 の名前
+// （`w : ob ' c` の w。下の OB）とそれを括った物で、値の口ではその名前を消した綴りと同じ（`sub w 1 2` は `sub 1 2`）。未定義の名前は w と同じ `!_` と分かる値で、
+// 木・種類は w と同じ、読む段は書いた所ごとに name-undefined を知らせる（R21）。期待値の木は、名前を消した綴りの答え。
 const R111D = ["sub : x y ? x - y", "mx : a [b] ? a", "fq : [a b c] ? a", "pb2 : [a] [b] ? a", "gq :", "\t\tx", "\t\ty : 1", "\t? x + y", "", "has : [a s] ? s"];
 const r111 = (lines) => std([...R111D, ...[].concat(lines)]);
 const BOX = ["box : 0", "pp : $box"]; // `#` の左（書き込む先の番地）。`$box` は R100 の警告を出す
@@ -7492,7 +7485,12 @@ const r111Passes = [
 	["R112 gq w 2 は `gq 2`（既定値のある関数の既定値の無い口。根なので R107 で埋める。前の綴りは `gq no 2`）", r111([...OB, "w : ob ' c", "gq w 2"]), "(apply gq (construct 2 !_))", "未知", { diagCount: 0 }],
 	["R112 gq 1 w は既定値（既定値のある口、R39。葉の綴りは書いたまま。前の綴りは `gq 1 no`）", r111([...OB, "w : ob ' c", "gq 1 w"]), "(apply gq (construct 1 w))", "未知", { diagCount: 0 }],
 	["R112 inc [w] 5 は `inc 5`（名前を括った物。前の綴りは `inc [no] 5`）", r111([...OB, "w : ob ' c", "inc [w] 5"]), "(apply inc 5)", "A", { diagCount: 0 }],
-	// R112 の根の読み（`no 5`・`5 no`・`w : no` ⏎ `w 5` は 5）と、`e0`・`q`・`e6`・`e8`・`cc`・`~no`・`(!_ , !_)`・`v : !_ , _` の行は、2026-11-08 の R138 で外した（記録）。
+	// R21：未定義の名前 no は w と同じ読み。値の口では消した綴り、根の値の隣では単位で消える。知らせは書いた所ごとに1回で、運んだ名前の使う所では足さない。
+	["R21 未定義の名前 no の sub no 1 2 は `sub w 1 2` と同じ `sub 1 2`", r111("sub no 1 2"), "(apply sub (construct 1 2))", "A", { undef: ["no@27"] }],
+	["R21 no 5 は 5", r111("no 5"), "5", "A", { undef: ["no@27"] }],
+	["R21 5 no は 5", r111("5 no"), "5", "A", { undef: ["no@27"] }],
+	["R21 q : no ⏎ q 5 は 5（知らせは q : no の行の1回で、q 5 では足さない）", r111(["q : no", "q 5"]), "5", "A", { undef: ["no@27"] }],
+	["R21 未定義の名前 m の (m ' k) 5 は 5（`'` の右の鍵 k は名前の表から引かない）", r111("(m ' k) 5"), "5", "A", { undef: ["m@27"] }],
 	// 値の口でない所は今のまま（§5 Q83）
 	["R112 の外：参照の口の fq w は A（R90。前の綴りは `fq no`）", r111([...OB, "w : ob ' c", "fq w"]), "(apply fq w)", "A", { diagCount: 0 }],
 	["R112 の外：参照の口の pb2 w 1 は a が w で席を取る（R65・R90。前の綴りは `pb2 no 1`）", r111([...OB, "w : ob ' c", "pb2 w 1"]), "(apply pb2 (construct w 1))", "A", { diagCount: 0 }],
@@ -7521,7 +7519,8 @@ const r111Passes = [
 	["R115 [say ~r] ? (r ' say) 21 ⏎ b m（r に say は残らないので無い欄の `!_`。本体は 21、R137）", src([...M, "b : [say ~r] ? (r ' say) 21", "b m"]), "(: b (? [[say ~r]] (inst {say:L other:N} 21)))", null, { at: -2 }],
 	["R115 ob ' c は `!_`（印 zero の A。前は未知）", r111([...OB, "ob ' c"]), "(' ob c)", "A"],
 	["R115・R112 inc (ob ' c) 5 は `inc 5`（前は G7）", r111([...OB, "inc (ob ' c) 5"]), "(apply inc 5)", "A"],
-	// 書いた `!_` と `[]` を引く行（`!_ ' s`・`[] ' s`）と、未定義の名前 m の `(m ' k) 5` は、2026-11-08 の R138 で断る側（下の r111Written）へ移した。
+	// 書いた `!_` と `[]` を引く行（`!_ ' s`・`[] ' s`）は R138 で断る（下の r111Written）。未定義の名前 m の `(m ' k) 5` は、器が `!_` と分かる値で引いた物も
+	// `!_` と分かる値（R21・R49）なので、空白の並びの単位で消えて 5（name-undefined を知らせる）。
 	// R116：`#` の右の被演算子は評価する所
 	["R116 pp # inc は `(# pp (unit inc))`（知らせて `$inc` を案内する。前は `(# pp inc)` の未知）", r111([...BOX, "pp # inc"]), "(# pp (unit inc))", "A", { leftoverDiag: ["inc"] }],
 	["R116 pp # 5 は今のまま", r111([...BOX, "pp # 5"]), "(# pp 5)", "A"],
@@ -7557,7 +7556,7 @@ for (const [name, s, gateId, must, mustNot] of r111Messages) {
 }
 // 知らせの文面（断らない所）
 const r111Notes = [
-	// 「R111 undefined-name の文面は「定義が無い名前は `!_`」と R111 を言う」（`sub no 1 2`）は、2026-11-08 の R138 で外した（未定義の名前は読む段の name-undefined）。
+	["R21 未定義の名前の知らせは `!_` と読むことと R21 を言う（sub no 1 2）", r111("sub no 1 2"), "name-undefined", ["名前 `no` は、ここから見える所に定義がありません。", "`!_` と読みます", "§4 R21"]],
 	// 「R113 erased-unit-shadow の文面は外の名前が見えることと R113 を言う」（本体の `⇥y : _`）は、2026-11-04 の寄せ1（R128・R129）で本体の erased-unit-shadow が
 	// 無くなったので外した。構造体の欄の文面は下の fix9bNotes で見る。
 	["R116 `#` の右に残った関数の知らせは `$inc` を案内する", r111([...BOX, "pp # inc"]), "leftover-lambda", ["書き込み `#` の右の被演算子", "`$inc`", "§4 R42・R48・R116"]],
@@ -7574,11 +7573,9 @@ for (const [name, s, reason, must] of r111Notes) {
 		fail(`知らせ ${name}`, `断られた: ${e.reason} ${e.gate || ""} ${e.message}`);
 	}
 }
-// 2026-11-08 の R138（片2）：上の節の主題だった未定義の名前・書いた `!_`・書いた `[]` の見本と、`x : _` の重なり（§6）。行は書いた行（R127）。
+// R138：上の節の主題だった書いた `!_`・書いた `[]` の見本と、`x : _` の重なり（§6）。行は書いた行（R127）。
 // [名前, 前置きを足す関数, 源の行, 理由, 源の何行目か]
 const r111Written = [
-	["R111 値の口の未定義の名前（sub no 1 2）", r111, "sub no 1 2", "name-undefined", 1],
-	["R115 未定義の名前 m の (m ' k) 5", r111, "(m ' k) 5", "name-undefined", 1],
 	["R112 書いた `!_` の名前（un : !_ ⏎ sub un 1 2）", r111, ["un : !_", "sub un 1 2"], "void-written", 1],
 	["R113 zz : !_ ⏎ zz : 5 は重なりより先に、書いた `!_` の行で止める", r111, ["zz : !_", "zz : 5", "inc zz"], "void-written", 1],
 	["R114 仮引数のブロックの y : !_（前は G22）", r111, ["gz :", "\t\tx", "\t\ty : !_", "\t? x", ""], "void-written", 3],
@@ -7606,8 +7603,9 @@ for (const [name, wrap, lines, want, k] of r111Written) {
 // 期待値の木は、比べる相手の綴り（名前を挟まずに書いた綴り・欄を消した綴り・`wz` の綴り・`i , _` の綴り）の答え。値の後ろに関数を置いた字面は足さない（R47）。
 // 2026-11-04 の寄せ2（R131）から既定値は仮引数のブロックに書く（括りの既定値は param-default-bracket）ので、gf をブロックの綴りにした（前は 1行の
 // `gf : [y : 1] ? y`。使う所の木・種類・知らせは同じ）。
-// 2026-11-08 の R138（片2）：R113 の欄の書いた `!_`・§5 Q84 の既定値の未定義の名前と書いた `!_`・`[]`・寄せ5 の「答えの外」の形は読む段で断るので外し、見本を
-// 下の fix9bWritten に残した。本体の枝の条件の名前（`⇥w : …`・`⇥wl : …`・`⇥wz : …`）は、未定義の名前なら断るので、ファイルに同じ名前の定義を置いた。書いた `!_` の
+// 2026-11-08 の R138（片2）：R113 の欄の書いた `!_`・§5 Q84 の既定値の書いた `!_`・`[]`・寄せ5 の「答えの外」の形は読む段で断るので外し、見本を
+// 下の fix9bWritten に残した。既定値の未定義の名前は `!_` と分かる値で、定義の所の G22（R139・R21）。本体の枝の条件の名前（`⇥w : …`・`⇥wl : …`・`⇥wz : …`）は、
+// 未定義の名前なら定義の所の G22（R128・R21）なので、ファイルに同じ名前の定義を置いた。書いた `!_` の
 // 既定の行（`w !_` ほか）は `w 5` にした。
 const GF9 = ["w : gq 1", "gf :", "\t\ty : 1", "\t? y", ""]; // 片9a の R110 の見本：ファイルの値の定義の w（適用の結果）と、既定値だけの関数 gf
 const fix9bPasses = [
@@ -7625,19 +7623,18 @@ const fix9bPasses = [
 	["確かめ Q84 の外：既定値が数の名前の y : fv（fv : 5）", r111(["fv : 5", "gz :", "\t\tx", "\t\ty : fv", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 !_))", "未知"],
 	["確かめ Q84 の外：取り込みのある範囲の y : no は no が未知なので今のまま（§5 Q10）", r111(["io@", "gz :", "\t\tx", "\t\ty : no", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 !_))", "未知"],
 	["確かめ Q84 の外：既定値が `_` の y : _ は今のまま", r111(["gz :", "\t\tx", "\t\ty : _", "\t? x + y", "", "gz 5"]), "(apply gz (construct 5 !_))", "未知"],
-	// 片9b の §5 Q84 の行（下の fix9bRefused の注）を、書いた時の意図（括った void の既定値 `y : [_]`。2026-11-08 の入れ替えの前の綴り）で書き直した行（bunmen11 §5.2
-	// の割れの行）。R138 から括った void は書けないので、`!_` と分かる名前 w を括った（§3.3）。R115・R102 の名前を既定値に置く行は前から通っていて、Q84 の答え（全部断る）が
-	// この名前にも及ぶかは残した（仕様 §7.61）。木は今のまま既定値で埋める（R107）。
-	["確かめ Q84 の外：括った `!_` と分かる名前の既定値 y : [w]（w : ob ' c。前は括った void の `y : [_]`（前の綴り）で G22）", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : [w]", "\t? x", "", "gz 1"]), "(apply gz (construct 1 !_))", "未知", { diagCount: 0 }],
-	// 2026-11-06 の寄せ5（§5 Q84 を閉じた）の「答えの外で今のまま通す形」の7行（`y : [no]`・`y : no , !_`・`y : no ' s`・`y : ~no`・`y : no~`・`y : !_ no`・
-	// `w : no , !_` ⏎ `y : w`）は、2026-11-08 の R138 で外した（どれも未定義の名前か書いた `!_` を持ち、読む段で断る。見本は下の fix9bWritten）。
+	// 既定値に置いた `!_` と分かる値（未定義の名前・`!_` と分かる名前・それを括った物、R49）は、呼ばない定義でも定義の所で G22（R139。下の fix9bRefused）。
+	// `,` の単位律で `!_` に縮まない既定値（`y : no , 5` は 5）と、値の口で消える未定義の名前を持つ既定値（`y : inc typo 5` は `inc 5`）は断らず、知らせだけ（R21）。
+	["確かめ R139 の外：既定値 y : no , 5 は `,` の単位律で 5（`!_` と分かる値でない）", r111(["gz :", "\t\tx", "\t\ty : no , 5", "\t? x", ""]), "(: gz (block (? [{x ⏎ y : no , 5}] x)))", null, { undef: ["no@29"] }],
+	["確かめ R139 の外：既定値 y : inc typo 5 は `inc 5`（値の口の未定義の名前は消える）", r111(["gz :", "\t\tx", "\t\ty : inc typo 5", "\t? x + y", "", "gz 3"]), "(apply gz (construct 3 !_))", "未知", { undef: ["typo@29"] }],
+	["確かめ R139 の外：既定値 y : (3 < 2) は計算の `!_` で、書いた所で `!_` と分からない", r111(["gz :", "\t\tx", "\t\ty : (3 < 2)", "\t? x + y", "", "gz 3"]), "(apply gz (construct 3 !_))", "未知", { diagCount: 0 }],
 	// 片9a の直しの確かめ：R110 の「適用の結果と分かる項」に、枝の無い本体の局所の定義（R80）も入る（法則27）。→ 2026-11-04 の寄せ1（R128）で R80 と法則27 は
 	// 廃止。本体の `⇥wl : gq 1` ⏎ `⇥wl !_` ⏎ `⇥a` は、最後の枝の後に裸の行が2つの本体で R130 の断り（下の fix9bRefused）。ファイルの `wl : gq 1` の形（本体の `⇥wl !_`）と、
 	// `(_ !_) , i == 2`（R108 の恒等射の括り）の2行は、2026-11-08 の R138 で外した（R110・R108 は廃止、書いた `!_` は読む段の void-written）。
 	// 片イ（R125）で G16 は廃止。名前を挟んでも本体の根の裸の関数は `inc (ob ' c)` と同じく `!_` と bare-function-return（前は G16）。
-	// 寄せ1（R128）から `⇥w : ob ' c` は条件 w の枝で、`inc w` の w は名前を挟まない。2026-11-08 の R138 から未定義の名前は断るので、条件の w にファイルの
-	// `w : ob ' c` を置いた（前は w が未定義の名前で、undefined-name も出た）。返す所の inc は bare-function-return。
-	["確かめ g2 : y ? ⏎ w : ob ' c ⏎ inc w は `inc (ob ' c)` の本体と同じ（w はファイルの w。前は w が未定義の名前、その前は G16、その前は名前1つ挟むと通った）", r111([...OB, "w : ob ' c", "g2 : y ?", "\tw : ob ' c", "\tinc w", "", "g2 1"]), "(apply g2 1)", "A", { severities: ["information/bare-function-return"] }],
+	// 本体の `inc w` の w はファイルの `!_` と分かる名前で、`inc (ob ' c)` と同じく返す所の inc は `!_` と bare-function-return。本体の枝 `⇥w : ob ' c` を前に
+	// 置くと、条件 w も値 `ob ' c` も `!_` と分かる値なので、定義の所で G22（R128。下の fix9bRefused）。
+	["確かめ g2 : y ? ⏎ ⇥inc w は `inc (ob ' c)` の本体と同じ（w はファイルの `!_` と分かる名前）", r111([...OB, "w : ob ' c", "g2 : y ?", "\tinc w", "", "g2 1"]), "(apply g2 1)", "A", { severities: ["information/bare-function-return"] }],
 	// 片イ（R120）で種類の未知な項の G7 は廃止。外の名前を隠す行の無い本体の局所の wz は局所の定義として読めるので、`wz _` は通った（前は G7）。
 	// 片イ（R120）：外の名前を隠しうる行のある本体の w は R120 の例外（局所の名前）に入らず、ファイルの定義で読んだ（§5 Q85 (h)）。
 	// → 2026-11-04 の寄せ1（R128）で、この2つの3行の本体（`⇥wz : @$gf` ⏎ `⇥wz !_` ⏎ `⇥a`・`⇥w : @$gf` ⏎ `⇥w !_` ⏎ `⇥a`）は最後の枝の後に裸の行が2つで R130 の断り
@@ -7663,9 +7660,23 @@ const fix9bRefused = [
 	// §5 Q84：既定値が書いた `!_` でない `!_` と分かる値なら、断る側に倒す。2026-11-04 の寄せ2（R131）から綴りはブロックの行 `y : …`（前は 1行の
 	// `gz : x [y : …] ? x`）。前の「既定値が未定義の名前の [y : no] は G22」は、ブロックにすると下の「仮引数のブロックの y : no の行」と同じ綴りになるので、
 	// 括りの綴りのまま「寄せ2 R131」の節の断る側へ移した（R131 が Q84 の G22 より先に当たる）。
-	// §5 Q84 の G22 の8行（`y : un`（`un : !_`）・`w : no` ⏎ `y : w`・`y : e0`・`y : [!_ !_]`・`y : []`・`y : !_~`・`y : !_ , !_`・`y : no`）は、2026-11-08 の R138 で
-	// G22 より先に読む段で断る（void-written・name-undefined・empty-written）ので外し、見本を下の fix9bWritten に残した。`y : [!_ !_]`（前の片9b の `y : [_]`、前の綴り）は、
-	// 書いた時の意図で上の fix9bPasses の「括った `!_` と分かる名前の既定値 y : [w]」に書き直した。
+	// 既定値に書いた `!_` と空の器（`y : un`（`un : !_`）・`y : e0`・`y : [!_ !_]`・`y : []`・`y : !_~`・`y : !_ , !_`）は、読む段が先に断る（void-written・empty-written、
+	// R127 の 3.。見本は下の fix9bWritten）。未定義の名前・`!_` と分かる名前とそれを括った物・印を付けた物・鍵で引いた物の既定値は、呼ばない定義でも定義の所で G22
+	// （R139・R49・R21。下の行）。
+	["確かめ R139 既定値が未定義の名前の y : no（呼ばない定義でも定義の所で）", r111(["gz :", "\t\tx", "\t\ty : no", "\t? x", ""]), "G22", { line: 29, zero: "no", law: "R139" }],
+	["確かめ R139 既定値が括った `!_` と分かる名前の y : [w]（w : ob ' c。[x] ≅ x）", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : [w]", "\t? x", "", "gz 1"]), "G22", { line: 34, zero: "[w]", law: "R139" }],
+	["確かめ R139 w : no ⏎ y : w（未定義の名前の別名も `!_` と分かる名前）", r111(["w : no", "gz :", "\t\tx", "\t\ty : w", "\t? x", ""]), "G22", { line: 30, zero: "w", law: "R139" }],
+	["確かめ R139 y : [no]", r111(["gz :", "\t\tx", "\t\ty : [no]", "\t? x", ""]), "G22", { line: 29, zero: "[no]", law: "R139" }],
+	["確かめ R139 y : no ' s（`!_` の鍵で引いた物）", r111(["gz :", "\t\tx", "\t\ty : no ' s", "\t? x", ""]), "G22", { line: 29, zero: "no ' s", law: "R139" }],
+	["確かめ R139 y : ~no", r111(["gz :", "\t\tx", "\t\ty : ~no", "\t? x", ""]), "G22", { line: 29, zero: "~no", law: "R139" }],
+	["確かめ R139 y : no~", r111(["gz :", "\t\tx", "\t\ty : no~", "\t? x", ""]), "G22", { line: 29, zero: "no~", law: "R139" }],
+	["確かめ R139 y : w , w（`,` の単位律で `!_` に縮む）", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : w , w", "\t? x", ""]), "G22", { line: 34, zero: "w , w", law: "R139" }],
+	["確かめ R139 y : w w（空白の並びの単位だけの鎖）", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : w w", "\t? x", ""]), "G22", { line: 34, zero: "w w", law: "R139" }],
+	["確かめ R139 y : w~", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : w~", "\t? x", ""]), "G22", { line: 34, zero: "w~", law: "R139" }],
+	["確かめ R139 y : ~w", r111([...OB, "w : ob ' c", "gz :", "\t\tx", "\t\ty : ~w", "\t? x", ""]), "G22", { line: 34, zero: "~w", law: "R139" }],
+	["確かめ R139 y : typo == 5（`!_` が答えを `!_` にする演算子）", r111(["gz :", "\t\tx", "\t\ty : typo == 5", "\t? x", ""]), "G22", { line: 29, zero: "typo == 5", law: "R139" }],
+	["確かめ R139 y : typo~", r111(["gz :", "\t\tx", "\t\ty : typo~", "\t? x", ""]), "G22", { line: 29, zero: "typo~", law: "R139" }],
+	["確かめ R128 g2 : y ? ⏎ ⇥w : ob ' c ⏎ ⇥inc w の条件 w はファイルの `!_` と分かる名前", r111([...OB, "w : ob ' c", "g2 : y ?", "\tw : ob ' c", "\tinc w", "", "g2 1"]), "G22", { line: 33, zero: "w", law: "R128" }],
 	// R112・R115：名前を挟んでも本体の根の G16 は抜けない。片イ（R125）で G16 は廃止し、この行は上の fix9bPasses の終わりへ移した。
 	// 片9a の直しの確かめの、本体の行が外の名前を隠しうる `w _`（前は G7）と比べの相手の `wz _`（どちらも前の綴り）は、片イ（R120、§5 Q85 (h)）で通る側へ移した。
 	// 2026-11-04 の寄せ1（R130）：その2行と本体の局所の `wl !_`（法則27 の族）は、最後の枝の後に裸の行が2つ（`w !_` と `a`）の本体で、最初の裸の行を名指しして断る。
@@ -7679,7 +7690,11 @@ const fix9bRefused = [
 for (const [name, s, want, kind, extra] of fix9bPasses) checkPass(name, s, want, kind, extra);
 for (const [name, s, want, inst] of fix9bRefused) checkRefused(name, s, want, inst);
 const fix9bMessages = [
-	// §5 Q84 の G22 の言い分（`y : no` が Q84 を名指しして `y`・`[y]` を案内する）は、2026-11-08 の R138 で外した（`y : no` は読む段の name-undefined、上の fix9bRefused の注）。
+	// R139：既定値の G22 は、`!_` を置くのは既定値を書かないのと同じことと、値で受ける `y`・参照で受ける `[y]` を案内する。
+	["R139 既定値の y : no の G22 は y と [y] を案内する", r111(["gz :", "\t\tx", "\t\ty : no", "\t? x", ""]), "G22", ["関数 `gz` の仮引数のブロックの行 `y : no` の既定値 `no` は、", "既定値に `!_` を置くのは、既定値を書かないのと同じです。", "値で受けるなら `y`、参照で受けるなら `[y]`", "§4 R139"], ["Q84"]],
+	// R128：枝の G22 は、条件なら選ばれず、値なら次の枝へ進むだけのことと、本体の `:` の行が名前を定義しないことを言う。
+	["R128 本体の枝の条件 ⇥y : x + 1 の G22 は R128 を言う", r111(["pr : x ?", "\ty : x + 1", "\ty * 2"]), "G22", ["関数 `pr` の本体の枝 `y : x + 1` の条件 `y` は、", "条件なら選ばれず、値なら選ばれても次の枝へ進むだけです。", "本体の `:` の行は名前を定義しません（§4 R128）。"], ["Q84"]],
+	["R128 本体の枝の値 ⇥x > 0 : pw ' zz の G22 は値を名指す", r111(["pw : [a : 1]", "f : x ?", "\tx > 0 : pw ' zz", "\t7"]), "G22", ["関数 `f` の本体の枝 `x > 0 : pw ' zz` の値 `pw ' zz` は、", "§4 R128"], []],
 	// 「確かめ R114 の括りを重ねた綴りも R114 の言い分」は、前に寄せ2（R131）で「寄せ2 R131」の節の言い分へ移し、R138 でそこからも外した。
 ];
 for (const [name, s, gateId, must, mustNot] of fix9bMessages) {
@@ -7710,13 +7725,12 @@ for (const [name, s, reason, must] of fix9bNotes) {
 		fail(`知らせ ${name}`, `断られた: ${e.reason} ${e.gate || ""} ${e.message}`);
 	}
 }
-// 2026-11-08 の R138（片2）：上の節の主題だった欄の書いた `!_` と、§5 Q84 の既定値の見本。行は書いた行（R127）。
+// R138：上の節の主題だった欄の書いた `!_` と、既定値に書いた `!_`・空の器の見本。行は書いた行（R127）。
 // [名前, 前置きを足す関数, 源の行, 理由, 源の何行目か]
 const fix9bWritten = [
 	["R113 欄の書いた `!_`（ob : [a : s ⏎ s : !_]。前は消えて `ob : [a : s]` と同じ）", r111, ["ob : [a : s", "\ts : !_]", "inc (ob ' a) 5"], "void-written", 2],
 	["確かめ Q84 y : !_ , !_（前は R61 で `!_` に縮む積で G22）", r111, ["gz :", "\t\tx", "\t\ty : !_ , !_", "\t? x", ""], "void-written", 3],
 	["確かめ Q84 y : []（前は G22）", r111, ["gz :", "\t\tx", "\t\ty : []", "\t? x", ""], "empty-written", 3],
-	["確かめ Q84 仮引数のブロックの y : no の行（前は G22）", r111, ["gz :", "\t\tx", "\t\ty : no", "\t? x", ""], "name-undefined", 3],
 ];
 for (const [name, wrap, lines, want, k] of fix9bWritten) {
 	total++;
@@ -7839,8 +7853,8 @@ const undecidedMarkPasses = [
 	["Q85 (i) !w 2 も通る", UW("!w 2"), "(: ob (block (: w inc) (: w 6) (construct !w 2)))", null, { at: -2 }],
 	["Q85 (i) ||w|| 2 も通る", UW("||w|| 2"), "(: ob (block (: w inc) (: w 6) (construct ||w|| 2)))", null, { at: -2 }],
 	["Q85 (k) 1項の w~ は並びでないので通る", UW("w~"), "(: ob (block (: w inc) (: w 6) w~))", null, { at: -2 }],
-	// 寄せ1（R128）から本体の `⇥w : 2` は枝で、`w~ 2` の w は読みが決まっている。前は w が未定義の名前で、その前は R80 の局所の定義で読みが決まっていた。2026-11-08 の
-	// R138 から未定義の名前は断るので、ファイルに `w : 2` を置いた（`w~ 2` の w はファイルの w）。
+	// 寄せ1（R128）から本体の `⇥w : 2` は枝で、`w~ 2` の w は読みが決まっている。条件 w が未定義の名前なら G22（R128・R21）なので、ファイルに `w : 2` を
+	// 置いた（`w~ 2` の w はファイルの w）。
 	["Q85 (k) 読みの決まった w の w~ 2 は通る（w はファイルの w）", src(["w : 2", "t : y ?", "\tw : 2", "\tw~ 2", "", "t 1"]), "(apply t 1)", "A"],
 ];
 const undecidedMarkRefused = [
@@ -7910,8 +7924,8 @@ for (const [name, s, want] of unreadWrapped) checkRefused(name, s, want);
 // 2つ以上ある本体は、読む段でファイルごと止め、最初に当たった裸の行を名指しする（reason は body-bare-row-between、元の行は R127）。枝の値のブロック（括らない、
 // 枝の行の下の字下げのブロック）にも同じ規則が当たる（細目1・6）。値が計算の `!_` の行も枝の行に数える（R129、右辺の中身で本体の形を変えない。前の綴りは `x : !_`）。枝の無いブロックは
 // 手続き（R76）で、今のまま通る。括りの中の行と構造体のブロックの行は欄なので当たらない。
-// 2026-11-08 の R138（片2）から本体の枝の条件の名前も、未定義の名前なら読む段で断る（name-undefined）ので、条件に名前1つを置く行はファイルに同じ名前の定義を
-// 置いた（行が1つか2つずれる）。R128 の文面の2つの例（条件が未定義の名前）は、断る側（下の r130Lines の終わり）へ移した。
+// 本体の枝の条件の名前が未定義の名前なら `!_` と分かる値で、定義の所で G22（R128・R21）なので、条件に名前1つを置く行はファイルに同じ名前の定義を置いた
+// （行が1つか2つずれる）。R128 の文面の2つの例（条件が未定義の名前）は、下の r130Lines の終わりの G22。want が門の番号なら e.gate を比べる。
 const r130Lines = [
 	["枝の前の裸の行", src(["t : x ?", "\tx + 1", "\tx > 0 : 1", "\t2", "", "t 1"]), "body-bare-row-between", 2],
 	["枝の間の裸の行", src(["t : x ?", "\tx > 0 : 1", "\tx + 1", "\tx < 0 : 2", "\t3", "", "t 1"]), "body-bare-row-between", 3],
@@ -7928,16 +7942,16 @@ const r130Lines = [
 	// 案内の example.sn の「コンストラクタのような記述」を括らずに書いた形。括らない本体なので `@etc : x` は枝（R128）で、前の裸の行2つが R130 に当たる
 	// （寄せ1 の前も木は `(block name age (: @etc x))` で、構造体ではなかった）。構造体を返すなら括る（下の bracketBodyPasses の Person）。
 	["括らないコンストラクタの本体（構造体にならない）", src(["Person : name age etc x ?", "\tname", "\tage", "\t@etc : x", "", "john : Person `john` 18 $`Like` `Sushi`"]), "body-bare-row-between", 2],
-	// R128 の文面の例（値は interpret.test.js）：`⇥y : x + 1` は条件 y、`⇥sq : z ? z * z` は条件 sq の枝。2026-11-08 の R138 から、条件の未定義の名前は読む段の
-	// name-undefined で、その枝の行（前は通り、undefined-name を知らせた。上の r130Passes から移した）。
-	["R128 の例 pr : x ? ⏎ y : x + 1 ⏎ y * 2 の条件 y は未定義の名前（前は通った）", src(["pr : x ?", "\ty : x + 1", "\ty * 2", "", "pr 3"]), "name-undefined", 2],
-	["R128 の例 t : x ? ⏎ sq : z ? z * z ⏎ sq x の条件 sq は未定義の名前（前は通った）", src(["t : x ?", "\tsq : z ? z * z", "\tsq x", "", "t 3"]), "name-undefined", 2],
+	// R128 の文面の例（値は interpret.test.js）：`⇥y : x + 1` は条件 y、`⇥sq : z ? z * z` は条件 sq の枝。条件の未定義の名前は `!_` と分かる値で、定義の所で
+	// その枝の行の G22（R128・R21）。
+	["R128 の例 pr : x ? ⏎ ⇥y : x + 1 ⏎ ⇥y * 2 の条件 y は未定義の名前で G22", src(["pr : x ?", "\ty : x + 1", "\ty * 2", "", "pr 3"]), "G22", 2],
+	["R128 の例 t : x ? ⏎ ⇥sq : z ? z * z ⏎ ⇥sq x の条件 sq は未定義の名前で G22", src(["t : x ?", "\tsq : z ? z * z", "\tsq x", "", "t 3"]), "G22", 2],
 ];
 for (const [name, s, want, line] of r130Lines) {
 	total++;
 	const e = refusalOfSrc(s);
 	const got = !e ? "通った" : `${e.gate || e.reason || e.name} line ${e.line}`;
-	if (e && e.reason === want && e.line === line) ok(`R130 ${name} → ${want} line ${line}`);
+	if (e && (/^G\d/.test(want) ? e.gate === want : e.reason === want) && e.line === line) ok(`R130 ${name} → ${want} line ${line}`);
 	else fail(`R130 ${name}`, `got: ${got}  want: ${want} line ${line}`, e ? String(e.message) : "");
 }
 const r130Passes = [
@@ -7950,10 +7964,9 @@ const r130Passes = [
 	["構造体のブロックの行の混ざり（ob : ⏎ w : 1 ⏎ 5 ⏎ 6）は当たらない", src(["ob :", "\tw : 1", "\t5", "\t6", "", "ob"]), "ob", "A"],
 	["括りの行の混ざり（[y : 1 ⏎ x ⏎ z : 2 ⏎ x]）は当たらない", src(["t : x ? [y : 1", "x", "z : 2", "x]", "t 1"]), "(apply t 1)", "A"],
 	["いちばん外の行の混ざりは当たらない", src(["a : 1", "a", "b : 2", "b"]), "b", "A"],
-	// R128 の文面の例の2行（条件が未定義の名前の `pr : x ?` ⏎ `⇥y : x + 1` ⏎ `⇥y * 2`・`t : x ?` ⏎ `⇥sq : z ? z * z` ⏎ `⇥sq x`）は、2026-11-08 の R138 で上の r130Lines の
-	// 断る側へ移した。
-	// 条件は `&` の左と同じに解く（P3 を変えた）：仮引数・ファイルの値・ファイルの関数（細目4 で `!_`、leftover-lambda）。未定義の名前の条件（前の `⇥no : 4` は
-	// undefined-name）は、2026-11-08 の R138 から読む段の name-undefined なので外した。
+	// R128 の文面の例の2行（条件が未定義の名前の `pr : x ?` ⏎ `⇥y : x + 1` ⏎ `⇥y * 2`・`t : x ?` ⏎ `⇥sq : z ? z * z` ⏎ `⇥sq x`）は、上の r130Lines の G22。
+	// 条件は `&` の左と同じに解く（P3 を変えた）：仮引数・ファイルの値・ファイルの関数（細目4 で `!_`、leftover-lambda）。未定義の名前の条件（`⇥no : 4`）は
+	// `!_` と分かる値で G22（R128・R21。上の r130Lines の R128 の例と同じ類）。
 	["R128 条件が仮引数・ファイルの値・ファイルの関数", src(["inc : x ? x + 1", "five : 5", "t : x ?", "\tx : 1", "\tfive : 2", "\tinc : 3", "\t5", "", "t 1"]), "(: t (? [x] (block (: x 1) (: five 2) (: (unit inc) 3) 5)))", "A", { at: 2, leftoverDiag: ["inc"], diagCount: 1 }],
 ];
 for (const [name, s, want, kind, extra] of r130Passes) checkPass(`寄せ1 ${name}`, s, want, kind, extra);
@@ -8141,7 +8154,7 @@ for (const [name, s, line] of r131Shapes) {
 const R131_BASE = STD.length + R111D.length; // r111 の行の前にある行の数
 const r131Moved = [
 	["R67 既定値の括り [~y : 5]（前は G22。今の G22 は上の「R67 仮引数のブロックの行 ~y : 5」。呼ぶ行の前の綴りは `gd2 !_ 2`）", std(["gd2 : x [~y : 5] ? x", "gd2 1 2"]), STD.length + 1],
-	["確かめ Q84 既定値が未定義の名前の [y : no]（R131 は name-undefined より先。前は G22。仮引数のブロックの `y : no` の行は、R138 から上の fix9bWritten の name-undefined）", r111("gz : x [y : no] ? x"), R131_BASE + 1],
+	["確かめ Q84 既定値が未定義の名前の [y : no]（括りの既定値は R131。仮引数のブロックの `y : no` の行は上の fix9bRefused の G22、R139）", r111("gz : x [y : no] ? x"), R131_BASE + 1],
 	["直した 括りの既定値の中で括りの関数を呼ぶ（前は G7。今の G7 は上の「直した 仮引数のブロックの既定値の中で括りの関数を呼ぶ」）", src(["inc : x ? x + 1", "t : [a ~r] ? 5 inc 3 inc", "o : [x : t [1 2]] ? 5"]), 3],
 ];
 // 順：同じ `?` で param-not-name の後、P2・export-mark-position・既定値の中の param-not-name の前。仮引数のブロックの行（G22・param-not-name・P2）は今のまま。
@@ -8552,11 +8565,11 @@ for (const [name, s, must, mustNot] of r131Messages) {
 // 寄せ5 R127 の書き直し（2026-11-06、§5 Q85 (n) を閉じた。U〔答え〕[2026-11-05 15:58:15 UTC de332d62]「書いた行を指す」）：知らせも断りも、どの段でも書いた行を指す。
 // 本体の行・枝の行・2行以上の括りの行・欄の行・仮引数のブロックの名前の行と既定値の行（G22・既定値の G7 も）・実体の本体で当たった門と知らせ（本体の書いた行）。
 // 前は、字下げの行の知らせと仮引数のブロックの断りは定義の行、実体の中の門と知らせは呼んだ行だった。今のままの所：輪の断りは言い分が名指しする定義の行、
-// undefined-name は名前ごとに1回（最初に当たった書いた行。2026-11-08 の R138 から未定義の名前は読む段の name-undefined で、行の順で最初に書いた行）、計算の量の上限（作った実体の数など）はいちばん外の行、続きの行は書き始めの行（続きの行を指すのは §5 Q85 (n) の残り。
+// 未定義の名前の name-undefined は書いた所ごとに1回（R21。実体の数や呼んだ回数では足さない）、計算の量の上限（作った実体の数など）はいちばん外の行、続きの行は書き始めの行（続きの行を指すのは §5 Q85 (n) の残り。
 // `?` の行に括らずに書いた本体の行の文法の断りと使う所の `#` も、今は定義の書き始めの行）。
-// 答えは「ERR reason 門 @行」か、知らせの「reason@行」の並び。どの形も、頭に空行を2つ足すと行だけが2つずれる（分け合う実体と undefined-name の行は、どの行で先に
+// 答えは「ERR reason 門 @行」か、知らせの「reason@行」の並び。どの形も、頭に空行を2つ足すと行だけが2つずれる（分け合う実体の行は、どの行で先に
 // 当たったかにも依り、位置だけでは決まらない。この守りではそこは見つからない）。
-// 2026-11-08 の R138（片2）：未定義の名前と手で書いた `!_` を持つ行は、答えを name-undefined・void-written の断りの行にした（行の見方は同じ。前の知らせの並びは名前に書いた）。
+// 手で書いた `!_` を持つ行の答えは void-written の断りの行（R138）、本体の枝と既定値に書いた `!_` と分かる値の行は定義の所の G22（R128・R139）。行の見方は同じ。
 // 枝の値の裸の関数の行は、条件の名前をファイルに置いて知らせのまま見る。
 {
 	const answerAt = (s) => {
@@ -8571,10 +8584,10 @@ for (const [name, s, must, mustNot] of r131Messages) {
 	// [名前, 源の行, 答え]
 	const N_LINES = [
 		// 本体の行と枝の行（前は定義の行 1）
-		["本体の枝の未定義の名前は、その行（前は undefined-name@2）", ["hh : a ?", "\ta : inc", "\ta 5"], "ERR name-undefined P2 @2"],
-		["枝の値の未定義の名前は、その枝の行（行の順で最初の yy。前は undefined-name@3,undefined-name@6）", ["t : a ?", "\ta > 0 : 1", "\tyy : 5", "\ta", "", "t 1 inc"], "ERR name-undefined P2 @3"],
+		["本体の枝の値の未定義の名前 inc は、その枝の行の G22（R128・R21）", ["hh : a ?", "\ta : inc", "\ta 5"], "ERR coproduct-bare-rest-param G22 @2"],
+		["枝の条件の未定義の名前 yy は、その枝の行の G22（R128・R21）", ["t : a ?", "\ta > 0 : 1", "\tyy : 5", "\ta", "", "t 1 inc"], "ERR coproduct-bare-rest-param G22 @3"],
 		["枝の値の裸の関数（bare-function-return）は、その枝の行（条件の sq はファイルの sq。前の綴りは sq が未定義の名前で、既定の行は `$[sq]`）", ["sq : 0", "tt : x ?", "\tsq : z ? z * z", "\t0"], "bare-function-return@3"],
-		["枝の値のブロックの中の行は、その行（未定義の名前 sq。前の綴りの最後の行は `!_ : 0`、前は bare-function-return@3,undefined-name@3,undefined-name@4）", ["tt : x ?", "\tx > 0 :", "\t\tsq : z ? z * z", "\t\tmap $sq x", "\t0"], "ERR name-undefined P2 @3"],
+		["枝の値のブロックの中の枝は、その行（条件の未定義の名前 sq の G22）", ["tt : x ?", "\tx > 0 :", "\t\tsq : z ? z * z", "\t\tmap $sq x", "\t0"], "ERR coproduct-bare-rest-param G22 @3"],
 		["本体の最後の行の余る関数は、その行", ["inc : x ? x + 1", "h : f x ?", "\tf x", "\tinc"], "leftover-lambda@4"],
 		// 返す所の番地の G21 も、その返す行・枝の行（2026-11-06 の寄せ5 の確かめの直し。前は本体の書き始めの行 2・2 と、ブロックを値に持つ枝の行 3）
 		["返す行の番地（G21）は、その行", ["x : 5", "gw : y ?", "\ty > 0 : 1", "\t$x + 0x10", "", "gw 1"], "ERR coproduct-address-arith G21 @4"],
@@ -8587,12 +8600,12 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["括りの関数の2段の本体の返す行の番地は、その行", ["v : 5", "f : [x] ?", "\t\tx > 0 : 1", "\t\t$v + 0x10", "", "f [1]"], "ERR coproduct-address-arith G21 @4"],
 		// `?` の行に書いた本体（仮引数のブロックの下・定義の行の下の `?` の行）は、その `?` の行（2026-11-06 の寄せ5 の確かめの直し。前は定義の書き始めの行
 		// 1・2・2・1・2・3。1つ目の行の括りの中の yy は前から3）
-		["仮引数のブロックの ? の行の本体は、? の行（前は undefined-name@3,undefined-name@3）", ["f :", "\t\tx", "\t? [x + yy] + zz", "", "f 1"], "ERR name-undefined P2 @3"],
+		["仮引数のブロックの ? の行の本体は、? の行（yy・zz の2つ）", ["f :", "\t\tx", "\t? [x + yy] + zz", "", "f 1"], "name-undefined@3,name-undefined@3"],
 		["定義の行に仮引数を並べた ? の行の本体は、? の行", ["inc : x ? x + 1", "f : x", "\t? x inc", "", "f 1"], "leftover-lambda@3"],
 		["括りの関数の ? の行の本体の門は、? の行", ["inc : x ? x + 1", "g :", "\t\t[y]", "\t? $y == $y", "", "g [(inc 5)]"], "ERR coproduct-address-arith G21 @4"],
-		["定義の行に仮引数を並べた ? の行の未定義の名前は、? の行（前は undefined-name@2）", ["f : x", "\t? x + zz", "f 1"], "ERR name-undefined P2 @2"],
-		["仮引数のブロックの ? の行の1行の本体は、? の行（前は undefined-name@4）", ["inc : x ? x + 1", "p :", "\t\tx", "\t? zz"], "ERR name-undefined P2 @4"],
-		["欄の仮引数のブロックの ? の行の本体は、? の行（前は undefined-name@5）", ["inc : x ? x + 1", "o :", "\tm :", "\t\t\ty", "\t\t? zz + y"], "ERR name-undefined P2 @5"],
+		["定義の行に仮引数を並べた ? の行の未定義の名前は、? の行", ["f : x", "\t? x + zz", "f 1"], "name-undefined@2"],
+		["仮引数のブロックの ? の行の1行の本体は、? の行", ["inc : x ? x + 1", "p :", "\t\tx", "\t? zz"], "name-undefined@4"],
+		["欄の仮引数のブロックの ? の行の本体は、? の行", ["inc : x ? x + 1", "o :", "\tm :", "\t\t\ty", "\t\t? zz + y"], "name-undefined@5"],
 		// `?` の行の本体の中の入れ子の関数の P2（同名と隠し）と param-not-name も、その `?` の行（読む段の checkParamNames。2026-11-06 の寄せ5 の確かめの直し。
 		// 前は定義の書き始めの行 2。解く段の bare-function-return と同じ `?` の行に揃えた）
 		["定義の行の下の ? の行の入れ子の同名は、? の行", ["a : 1", "f : x", "\t? y y ? 1"], "ERR name-duplicate P2 @3"],
@@ -8606,16 +8619,16 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["2行の括りの2行目の門（G20）は、その行", ["[sq : z ? z * z", "$sq]"], "ERR coproduct-dollar-value G20 @2"],
 		["2行の括りの2行目の欄の書いた `!_` は、その行（R113 は廃止。前は erased-unit-shadow@4,undefined-name@6）", ["w :", "\ts : 5", "\tob : [a : s", "\t\ts : !_]", "", "inc ((w ' ob) ' a)"], "ERR void-written  @4"],
 		// `$[` の行と、行を跨いで書いた1行の区間（2026-11-06 の寄せ5 の確かめの直し。前は括りを開いた行 3・3・2）
-		["$[ の複数行の並びの行は、その行（前は undefined-name@4）", ["inc : x ? x + 1", "add : x y ? x + y", "v : $[", "add yy", "]"], "ERR name-undefined P2 @4"],
+		["$[ の複数行の並びの行は、その行", ["inc : x ? x + 1", "add : x y ? x + y", "v : $[", "add yy", "]"], "name-undefined@4"],
 		["$[ の並びの行の G7 は、その行", ["inc : x ? x + 1", "io@", "v : $[", "inc ~a", "]"], "ERR coproduct-unknown-kind G7 @4"],
-		["複数行に割った1行の区間は、その行（前は undefined-name@3）", ["x : 1", "v : [", "+ yy", "] 1"], "ERR name-undefined P2 @3"],
+		["複数行に割った1行の区間は、その行", ["x : 1", "v : [", "+ yy", "] 1"], "name-undefined@3"],
 		// 欄の行（前は定義の行 1）
-		["欄の行の未定義の名前は、その行（前は undefined-name@2）", ["st :", "\tk : inc", "\tj : 2", "", "st~ 5"], "ERR name-undefined P2 @2"],
+		["欄の行の未定義の名前は、その行", ["st :", "\tk : inc", "\tj : 2", "", "st~ 5"], "name-undefined@2"],
 		["欄のブロックの行の門は、その行", ["pp :", "\tsq : z ? z * z", "\tsq 5"], "ERR coproduct-unknown-kind G7 @3"],
 		// 仮引数のブロックの名前の行と既定値の行（前は定義の行 1・2）
 		["仮引数のブロックの同名は、2つ目の名前の行", ["f :", "\t\ty", "\t\ty : 1", "\t? y", "", "f 1"], "ERR name-duplicate P2 @3"],
 		["仮引数のブロックの隠し（name-shadow）は、隠す名前の行", ["a : 7", "t :", "\t\ta", "\t\tb", "\t? a + b", "", "t 1 2"], "name-shadow@3"],
-		["既定値の未定義の名前は、その既定値の行（前は §5 Q84 の G22）", ["ff :", "\t\tz : inc", "\t? z"], "ERR name-undefined P2 @2"],
+		["既定値の未定義の名前は、その既定値の行の G22（R139・R21）", ["ff :", "\t\tz : inc", "\t? z"], "ERR coproduct-bare-rest-param G22 @2"],
 		["既定値の中の G7 は、その既定値の行", ["inc : x ? x + 1", "t : [a ~r] ? 5 inc 3 inc", "o :", "\t\tx : t [1 2]", "\t? 5"], "ERR coproduct-unknown-kind G7 @4"],
 		// 仮引数のブロックの括りの行と残り・既定値の `!_` の行（2026-11-08 の R138 から void-written。2026-11-06 の寄せ5 の確かめで、行を外す変異が素通りしたので足した）
 		["仮引数のブロックの括りの行の同名は、その行", ["f :", "\t\tx", "\t\t[x]", "\t? x"], "ERR name-duplicate P2 @3"],
@@ -8627,10 +8640,10 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["実体の本体の門は、本体の書いた行（1行の本体）", ["inc : x ? x + 1", "p : [x ~xs] ? q x", "q : [y] ? $y == $y", "", "p [(inc 5) (inc 5)]"], "ERR coproduct-address-arith G21 @3"],
 		["実体の本体の門は、本体の書いた行（字下げの本体）", ["inc : x ? x + 1", "q : [y] ?", "\ty > 0 : 1", "\t$y == $y", "", "q [(inc 5) (inc 5)]"], "ERR coproduct-address-arith G21 @4"],
 		["括りの関数の返す行の番地は、本体の書いた行（寄せ5 の確かめの直し。前は 2）", ["x : 5", "gw : [y] ?", "\ty > 0 : 1", "\t$x + 0x10", "", "gw [1]"], "ERR coproduct-address-arith G21 @4"],
-		["実体の本体の未定義の名前は、本体の書いた行（前は bracket-excess@3,undefined-name@1）", ["kk : [y] ? y inc", "kk 1", "kk [1 2]"], "ERR name-undefined P2 @1"],
+		["実体の本体の未定義の名前は、本体の書いた行（実体が2つでも1回）", ["kk : [y] ? y inc", "kk 1", "kk [1 2]"], "bracket-excess@3,name-undefined@1"],
 		["bracket-excess は呼んだ行のまま（前の行の inc を外した形）", ["kk : [y] ? y", "kk 1", "kk [1 2]"], "bracket-excess@3"],
 		["実体の本体の bare-function-return は、本体の書いた行", ["p : [x] ? [y ? p [y]]", "p [1]"], "bare-function-return@1"],
-		["実体の字下げの本体の未定義の名前は、その行（前は undefined-name@3）", ["b : [y] ?", "\ty > 0 : 1", "\ty inc", "", "b [1]"], "ERR name-undefined P2 @3"],
+		["実体の字下げの本体の未定義の名前は、その行", ["b : [y] ?", "\ty > 0 : 1", "\ty inc", "", "b [1]"], "name-undefined@3"],
 		["深さの門（G7、普通の門）は、深くする呼び出しを書いた本体の行", ["f : [x ~xs] ? f [xs xs]", "f [1 2]"], "ERR coproduct-unknown-kind G7 @1"],
 		// 呼ばない括りの関数の本体（name-shadow は読まない本体でも出す、R133）
 		["呼ばない括りの関数の字下げの本体の隠しは、その行", ["inc : x ? x + 1", "b : [y] ?", "\t[inc ? inc 1] y"], "name-shadow@3"],
@@ -8640,14 +8653,14 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		["輪の断りは、言い分が名指しする定義の行（v が後）", ["f9 : x ? @[$v]", "v : f9 1", "v"], "ERR name-cycle P2 @2"],
 		["輪の断りは、言い分が名指しする定義の行（v が先）", ["v : f9 1", "f9 : x ? @[$v]", "v"], "ERR name-cycle P2 @1"],
 		["続きの行に分かれた式は、書き始めの行", ["x : 1", "y : 1 <", " 2 < 3 < 4"], "ERR compare-chain  @2"],
-		["続きの行の中の ? の本体の未定義の名前は、書き始めの行（行頭の ? の行だけが ? の行。前は undefined-name@1）", ["f : x", " y ? x + y + zz", "f 1 2"], "ERR name-undefined P2 @1"],
+		["続きの行の中の ? の本体の未定義の名前は、書き始めの行（行頭の ? の行だけが ? の行）", ["f : x", " y ? x + y + zz", "f 1 2"], "name-undefined@1"],
 		// `?` の行に括らずに書いた本体の、行の文法の断りと使う所の `#` は、今は定義の書き始めの行（§5 Q85 (n) の残り）
 		["定義の行の下の ? の行の本体の比べの連鎖は、定義の書き始めの行", ["a : 1", "f : x", "\t? 1 < 2 < 3 < 4"], "ERR compare-chain  @2"],
 		["仮引数のブロックの下の ? の行の本体の使う所の # は、定義の書き始めの行", ["a : 1", "f :", "\t\tx", "\t? #x"], "ERR export-mark-position  @2"],
 		// `?` の行の `:` の右は `?` の本体の外（`?` が `:` より強く結ぶ）で、読む段も解く段も定義の書き始めの行（`?` を見終えたら今見ている行を戻す所の守り）
 		["? の行の : の右（? の本体の外）の入れ子の同名は、定義の書き始めの行", ["f : x", "\t? x > 0 : y y ? 1"], "ERR name-duplicate P2 @1"],
 		["? の行の : の右の隠しは、定義の書き始めの行", ["a : 1", "f : x", "\t? x > 0 : a ? a"], "name-shadow@2"],
-		["未定義の名前は、行の順で最初に書いた行（R138。前の undefined-name は最初に当たった書いた行で @2）", ["g : [x] ? zz x", "zz 1", "g [1]"], "ERR name-undefined P2 @1"],
+		["未定義の名前は、書いた所ごとに1回（呼ばない括りの関数の本体の zz と、根の zz の2つ。R21）", ["g : [x] ? zz x", "zz 1", "g [1]"], "name-undefined@1,name-undefined@2"],
 		["定義の行の同名は、その行", ["a : 1", "f : x x ? x"], "ERR name-duplicate P2 @2"],
 		["前段の文法の構文の誤りは、行の文法より先", ["b : 1 < 2 < 3 < 4", "x : 1 ]"], "ERR SyntaxError  @2"],
 	];
@@ -8792,7 +8805,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 // `,`・`|`・`;`・並置の単位で消す。値の段（value_spec V4・V7）が消す所で木も消す。今のままの所（計算の `!_`・`[]` と `[]` の名前・恒等射の `|`・`;`（2026-11-08 から下の恒等射の節）・番地の断り）も守る。
 // 消えた `|`・`;` の残った辺は行の置かれた所のまま解く：根なら根の `,` と同じく既定値の口を埋め（`gq 1 | !_`）、評価する所の被演算子・手続きの行・書き込む値なら
 // そこで丸ごとの関数が `!_` になって知らせる（`(!_ | inc ; double) 5`・手続きの行の `!_ | inc`・`pp # !_ | inc` は、`|` を消す前と同じ知らせ）。
-// 2026-11-08 の R138（片2）：書いた `!_`・未定義の名前・`un : !_` の un・書いた `[]` と `[]` の名前は読む段で断るので、`!_` と分かる辺は R115 の無い欄の名前 w（下の W。
+// 2026-11-08 の R138（片2）：書いた `!_`・`un : !_` の un・書いた `[]` と `[]` の名前は読む段で断るので、`!_` と分かる辺は R115 の無い欄の名前 w（下の W。
 // `p : [a : 1]` ⏎ `w : p ' zz`）の綴りにした（R137 の狭め）。W を足した行の知らせの行は2つずれる（@8 から）。
 // [名前, 源の行（頭に inc・double・add・f3・lz の定義を足す）, 最後の木（`G…` なら断りの門）, 種類, 診断（重さ/reason@行 の並び）]
 {
@@ -8841,7 +8854,7 @@ for (const [name, s, must, mustNot] of r131Messages) {
 		// 並置の下を落とすのは下が全部 `!_` と分かる時だけ。片側だけ `!_` と分かる `|` は `!_` と分からない
 		["(5 w inc) 5 は construct（中の w は並びの項で消えて `(5 inc)` と同じ。値の上の inc は余り、括りは 5 で `!_` と分かる辺でない、R137・R52）", [...W, "(5 w inc) 5"], "(construct [5 w inc] 5)", "A", ["warning/leftover-lambda@8"]],
 		["今のまま (5 | 1 & w) , 3 は `,` のまま（片側だけ `!_` と分かる `|`。前の綴りは `(5 | 1 & !_) , 3`）", [...W, "(5 | 1 & w) , 3"], "(, [5 | 1 & w] 3)", "A", []],
-		// `,` の両側が `!_` と分かる綴りの2行（`un : !_` ⏎ `un , !_`・`nope , !_`。書いた `!_` の側が残る）は、2026-11-08 の R138 で外した（書いた `!_`・未定義の名前は読む段で断る）。
+		// `,` の片側に書いた `!_` の綴り（`un : !_` ⏎ `un , !_`・`nope , !_`）は、書いた `!_` を読む段で断る（void-written、R138）。
 		// `!_` が消えて残った辺が `_` 1つなら、行 `_` と同じ `(unit _)`（法則50 の X が `_` の組。`_` が `!_` でない相手と並ぶ `_ | 5` は、2026-11-08 から下の節の
 		// `(| (unit _) 5)`）
 		["w | _ は行 _ と同じ (unit _)（前の綴りは `!_ | _`）", [...W, "w | _"], "(unit _)", "A", []],
@@ -9368,7 +9381,7 @@ const unitLeafShow = (x) => {
 		// `,` の中の `_` が `|`・`;` の被演算子に残る形（前からの割れ、§5 Q15）。2026-11-16 の恒等射の片から、恒等射は `,` のほかの関数と同じ因子で消えない（先に消えるのは
 		// `!_` と分かる値だけ）。`_ , _` は `inc , double` と同じく2つの関数が残る `,` で、演算子の被演算子では `!_` と分かる辺（R123）なので、`;`・`|` で消える（`_ , _ ; 7` は
 		// 7、i の版の `i , i ; 7` も 7）。`_ , w` は w が消えて `_` が残る。
-		// 2026-11-08 の R138（片2）：書いた `!_`・未定義の名前・`[]` を持つ形は読む段で断るので外し、`_ , !_ | 6` は R115 の名前 w の綴りにした。
+		// 2026-11-08 の R138（片2）：書いた `!_`・`[]` を持つ形は読む段で断るので外し、`_ , !_ | 6` は R115 の名前 w の綴りにした。
 		["_ , _ ; 7 は 7（`inc , double ; 7` と同じ、R123。2026-11-16。前は残した葉の _ が `;` の被演算子で G7）", ["_ , _ ; 7"], "7", "A", []],
 		["i : _ ⏎ i , i ; 7 も 7（前は (; i 7) の未知で、_ の版と割れていた）", ["i : _", "i , i ; 7"], "7", "A", []],
 		["_ , _ | 6 も 6（前は G7）", ["_ , _ | 6"], "6", "A", []],
@@ -9666,11 +9679,13 @@ const unitLeafShow = (x) => {
 	}
 }
 
-// ---- R138（2026-11-08・11-09。`_` は id、`!_` は void。手で書いた `!_`・書いた空の器・未定義の名前は読む段で断る。席の口は並び全体。括らない値の印の `_` は名前の id と同じ）
+// ---- R138（2026-11-08・11-09。`_` は id、`!_` は void。手で書いた `!_`・書いた空の器は読む段で断る。席の口は並び全体。括らない値の印の `_` は名前の id と同じ）
+// 未定義の名前は R21（2026-11-18）：`!_` と分かる値で、読む段は書いた所ごとに warning の name-undefined を知らせる。本体の枝と既定値に書いた物は G22（R128・R139）。
 // 出どころ（仕様 R138 の文面の承認は、主の Claude の問い [2026-11-09 14:58:53 UTC 8ce7b5d8]「この文面で入れていい？」に U〔答え〕[2026-11-09 15:07:25 8ce7b5d8]「入って」）：
 // - 意味の入れ替えと禁止の向き：U [2026-11-08 22:39:56 2617ea04]・U [2026-11-08 22:52:02 2617ea04]、主の Claude の問い [2026-11-08 22:55:44 UTC 2617ea04] に U〔答え〕[2026-11-08 22:56:31 2617ea04]「移る」。
 // - 手で書く禁止：U〔答え〕[2026-11-08 14:18:03 f1bbb920]「それでいい」（前の綴りの問いへの答え）。印を付けた物も：U〔答え〕[2026-11-08 22:39:56 2617ea04]「それは断りたい。」。
-// - 書いた空の器：U〔答え〕[2026-11-08 15:07:52 f1bbb920]「禁止に入れる」。未定義の名前：U [2026-11-08 14:26:44 f1bbb920]（打った言葉。主の Claude は「入れる」と読んだ）。
+// - 書いた空の器：U〔答え〕[2026-11-08 15:07:52 f1bbb920]「禁止に入れる」。未定義の名前：U [2026-11-18 01:54:27 UTC]「未定義の名前自体は、!_ に落としてもいい。」（R21）と、
+//   枝と既定値は「下2つは未定義識別子でも、NG」（R128・R139）。
 // - 席の口：U [2026-11-08 22:52:02 2617ea04]「[!_] 1 2 3 4 5 が !_ になるだけで」（`[!_]` の口。ほかの席へ当てたのは R）。
 // - 識別子の id：U [2026-11-09 13:18:07 2617ea04]「他方で括らないというなら、識別子が当たるよね。」。`[-inc]`：U [2026-11-09 13:22:43 8ce7b5d8]「[-inc] も関数と演算子の組で余積なら !_ になるという事だよね。」。
 // - R：断る綴りの類の判定・席の除き・中身の無い囲みと空に詰まる括り・見える範囲・断りの順・言い分の名と文・重ねた印と芯を括った `-(_)` への当て・ほかの位置へ広げないこと。
@@ -9678,16 +9693,17 @@ const unitLeafShow = (x) => {
 // 同じ断りを位置と包みごとに何百行も見るのはやめ、類ごとの代表だけを置く（位置と包みに依らないことは法則の側が見る）。言い分の全文は類ごとに1本（`msg`）で文面のとおり
 // 比べ、ほかの行は言い分の中の名指し X（書いた項の綴り。括りは木の綴りで `()`・`{}`・`[ ]` も `[]`）だけを見る。
 // [名前, 源の行（頭に PRE を足す）, 期待, 種類（null は見ない）, 診断（重さ/reason@行 の並び。null は見ない）]。行の番号は源の行の中で 1 から（PRE の行は数えない）。
-// 期待は、断りなら { reason, line, x?, msg? }（reason が SyntaxError なら前段の文法の断りで、reason の無い SyntaxError）か { gate, line? }、通るなら最後の木（null は見ない）。
+// 期待は、断りなら { reason, line, x?, msg? }（reason が SyntaxError なら前段の文法の断りで、reason の無い SyntaxError）か { gate, line?, zero? }（zero は G22 が `!_` と
+// 分かる値として名指す項）、通るなら最後の木（null は見ない）。
 {
 	const PRE = ["inc : x ? x + 1", "add : x y ? x + y", "sub : x y ? x - y", "gd :", "\t\tys", "\t\tzs : 3", "\t? ys", "", "gq :", "\t\tx", "\t\ty : 1", "\t? x + y", ""];
 	const vw = (x, line = 1) => ({ reason: "void-written", x, line });
 	const ew = (x, line = 1) => ({ reason: "empty-written", x, line });
-	const nu = (n, line = 1) => ({ reason: "name-undefined", x: n, line });
+	const g22 = (zero, line) => ({ gate: "G22", line, zero });
+	const nu = (line = 1) => `warning/name-undefined@${line}`;
 	const X_OF = {
 		"void-written": /^手で書いた `!_` の項 `(.*)` があります。/,
 		"empty-written": /^書いた空の器 `(.*)` があります。/,
-		"name-undefined": /^名前 `(.*)` は、ここから見える所に定義がありません。/,
 	};
 	const R138 = [
 		// 1. 手で書いた `!_`（void-written）：核 `_` のいちばん内側の前置が `!` の項は、外に付けた印に依らず、どこに書いても断る（R138 の文面 1.）
@@ -9750,34 +9766,37 @@ const unitLeafShow = (x) => {
 		["右辺の [] を断るので、e0 : [] ⏎ e0 , 5 は1行目（空の器の名前は生まれない）", ["e0 : []", "e0 , 5"], ew("[]")],
 		["行頭の `` だけの行は空のコメントで断らない", ["``", "inc 5"], "(apply inc 5)", "A", []],
 
-		// 3. 未定義の名前（name-undefined。U [14:26:44]）。見える範囲（いちばん外の定義（後ろの行も）・囲む `?` の仮引数・囲む括りと構造体のブロックの欄）は R
-		["nope 5 は name-undefined（言い分の全文。U [14:26:44]）", ["nope 5"], { ...nu("nope"), msg: "名前 `nope` は、ここから見える所に定義がありません。未定義の名前は使えません（§4 R138）。" }],
-		["__ 5 も（`__` は未定義の名前）", ["__ 5"], nu("__")],
-		["呼ばない本体 f : [x] ? nope も（前の R25 の information は断りに）", ["f : [x] ? nope"], nu("nope")],
-		["実体の本体の zz も、本体を書いた1行目", ["k : [x ~xs] ? zz x", "k [1 2]"], nu("zz")],
-		["枝の条件の名前 ⇥y : x + 1 の y は2行目（R128 で定義でない）", ["f : x ?", "\ty : x + 1", "\tx"], nu("y", 2)],
-		["R127 の例 ⇥yy : 5 の yy は3行目（行は前と同じ）", ["t : a ?", "\ta > 0 : 1", "\tyy : 5", "\ta"], nu("yy", 3)],
-		["既定値の右は前の仮引数まで（R133）：⇥⇥y : z の z は2行目", ["gz :", "\t\ty : z", "\t\tz", "\t? y + z"], nu("z", 2)],
-		["括りの中の名前でない1項の左 [(nope 1) : 1] も（解かない所）", ["[(nope 1) : 1]"], nu("nope")],
-		["$nope も", ["$nope"], nu("nope")],
-		["手で既定値を呼ぶ gd 3 nope も", ["gd 3 nope"], nu("nope")],
-		["ほかの関数の仮引数は見えない：t : x ? y の y は1行目", ["t : x ? y", "u : y ? y"], nu("y")],
-		["名前ごとに最初に書いた行：t : x ? nope ⏎ nope 5 は1行目", ["t : x ? nope", "nope 5"], nu("nope")],
-		["見本 hello : [say] ? say Hello World だけは Hello で断る（R）", ["hello : [say] ? say Hello World"], nu("Hello")],
-		// 断らない物
+		// 3. 未定義の名前（R21。U [2026-11-18 01:54:27 UTC]）：`!_` と分かる値で、断らずに書いた所ごとに知らせる。見える範囲（いちばん外の定義（後ろの行も）・囲む `?` の
+		// 仮引数・囲む括りと構造体のブロックの欄）は R。本体の枝（条件か値）と既定値に書いた物は、呼ばない定義でも定義の所で G22（R128・R139）
+		["nope 5 は `!_ 5` と同じ 5 で、name-undefined を知らせる", ["nope 5"], "5", "A", [nu()]],
+		["__ 5 も（`__` は未定義の名前）", ["__ 5"], "5", "A", [nu()]],
+		["呼ばない本体 f : [x] ? nope も知らせる（R25 で本体は読まない）", ["f : [x] ? nope"], "(: f (? [[x]] (defer {nope})))", "A", [nu()]],
+		["実体の本体の zz は、本体を書いた1行目の1回", ["k : [x ~xs] ? zz x", "k [1 2]"], "(apply k [1 2])", "A", [nu()]],
+		["枝の条件の名前 ⇥y : x + 1 の y は2行目の G22（R128 で定義でない）", ["f : x ?", "\ty : x + 1", "\tx"], g22("y", 2)],
+		["R127 の例 ⇥yy : 5 の yy は3行目の G22", ["t : a ?", "\ta > 0 : 1", "\tyy : 5", "\ta"], g22("yy", 3)],
+		["既定値の右は前の仮引数まで（R133）：⇥⇥y : z の z は2行目の G22（R139）", ["gz :", "\t\ty : z", "\t\tz", "\t? y + z"], g22("z", 2)],
+		["括りの中の名前でない1項の左 [(nope 1) : 1] も知らせる（解かない所）", ["[(nope 1) : 1]"], "[[nope 1] : 1]", "A", [nu()]],
+		["$nope も", ["$nope"], "$nope", "A", [nu()]],
+		["手で既定値を呼ぶ gd 3 nope も", ["gd 3 nope"], "(apply gd (construct 3 nope))", "未知", [nu()]],
+		["ほかの関数の仮引数は見えない：t : x ? y の y は1行目", ["t : x ? y", "u : y ? y"], "(: u (? [y] y))", "A", [nu()]],
+		["書いた所ごと：t : x ? nope ⏎ nope 5 は1行目と2行目の2つ", ["t : x ? nope", "nope 5"], "5", "A", [nu(1), nu(2)]],
+		["見本 hello : [say] ? say Hello World だけは Hello と World の2つ（R）", ["hello : [say] ? say Hello World"], "(: hello (? [[say]] (defer {say Hello World})))", "A", [nu(), nu()]],
+		// 知らせない物
 		["見本に Hello : `Hello`・World : `World` を添えれば通る（guide の 31・32 行目。R）", ["Hello : `Hello`", "World : `World`", "hello : [say] ? say Hello World"], "(: hello (? [[say]] (defer {say Hello World})))", "A", []],
 		["後ろの行の定義を使う inc zz ⏎ zz : 5 は通る（先勝ち＋順序非依存、P2）", ["inc zz", "zz : 5"], "(: zz 5)", "A", []],
 		["既定値の右に前の仮引数 ⇥⇥z ⏎ ⇥⇥y : z は通る（R133）", ["gz :", "\t\tz", "\t\ty : z", "\t? y + z"], "(: gz (block (? [{z ⏎ y : z}] (+ y z))))", "A", []],
 		["囲む `?` の仮引数 t : x ? [y ? x + y] 1 は通る", ["t : x ? [y ? x + y] 1"], "(: t (? [x] (apply [y ? x + y] 1)))", "A", []],
 		["構造体のブロックの欄 ⇥b : a は通る", ["mm :", "\ta : 1", "\tb : a", ""], "(: mm (block (: a 1) (: b a)))", "A", []],
 		["取り込みのある範囲の -foo は断らない（今のまま種類が未知、P2・§5 Q10）", ["f : x ?", "\t-foo", "\tuart@", "", "f 1"], "(apply f 1)", "未知", []],
-		["`'` の右の鍵 vs ' zz は name-undefined にならない（鍵の名前は名前の表から引かない）", ["vs : 1 , 2", "vs ' zz"], "(' vs zz)", null, null],
+		["`'` の右の鍵 vs ' zz は name-undefined にならない（鍵の名前は名前の表から引かない）", ["vs : 1 , 2", "vs ' zz"], "(' vs zz)", null, []],
+		["中置 `@` の左の鍵 a @ p も name-undefined にならない（R26）", ["p : [a : 1]", "a @ p"], null, null, []],
 		// 2026-11-10 の確かめの指摘：左の無い `'`（複数行の括りの続きの行の頭）の右も鍵。前は解く段だけが右を名前として引き、内部の誤りが外へ漏れていた。
 		["複数行の括りの行頭の `'` の右の鍵 v : [1 ⏎ ' nope] も name-undefined にならない（内部の誤りも出ない）", ["v : [1", "' nope]"], "(: v [1 ⏎ ' nope])", "A", []],
 		["行頭の `'` の右が本当にある欄の名前でも、名前として引かない（p : [a : 1] ⏎ v : [p ⏎ ' a]）", ["p : [a : 1]", "v : [p", "' a]"], "(: v [p ⏎ ' a])", "A", []],
 		["行頭の `'` の鍵が自分の定義と同じ綴りでも輪にならない（a : [1 ⏎ ' a]。前は name-cycle、左のある a : [1 ' a] は前から通る）", ["a : [1", "' a]"], "(: a [1 ⏎ ' a])", "A", []],
 
-		// 4. 断りの順（R127 の 3.・7.。R）：3. は行の文法（2.）を全部見た後、いちばん外の同名（4.）より先、行の順で最初の1つ。7. は名前の表を集めた後で、解く段の門より先
+		// 4. 断りの順（R127 の 3.。R）：3. は行の文法（2.）を全部見た後、いちばん外の同名（4.）より先、行の順で最初の1つ。未定義の名前は断らずに知らせる（R21）ので、
+		// 順に入らない。本体の枝と既定値の G22（R128・R139）は、解く段の門と同じく行の順で、3. より後
 		["!_ + は infix-missing-operand（2. の行の文法が先）", ["!_ +"], { reason: "infix-missing-operand", line: 1 }],
 		["!_ ⏎ [:] は2行目の pointfree-tree-notation（行の文法を全部見た後）", ["!_", "[:]"], { reason: "pointfree-tree-notation", line: 2 }],
 		["-!_ は前段の文法の SyntaxError（前置 `-` の先読み）", ["-!_"], { reason: "SyntaxError", line: 1 }],
@@ -9790,14 +9809,17 @@ const unitLeafShow = (x) => {
 		["h : 5 ? !_ は void-written（param-not-name より先）", ["h : 5 ? !_"], vw("!_")],
 		["3. は行の順：[] ⏎ !_ 5 は1行目の empty-written", ["[]", "!_ 5"], ew("[]")],
 		["3. は行の順：!_ 5 ⏎ [] は1行目の void-written", ["!_ 5", "[]"], vw("!_")],
-		["3. は 7. より先：nope 5 ⏎ !_ 5 は2行目の void-written", ["nope 5", "!_ 5"], vw("!_", 2)],
-		["7. はいちばん外の同名より後：nope 5 ⏎ a : 1 ⏎ a : 2 は3行目の name-duplicate", ["nope 5", "a : 1", "a : 2"], { reason: "name-duplicate", line: 3 }],
-		["7. は仮引数の同名より後：nope 5 ⏎ h : x x ? 5 は2行目の name-duplicate", ["nope 5", "h : x x ? 5"], { reason: "name-duplicate", line: 2 }],
-		["7. は仮引数の検査より後：h : 5 ? nope は param-not-name", ["h : 5 ? nope"], { reason: "param-not-name", line: 1 }],
-		["7. は使う所の `#` より後：nope 5 ⏎ #inc 5 は2行目の export-mark-position", ["nope 5", "#inc 5"], { reason: "export-mark-position", line: 2 }],
-		["7. は G5 より先：incb 5 _ ⏎ nope は3行目の name-undefined", ["incb : [x] ? x + 1", "incb 5 _", "nope"], nu("nope", 3)],
-		["7. は G7 より先：_ + 1 ⏎ nope 5 は2行目の name-undefined", ["_ + 1", "nope 5"], nu("nope", 2)],
-		["7. は G20 より先：$_~ ⏎ nope は2行目の name-undefined", ["$_~", "nope"], nu("nope", 2)],
+		["未定義の名前は断らない：nope 5 ⏎ !_ 5 は2行目の void-written", ["nope 5", "!_ 5"], vw("!_", 2)],
+		["未定義の名前は断らない：nope 5 ⏎ a : 1 ⏎ a : 2 は3行目の name-duplicate", ["nope 5", "a : 1", "a : 2"], { reason: "name-duplicate", line: 3 }],
+		["未定義の名前は断らない：nope 5 ⏎ h : x x ? 5 は2行目の name-duplicate", ["nope 5", "h : x x ? 5"], { reason: "name-duplicate", line: 2 }],
+		["h : 5 ? nope は param-not-name", ["h : 5 ? nope"], { reason: "param-not-name", line: 1 }],
+		["未定義の名前は断らない：nope 5 ⏎ #inc 5 は2行目の export-mark-position", ["nope 5", "#inc 5"], { reason: "export-mark-position", line: 2 }],
+		["未定義の名前は断らない：incb 5 _ ⏎ nope は2行目の G5", ["incb : [x] ? x + 1", "incb 5 _", "nope"], { gate: "G5", line: 2 }],
+		["未定義の名前は断らない：_ + 1 ⏎ nope 5 は1行目の G7", ["_ + 1", "nope 5"], { gate: "G7", line: 1 }],
+		["未定義の名前は断らない：$_~ ⏎ nope は1行目の G20", ["$_~", "nope"], { gate: "G20", line: 1 }],
+		["3. は G22 より先：本体の枝 ⇥y : 1 の G22 より、後ろの行の !_ 5 の void-written", ["f : x ?", "\ty : 1", "\tx", "", "!_ 5"], vw("!_", 5)],
+		["G22 は解く段の門と行の順：_ + 1 ⏎ 枝 ⇥y : 1 は1行目の G7", ["_ + 1", "f : x ?", "\ty : 1", "\tx"], { gate: "G7", line: 1 }],
+		["G22 は解く段の門と行の順：枝 ⇥y : 1 ⏎ _ + 1 は2行目の G22", ["f : x ?", "\ty : 1", "\tx", "", "_ + 1"], g22("y", 2)],
 
 		// 5. 残す物は断らない（U〔答え〕[22:56:31]「移る」。`_` は id として、穴・恒等射・括りの席・名前の右辺に書ける）
 		["穴 add _ 3 4 は (apply add (construct 4 3))（R16）", ["add _ 3 4"], "(apply add (construct 4 3))", "A", []],
@@ -9881,6 +9903,7 @@ const unitLeafShow = (x) => {
 			const problems = [];
 			if (want.gate) {
 				if (e.reason !== GATE_REASON[want.gate] || e.gate !== want.gate) problems.push(`門 got: ${e.reason || e.name} ${e.gate || ""}  want: ${GATE_REASON[want.gate]} ${want.gate}`);
+				if (want.zero !== undefined && !String(e.message).includes(G22_HEAD(want.zero))) problems.push(`G22 の名指し want: ${G22_HEAD(want.zero)}`);
 			} else if (want.reason === "SyntaxError") {
 				if (e.reason || e.name !== "SyntaxError") problems.push(`got: ${e.reason || e.name}  want: 前段の文法の SyntaxError`);
 			} else if (e.reason !== want.reason) problems.push(`理由 got: ${e.reason || e.name} ${e.gate || ""}  want: ${want.reason}`);
@@ -9911,5 +9934,379 @@ const unitLeafShow = (x) => {
 	}
 }
 
+// ---- 本体の枝と既定値の G22 は、書いた木で決める（R128・R139・R21・R49・R48。2026-11-18 の片 undefined-name の確かめの直し）
+// 読む段は、本体の枝（条件か値）と既定値の右辺が、書いた所で `!_` と分かる値かを、書いた木で見る（部分の項の種類は、本体がその所で解いた読みを覗いて借り、
+// 覗き読みは木・覚え・知らせに何も残さない。本体と同じ読みの見本は次の塊）。
+// `!_` と分かる葉は、未定義の名前（取り込みのある範囲の外）・`!_` と分かる名前（R115 の w）・見える構造体に無い欄を引いた物（`pw ' zz`・`zz @ pw`）・`!_` と
+// 分かる器を `'`・`@` で引いた物（鍵に依らない）。R48 の演算子（`&`・比べ・`==`・`!==`）は、被演算子の片方がそれなら、もう片方に依らず答えも `!_`（R49）。
+// 空白の並びと `,`・`|`・`;` の鎖は、項が全部 `!_` と分かる時だけ（R137・R61：`!_` と分かる項は単位で消える）。算術の `+` は `!_` を単位で受けるので数えない。
+// 仮引数（括りの仮引数・前の仮引数）は値の分からない物で、`!_` と分からない。
+// 未定義の名前 typo の行は、`!_` と分かる名前 w に替えた行と同じ答え（断りなら同じ門と行で、名指しの typo が w。通れば typo の name-undefined を除いて同じ。R21）。
+// [名前, 源の行（頭に PRE を足す）, 期待, 種類, 診断（重さ/reason@行 の並び）, { pair（w の版も見る）, at（見る木の番号。PRE の木は数えない。無ければ最後の木） }]。
+// 期待は、断りなら { gate, line, zero?, law? }（zero は G22 が名指す値、law は枝の R128 か既定値の R139）、通るなら木の綴り（null なら木を見ない）。
+{
+	const PRE = ["inc : x ? x + 1", "pw : [a : 1]", "w : pw ' zz", "h : x ? x", "use : f x ? @f x", "hb : f ? @f 5 inc"];
+	const g22 = (zero, line, law) => ({ gate: "G22", line, zero, law });
+	const nu = (line) => `warning/name-undefined@${line}`;
+	const D = (row) => ["gz :", "\t\tx", `\t\t${row}`, "\t? x"];
+	const B = (row) => ["tf : x ?", `\t${row}`, "\tx"];
+	const S = (row) => ["tg : [s] ?", `\t${row}`, "\t2"];
+	const P = { pair: true };
+	const ROWS = [
+		// 既定値（R139）。R48 の演算子の片方が `!_` と分かれば、もう片方が前の仮引数でも G22
+		["既定値 y : x & typo", D("y : x & typo"), g22("x & typo", 3, "R139"), null, null, P],
+		["既定値 y : x > 0 & typo", D("y : x > 0 & typo"), g22("x > 0 & typo", 3, "R139"), null, null, P],
+		["既定値 y : typo & x", D("y : typo & x"), g22("typo & x", 3, "R139"), null, null, P],
+		["既定値 y : x == typo", D("y : x == typo"), g22("x == typo", 3, "R139"), null, null, P],
+		["既定値 y : x < typo", D("y : x < typo"), g22("x < typo", 3, "R139"), null, null, P],
+		["既定値の前の仮引数 y の z : y & typo", ["gz :", "\t\tx", "\t\ty : 1", "\t\tz : y & typo", "\t? x"], g22("y & typo", 4, "R139"), null, null, P],
+		["括りの仮引数 [s] の既定値 y : s & typo", ["gz :", "\t\t[s]", "\t\ty : s & typo", "\t? y"], g22("s & typo", 3, "R139"), null, null, P],
+		["既定値 y : (h 1) & typo（括りの関数の呼び出しを含んでも書いた木で見る）", D("y : (h 1) & typo"), g22("[h 1] & typo", 3, "R139"), null, null, P],
+		["既定値 y : typo == (h 1)", D("y : typo == (h 1)"), g22("typo == [h 1]", 3, "R139"), null, null, P],
+		["既定値 y : typo ' 0（`!_` と分かる器を引いた物は鍵に依らず `!_`）", D("y : typo ' 0"), g22("typo ' 0", 3, "R139"), null, null, P],
+		["既定値 y : zz @ pw（見える構造体に無い欄）", D("y : zz @ pw"), g22("zz @ pw", 3, "R139")],
+		["既定値 y : pw ' zz（同じ欄を `'` で）", D("y : pw ' zz"), g22("pw ' zz", 3, "R139")],
+		["裸の残りの仮引数の関数 h : [a ~y ? a] の後ろの既定値 z : typo も見る", ["gz :", "\t\tx", "\t\th : [a ~y ? a]", "\t\tz : typo", "\t? x"], g22("typo", 4, "R139"), null, null, P],
+		// 本体の枝（R128）
+		["括りの仮引数の本体の枝の条件 s & typo", S("s & typo : 1"), g22("s & typo", 2, "R128"), null, null, P],
+		["括りの仮引数の本体の枝の値 s ' a & typo", S("s > 0 : s ' a & typo"), g22("s ' a & typo", 2, "R128"), null, null, P],
+		["枝の条件 (h 1) & typo", B("(h 1) & typo : 1"), g22("[h 1] & typo", 2, "R128"), null, null, P],
+		["枝の値 (h 1) & typo", B("x > 0 : (h 1) & typo"), g22("[h 1] & typo", 2, "R128"), null, null, P],
+		["枝の条件 typo == (h 1)", B("typo == (h 1) : 1"), g22("typo == [h 1]", 2, "R128"), null, null, P],
+		["枝の条件 typo ' 0", B("typo ' 0 : 1"), g22("typo ' 0", 2, "R128"), null, null, P],
+		["枝の値 typo ' 0", B("x > 0 : typo ' 0"), g22("typo ' 0", 2, "R128"), null, null, P],
+		["枝の値 zz @ pw", B("x > 0 : zz @ pw"), g22("zz @ pw", 2, "R128")],
+		["枝の値 pw ' zz", B("x > 0 : pw ' zz"), g22("pw ' zz", 2, "R128")],
+		// 断りの順（R127）：同じ定義の中でも、解く段の門と G22 は行の順で最初の1つ
+		["前の行の ⇥_ : 7 の G7 が、後ろの行の枝の G22 より先", ["tf : x ?", "\t_ : 7", "\tx > 0 : typo", "\t9"], { gate: "G7", line: 2 }, null, null, P],
+		["前の行の枝の G22 が、後ろの行の ⇥_ : 7 の G7 より先", ["tf : x ?", "\tx > 0 : typo", "\t_ : 7", "\t9"], g22("typo", 2, "R128"), null, null, P],
+		// `!_` と分からない物は G22 にしない
+		["枝の条件の関数 ⇥inc : 1 は `!_` と分かる値でない（評価する所の関数は R76 の知らせ）", B("inc : 1"), "(: tf (? [x] (block (: (unit inc) 1) x)))", "A", ["warning/leftover-lambda@2"]],
+		["枝の値 typo + 1 は `+` が `!_` を単位で受けるので `!_` と分からない", B("x > 0 : typo + 1"), "(: tf (? [x] (block (: (> x 0) (+ typo 1)) x)))", "A", [nu(2)], P],
+		["既定値 y : typo , 5 は `,` の単位で 5（R61）", D("y : typo , 5"), "(: gz (block (? [{x ⏎ y : typo , 5}] x)))", "A", [nu(3)], P],
+		["枝の値 (h 1) , typo も `,` の単位で残る", B("x > 0 : (h 1) , typo"), "(: tf (? [x] (block (: (> x 0) [h 1]) x)))", "A", [nu(2)], P],
+		["枝の条件 [(h 1) typo] は、`!_` と分からない項 (h 1) が残るので G22 でない（木は §5 Q83 の上なので見ない。R137）", B("[(h 1) typo] : 1"), null, "A", [nu(2)], P],
+		["既定値 y : x（前の仮引数）", D("y : x"), "(: gz (block (? [{x ⏎ y : x}] x)))", "A", []],
+		["括りの仮引数の欄 s ' hieght は、呼んだ所の構造体に無くても定義の所では `!_` と分からない", ["tg : [s] ?", "\ts ' hieght > 0 : 1", "\t2", "", "tg [width : 640]"], "(apply tg [width : 640])", "A", []],
+		["括りの仮引数 c の枝 ⇥c : 1", ["fe : [a b c] ?", "\tc : 1", "\t2", "", "fe 1 2"], "(apply fe (construct 1 2))", "A", []],
+		["既定の行 ⇥typo は枝でない（知らせだけ）", ["tf : x ?", "\tx > 0 : 1", "\ttypo", "", "tf 0"], "(apply tf 0)", "A", [nu(3)], P],
+		// 前読みは何も残さない：読まない本体と既定値の中の呼び出しは、実体を作らず、知らせも出さない
+		["呼ばない括りの関数の枝の use $k 1 は、k の本体を読ませない（k は (defer …) のまま）", ["k : [s] ? s + 1", "m : [t] ?", "\tt > 0 : use $k 1", "\t2"], "(: k (? [[s]] (defer {s + 1})))", "A", [], { at: 0 }],
+		["既定値の use $k 1 も", ["k : [s] ? s + 1", "m :", "\t\tx", "\t\ty : use $k 1", "\t? x"], "(: k (? [[s]] (defer {s + 1})))", "A", [], { at: 0 }],
+		["呼ばない括りの関数の枝の hb $inc は、hb の本体の余りを知らせない", ["m : [t] ?", "\tt > 0 : hb $inc", "\t2"], "(: m (? [[t]] (defer {t > 0 : hb $inc ⏎ 2})))", "A", []],
+		["既定値の hb $inc も", ["m :", "\t\tx", "\t\ty : hb $inc", "\t? x"], "(: m (block (? [{x ⏎ y : hb $inc}] x)))", "A", []],
+		// 輪を運ぶ（R73）：取り込みのある範囲の外の未定義の名前は、w と同じく運ばない
+		["v : 1 , (g 1) ⏎ g : x ? (typo ' 0) , $v ⏎ v", ["v : 1 , (g 1)", "g : x ? (typo ' 0) , $v", "v"], "v", "A", ["warning/dollar-non-function@2", nu(2)], P],
+	];
+	const toW = (s) => s.replace(/\btypo\b/g, "w");
+	const cases = [];
+	for (const [name, lines, want, kind, diags, opts = {}] of ROWS) {
+		cases.push([name, lines, want, kind, diags, opts]);
+		if (!opts.pair) continue;
+		const wWant = want === null ? null : typeof want === "string" ? toW(want) : want.zero === undefined ? want : { ...want, zero: toW(want.zero) };
+		const wDiags = diags === null ? null : diags.filter((d) => !d.startsWith("warning/name-undefined@"));
+		cases.push([`${name} の w の版`, lines.map(toW), wWant, kind, wDiags, opts]);
+	}
+	for (const [name, lines, want, kind, diags, opts] of cases) {
+		total++;
+		const label = `書いた木の G22 ${name}`;
+		const refuse = want !== null && typeof want === "object";
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			if (!refuse) {
+				fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} @${e.line - PRE.length} ${e.message}`);
+				continue;
+			}
+			const problems = [];
+			if (e.reason !== GATE_REASON[want.gate] || e.gate !== want.gate) problems.push(`門 got: ${e.reason || e.name} ${e.gate || ""}  want: ${GATE_REASON[want.gate]} ${want.gate}`);
+			if (e.line !== PRE.length + want.line) problems.push(`行 got: ${e.line === undefined ? "無し" : e.line - PRE.length}  want: ${want.line}`);
+			if (want.zero !== undefined && !String(e.message).includes(G22_HEAD(want.zero))) problems.push(`G22 の名指し want: ${G22_HEAD(want.zero)}`);
+			if (want.law !== undefined && !String(e.message).includes(`§4 ${want.law}`)) problems.push(`法則 want: §4 ${want.law}`);
+			if (problems.length) fail(label, ...problems, e.message);
+			else ok(`${label} → ${want.gate}`);
+			continue;
+		}
+		const trees = r.trees.slice(PRE.length);
+		const t = opts.at === undefined ? trees[trees.length - 1] : trees[opts.at];
+		if (refuse) {
+			fail(label, `断るはずが通った: ${show(t)}`);
+			continue;
+		}
+		const problems = [];
+		if (want !== null && show(t) !== want) problems.push(`木   got:  ${show(t)}`, `     want: ${want}`);
+		if (kind !== null && kindOf(t) !== kind) problems.push(`種類 got: ${kindOf(t)}  want: ${kind}`);
+		if (diags !== null) {
+			const got = r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line - PRE.length}`).sort();
+			const wantDiags = [...diags].sort();
+			if (JSON.stringify(got) !== JSON.stringify(wantDiags)) problems.push(`診断 got: ${JSON.stringify(got)}  want: ${JSON.stringify(wantDiags)}`);
+		}
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+}
+
+// ---- 部分の項の種類は、本体がその項を書いた所で解いた読みと同じ（R49・R48・R122・R112・R138・R139・R128。片 undefined-name）
+// 同じ項を本体の枝の条件（`⇥E : 1`）・枝の値（`⇥x > 0 : E`）・既定値（`⇥⇥y : E`）の3か所に置く。
+// - R48 の演算子（`&`・比べ・`==`）の被演算子に丸ごと居る関数は、もう片方に依らず答えが `!_`。名前にした版（`p : add 1` の p・`pi : i i` の pi ほか）と
+//   その場に書いた版（`(add 1)`・`(i i)`・`(inc inc)`・`(inc double)`・`@q`（`q : $inc`））は同じ（`:` はメタ、R139）。恒等射の `i : _` の i と、口の外に置いた
+//   裸の `_`（R138）も同じに数える（枝の `x & _` は、同じ行の G7 が当たる所で、ここには書かない）。
+// - 点なしの区間に実引数を当てた形のうち、仕様が中置の読みと書いた2つは、その中置と同じ：段18 の左の欠けた `[' k]` に関数でない実引数1つを当てた
+//   `[' k] a` は `a ' k`（R49・§3.4 の段18 の行）、畳む2項の両側の欠けた点なし（算術・`||`・`;;`・`&&`・`|`・`&`・`;`）に関数でない項だけを当てた `[&] 1 w` は `1 & w`（R31）。
+//   区間の行は、前に `!_` と分かる名前 w を置いた版（w は空白の並びの項で単位として消える、R137）・区間を1行で括った版（R49 の括り1つ）・区間を名前に置いて当てた版
+//   （`ps : [' 0]` ⏎ `ps typo`、`:` はメタ、R139）・括りの中で区間の前に w を置いた版（`(w [' 0]) typo`。括りの中の並びの w も消える、R137）・名前の右辺で区間の前に
+//   w を置いた版（`ps : w [' 0]` ⏎ `ps typo`）も同じ答え。
+// - ほかの区間の形は、本体がその並びを書いた所で解いた読みと同じ：欠けた口に来た関数は合成（R87・R47、`[' 0] inc`）、畳む点なしの関数の項は後で当てる（R31 の
+//   `[+] 5 g 3`、`[&] 1 inc`）、比べの点なしは積で `!_` は単位（R31、`[==] typo 1`）、畳まない2項の点なしは素の2引数の関数（R32、`[!=] w 1`）、片側の区間の値の口の
+//   `!_` は消えて区間が残る（R112・R83、`[< 3] typo`・`[+ 1] w`）。区間が残れば丸ごとの関数で、`([+ 1] w) & 1` は R48 の被演算子に丸ごと居る関数。
+// - §2 で未知の点なし（段1〜9 の片側の欠けた `[& 1]`・`[== 1]`・`[| 5]` と、F が要素1つに当てて閉じない `[add,]`、R50）は丸ごとの関数でなく、R48 の被演算子でも
+//   `!_` と分からない（`x & [& 1]`・`[add,] ' 0`）。
+// - 関数の番地の `' 0` は同じ番地（R102）で、`q ' 0`・`$inc ' 0`・`[$inc] ' 0`・`($inc ' 0) ' 0`・`(q ' 0) ' 0` は `!_` と分からない。番地に書く `($inc ' 0) # 5` も
+//   level-mismatch の計算の `!_`（R87・R62）で、R49 の類でない。後ろに `!_` と分かる値を置いた `($inc ' 0) w` は、w が番地の隣の構築の項で消えて（R137）同じ番地。
+//   `@q` で下ろした関数に当てた `@q ' 0` は `!_`（R48）。
+// - 中が括らない `_` 1つの `||_||`・`|_|` は、ノルムと絶対値の口の穴（§2 の L、R27）で、R48 の被演算子に丸ごと居る関数（`x & ||_||`・`||_|| ' 0`）。
+// - 空白の並びで、`!_` と分かる項の後ろに最後の1項だけが残る形は、前の項が関数の下に積んだ構築の項で消えて（R137）、その1項と同じ（`x & (typo |_|)`・`x & (w |_|)` は
+//   `x & |_|`、`x & (w [+ inc])` は `x & [+ inc]`。名前の版 `pz : |_|` ⏎ `x & (w pz)`・`pz : w |_|` ⏎ `x & pz` も）。
+// - 関数だけの `,` の辺（`(inc , double)`）は、鎖の中では単位として消え（R61・R137）、`(inc , double) , w` は `!_` と分かる値。
+// - 参照の口に `!_` と分かる値を受けた `(ln w)`（`ln : [~xs] ? 5`）は、空の器を受けた呼び出し（R122）で `!_` と分からない。既定値の中から括りの関数を呼ぶ形は
+//   G7（R139）。値の口に受けた `(inc w)` は、`!_` が消えて inc（R112）で、R48 の被演算子に丸ごと居る関数。
+// - 名前は右辺を書いた所と同じ（`:` はメタ、R139）：見本 X を右辺にした `pn : X` を前に置いて X を pn に替えた版は、3か所とも G22 になるかが X と同じ（`x & pn` と
+//   `x & (X)`、`pn , w` と `(X) , w`、`(pn , [' 0]) w` と `((X) , [' 0]) w` も同じ。X が置く所の仮引数を書いた物は、名前に置くと意味が変わるので比べない）。
+// 未定義の名前 typo の行は、`!_` と分かる名前 w に替えた行と同じ答え（R21）。
+{
+	const PRE = ["inc : x ? x + 1", "double : x ? x * 2", "add : x y ? x + y", "pw : [a : 1]", "w : pw ' zz", "i : _", "ln : [~xs] ? 5", "q : $inc", "p : add 1",
+		"pi : i i", "h : x ? x", "ii : inc inc", "idb : inc double", "qa : @q", "iw : inc w"];
+	const PLACE = {
+		条件: { lines: (e) => ["tf : x ?", `\t${e} : 1`, "\tx"], line: 2, law: "R128", tree: (t) => `(: tf (? [x] (block (: ${t} 1) x)))` },
+		値: { lines: (e) => ["tf : x ?", `\tx > 0 : ${e}`, "\tx"], line: 2, law: "R128", tree: (t) => `(: tf (? [x] (block (: (> x 0) ${t}) x)))` },
+		既定値: { lines: (e) => ["gz :", "\t\tx", `\t\ty : ${e}`, "\t? x"], line: 3, law: "R139", tree: null },
+	};
+	const ALL = Object.keys(PLACE);
+	const toW = (s) => s.replace(/\btypo\b/g, "w");
+	// 書いた所で `!_` と分かる項：[書いた項, G22 が名指す綴り, 置く所（無ければ3か所）, 前に足す行（無ければ無し。断りの行はその分だけ後ろ）]
+	const ZERO = [
+		// 名前にした版とその場に書いた版
+		["x & p", "x & p"], ["x & (add 1)", "x & [add 1]"],
+		["x == pi", "x == pi"], ["x == (i i)", "x == [i i]"],
+		["x & ii", "x & ii"], ["x & (inc inc)", "x & [inc inc]"],
+		["x & idb", "x & idb"], ["x & (inc double)", "x & [inc double]"],
+		["x & qa", "x & qa"], ["x & @q", "x & @q"],
+		["iw & 1", "iw & 1"], ["(inc w) & 1", "[inc w] & 1"], ["(inc typo) & 1", "[inc typo] & 1"], ["x & iw", "x & iw"],
+		// 恒等射の i と、口の外の裸の `_`（R138）
+		["x & i", "x & i"], ["x == i", "x == i"],
+		["x & _", "x & _", ["既定値"]], ["x == _", "x == _", ["既定値"]],
+		// ノルムと絶対値の口の穴（§2 の L、R27）
+		["x & ||_||", "x & ||_||"], ["||_|| & 1", "||_|| & 1"], ["x == ||_||", "x == ||_||"], ["x & (||_||)", "x & [||_||]"], ["||_|| ' 0", "||_|| ' 0"], ["x & |_|", "x & |_|"],
+		// 前の `!_` と分かる項は関数の下に積んだ構築の項で消え、最後の1項が残る（R137）
+		["x & (typo |_|)", "x & [typo |_|]"], ["x & (w [+ inc])", "x & [w [+ inc]]"],
+		["x & (w pz)", "x & [w pz]", ALL, ["pz : |_|"]], ["x & pz", "x & pz", ALL, ["pz : w |_|"]],
+		// 関数だけの `,` の辺は鎖の中で単位として消える（R61・R137）
+		["(inc , double) , w", "[inc , double] , w"],
+		// 中置の版と、中置に開く区間の版（段18 の `[' k]` に関数でない実引数1つ、畳む2項の点なしに関数でない項だけ。R49・§3.4・R31。区間の替えは下の SECTION_ALTS）
+		["1 & inc", "1 & inc"], ["typo & 1", "typo & 1"], ["typo < 3", "typo < 3"], ["typo == 1", "typo == 1"],
+		["1 & typo", "1 & typo"], ["[&] 1 typo", "[&] 1 typo"], ["[&] 1 typo 3", "[&] 1 typo 3"], ["[|] typo typo", "[|] typo typo"],
+		["pw ' zz", "pw ' zz"], ["[' zz] pw", "[' zz] pw"],
+		["typo ' 0", "typo ' 0"], ["[' 0] typo", "[' 0] typo"],
+		["0 @ typo", "0 @ typo"], ["zz @ pw", "zz @ pw"],
+		["(pw ' zz) ' 0", "[pw ' zz] ' 0"],
+		// 区間が残った丸ごとの関数を R48 の被演算子に置いた形（値の口の `!_` は消える、R112・R95）
+		["([+ 1] typo) & 1", "[[+ 1] typo] & 1"], ["([* 2,] typo) & 1", "[[* 2,] typo] & 1"], ["([' 0] inc) & 1", "[[' 0] inc] & 1"],
+		// 関数を下ろした `@q` と、関数に当てた段18 と `#`（R48）
+		["@q ' 0", "@q ' 0"], ["(@q) ' 0", "[@q] ' 0"], ["@q ' 1", "@q ' 1"],
+		["p ' 0", "p ' 0"], ["(add 1) ' 0", "[add 1] ' 0"],
+		["p # 5", "p # 5"], ["(add 1) # 5", "[add 1] # 5"],
+	];
+	// `!_` と分からない項：[書いた項, 置く所ごとの期待]。期待は木の中の項の綴りと知らせ（null なら見ない）、{ gate, line } なら断り、"通る" なら通ることだけを見る。
+	const KEEP = [
+		["(ln w) & 1", { 条件: ["(& [ln w] 1)", []], 値: ["(& [ln w] 1)", []], 既定値: { gate: "G7", line: 3 } }],
+		["(ln typo) & 1", { 条件: ["(& [ln typo] 1)", ["warning/name-undefined@2"]], 値: ["(& [ln typo] 1)", ["warning/name-undefined@2"]], 既定値: { gate: "G7", line: 3 } }],
+		["(ln w) == 5", { 条件: ["(== [ln w] 5)", []], 値: ["(== [ln w] 5)", []], 既定値: { gate: "G7", line: 3 } }],
+		// 関数の番地の `' 0` は同じ番地（R102。木と知らせは §6.4 の違いの上なので見ない）。番地に書く `#` は level-mismatch の計算の `!_`（R87・R62）。番地の後ろの
+		// `!_` と分かる値は構築の項で消える（R137）
+		...["q ' 0", "$inc ' 0", "[$inc] ' 0", "($inc ' 0) ' 0", "$inc ' 0 ' 0", "(q ' 0) ' 0", "[$inc ' 0] ' 0", "($inc ' 0) # 5", "($inc ' 0) w", "[$inc] ' 0 w"].map((e) => [
+			e,
+			{ 条件: "通る", 値: "通る", 既定値: "通る" },
+		]),
+		// 関数を指す番地（値）と前の仮引数は、R48 の被演算子でも `!_` と分からない
+		...["x & q", "x & ($inc ' 0)", "x & ([$inc] ' 0)", "x & (($inc ' 0) w)", "x & ([$inc] ' 0 w)"].map((e) => [e, { 条件: "通る", 値: "通る", 既定値: "通る" }]),
+		["x & 1", { 条件: ["(& x 1)", []], 値: ["(& x 1)", []], 既定値: "通る" }],
+		["(h 1) & 1", { 条件: ["(& [h 1] 1)", []], 値: ["(& [h 1] 1)", []], 既定値: "通る" }],
+		// §2 で未知の点なし（段1〜9 の片側の欠けた点なし、F が要素1つに当てて閉じない `[F,]`、R50）は丸ごとの関数でなく、R48 の被演算子でも `!_` と分からない
+		...["[& 1]", "[== 1]", "[add,]", "x & [& 1]", "[& 1] & 1", "x & [== 1]", "[| 5] == 1", "x & [add,]", "[add,] ' 0"].map((e) => [e, { 条件: "通る", 値: "通る", 既定値: "通る" }]),
+		// 中置に開かない区間の形は本体の読み（木と知らせは見ない）：欠けた口に来た関数は合成（R87・R47）、畳む点なしの関数の項は後で当てる（R31）、比べの点なしの
+		// `!_` は単位（R31）、畳まない2項の点なしは素の2引数の関数（R32）、片側の区間の値の口の `!_` は消えて区間が残る（R112・R83）。区間が残れば、枝の値なら
+		// 返す所の裸の関数、条件なら関数だけの条件で通る（区間の替えは下の SECTION_ALTS）
+		...["[' 0] inc", "[< 3] inc", "[& 1] inc", "[&] 1 inc", "[<] 1 inc", "[==] inc 1", "[==] typo 1", "[<] typo 3", "[!=] typo 1", "[< 3] typo", "[& 1] typo", "[+ 1] typo", "[* 2,] typo", "[+] typo 1"].map(
+			(e) => [e, { 条件: "通る", 値: "通る", 既定値: "通る" }]
+		),
+	];
+	// 区間の行の替え（同じ答え）：前に `!_` と分かる名前 w を置いた版（空白の並びの項の w は単位で消える、R137）・区間を1行で括った版（R49 の括り1つ）・区間を
+	// 名前 ps に置いて当てた版（`:` はメタ、R139）・括りの中で区間の前に w を置いた版（括りの中の並びの w も消える、R137）・名前の右辺で区間の前に w を置いた版。
+	// [書いた項, G22 が名指す綴り, 前に足す行]。名前に置いた版は、断りの行が1つ後ろ。
+	const SECTION_ALTS = (e) => {
+		const end = e.indexOf("] ") + 1;
+		const s = e.slice(0, end);
+		const rest = e.slice(end + 1);
+		return [
+			[`w ${e}`, `w ${e}`, []],
+			[`(${s}) ${rest}`, `[${s}] ${rest}`, []],
+			[`ps ${rest}`, `ps ${rest}`, [`ps : ${s}`]],
+			[`(w ${s}) ${rest}`, `[w ${s}] ${rest}`, []],
+			[`ps ${rest}`, `ps ${rest}`, [`ps : w ${s}`]],
+		];
+	};
+	// 区間の行：頭が1行の括りで、後ろが実引数の並び（中置の被演算子の括り `[& 1] & 1`・`[$inc] ' 0` は除く）
+	const isSectionRow = (e) => /^\[[^\]]*\] [^'&=|#<>!+*\/~-]/.test(e);
+	const cases = [];
+	for (const [e, zero, places = ALL, head = []] of ZERO) {
+		for (const at of places) {
+			const say = [...head, e].join(" ⏎ ");
+			const line = PLACE[at].line + head.length;
+			cases.push([`${at} ${say}`, [...head, ...PLACE[at].lines(e)], { gate: "G22", line, zero, law: PLACE[at].law }]);
+			if (/\btypo\b/.test(say)) cases.push([`${at} ${toW(say)}（typo を w に替えた版）`, [...head, ...PLACE[at].lines(e)].map(toW), { gate: "G22", line, zero: toW(zero), law: PLACE[at].law }]);
+			if (!isSectionRow(e)) continue;
+			for (const [alt, altZero, pre] of SECTION_ALTS(e)) {
+				for (const toV of /\btypo\b/.test(e) ? [(s) => s, toW] : [(s) => s]) {
+					cases.push([`${at} ${[...pre, toV(alt)].join(" ⏎ ")}（区間 ${e} の替え）`, [...pre, ...PLACE[at].lines(toV(alt))], { gate: "G22", line: PLACE[at].line + pre.length, zero: toV(altZero), law: PLACE[at].law }]);
+				}
+			}
+		}
+	}
+	for (const [e, byPlace] of KEEP) {
+		for (const at of ALL) {
+			const want = byPlace[at];
+			if (Array.isArray(want)) cases.push([`${at} ${e}`, PLACE[at].lines(e), { tree: PLACE[at].tree(want[0]), diags: want[1] }]);
+			else if (want === "通る") cases.push([`${at} ${e}`, PLACE[at].lines(e), { pass: true }]);
+			else cases.push([`${at} ${e}`, PLACE[at].lines(e), want]);
+			// typo を w に替えた版は、通るなら通り、断るなら同じ断り（木と知らせは見ない）
+			const loose = Array.isArray(want) || want === "通る" ? { pass: true } : want;
+			if (/\btypo\b/.test(e)) cases.push([`${at} ${toW(e)}（typo を w に替えた版）`, PLACE[at].lines(toW(e)), loose]);
+			if (!isSectionRow(e) || !loose.pass) continue;
+			for (const [alt, , pre] of SECTION_ALTS(e)) {
+				for (const toV of /\btypo\b/.test(e) ? [(s) => s, toW] : [(s) => s]) cases.push([`${at} ${[...pre, toV(alt)].join(" ⏎ ")}（区間 ${e} の替え）`, [...pre, ...PLACE[at].lines(toV(alt))], loose]);
+			}
+		}
+	}
+	const outside = (r) => r.diagnostics.filter((d) => d.line > PRE.length).map((d) => `${d.severity}/${d.reason}@${d.line - PRE.length}`).sort();
+	for (const [name, lines, want] of cases) {
+		total++;
+		const label = `本体と同じ読みの G22 ${name}`;
+		let r;
+		try {
+			r = resolve(src([...PRE, ...lines]));
+		} catch (e) {
+			if (!want.gate) {
+				fail(label, `断られた: ${e.reason || e.name} ${e.gate || ""} @${e.line - PRE.length} ${e.message}`);
+				continue;
+			}
+			const problems = [];
+			if (e.reason !== GATE_REASON[want.gate] || e.gate !== want.gate) problems.push(`門 got: ${e.reason || e.name} ${e.gate || ""}  want: ${GATE_REASON[want.gate]} ${want.gate}`);
+			if (e.line !== PRE.length + want.line) problems.push(`行 got: ${e.line === undefined ? "無し" : e.line - PRE.length}  want: ${want.line}`);
+			if (want.zero !== undefined && !String(e.message).includes(G22_HEAD(want.zero))) problems.push(`G22 の名指し want: ${G22_HEAD(want.zero)}`);
+			if (want.law !== undefined && !String(e.message).includes(`§4 ${want.law}`)) problems.push(`法則 want: §4 ${want.law}`);
+			if (problems.length) fail(label, ...problems, e.message);
+			else ok(`${label} → ${want.gate}`);
+			continue;
+		}
+		const t = r.trees[r.trees.length - 1];
+		if (want.gate) {
+			fail(label, `断るはずが通った: ${show(t)}`);
+			continue;
+		}
+		const problems = [];
+		if (want.tree !== undefined && show(t) !== want.tree) problems.push(`木   got:  ${show(t)}`, `     want: ${want.tree}`);
+		if (want.diags !== undefined && JSON.stringify(outside(r)) !== JSON.stringify([...want.diags].sort())) problems.push(`診断 got: ${JSON.stringify(outside(r))}  want: ${JSON.stringify(want.diags)}`);
+		if (problems.length) fail(label, ...problems);
+		else ok(label);
+	}
+	// 名前は右辺を書いた所と同じ（`:` はメタ、R139）：上の見本 X（G22 の見本も通る見本も、typo を w に替えた版も）と、関数だけの `,`・`|` の辺（`inc , double`・
+	// `_ | inc`、R61）を右辺にした `pn : X` を前に置き、X を pn に替えた版は、3か所とも G22 になるかが X と同じ（G22 なら、行は名前の行の分だけ後ろ）。R48 の被演算子に
+	// 置いた `x & pn` と `x & (X)`、`,` の鎖の辺に置いた `pn , w` と `(X) , w`、区間の前の `,` の辺に置いた `(pn , [' 0]) w` と `((X) , [' 0]) w` も同じ。置く所の
+	// 仮引数 x を書いた X は、名前に置くと x が未定義の名前に変わるので比べない。名前の行に出る知らせは見ない。
+	const g22Line = (lines) => {
+		try {
+			resolve(src([...PRE, ...lines]));
+			return null;
+		} catch (e) {
+			return e.gate === "G22" ? e.line - PRE.length : null;
+		}
+	};
+	const samples = [...new Set([...ZERO, ...KEEP].map(([e]) => e).concat(["inc , double", "_ | inc"]).flatMap((e) => (/\btypo\b/.test(e) ? [e, toW(e)] : [e])))].filter(
+		(e) => !/\bx\b/.test(e)
+	);
+	for (const e of samples) {
+		for (const at of ALL) {
+			for (const [inPlace, viaName, tag] of [
+				[e, "pn", ""],
+				[`x & (${e})`, "x & pn", "（x & pn）"],
+				[`(${e}) , w`, "pn , w", "（pn , w）"],
+				[`((${e}) , [' 0]) w`, "(pn , [' 0]) w", "（(pn , [' 0]) w）"],
+			]) {
+				total++;
+				const here = g22Line(PLACE[at].lines(inPlace));
+				const named = g22Line([`pn : ${e}`, ...PLACE[at].lines(viaName)]);
+				const want = here === null ? null : here + 1;
+				const say = (l) => (l === null ? "G22 でない" : `G22 @${l}`);
+				if (named === want) ok(`本体と同じ読みの G22 の名前の版 ${at} pn : ${e}${tag} → ${say(want)}`);
+				else fail(`本体と同じ読みの G22 の名前の版 ${at} pn : ${e}${tag}`, `その場の版: ${say(here)}  名前の版: ${say(named)}`);
+			}
+		}
+	}
+	// 断りの順（R127）：同じ定義の中の解く段の断りと G22 は、それを起こした書いた行の順で最初の1つ。解く段の断りが呼んだ定義の中で起きた物（素の関数の実体の
+	// 本体・括りの関数の実体の門。自分を呼ぶ再帰で、実体の本体の行がこの定義の行でも）は、比べるのは呼んだ行（枝の値のブロックの中なら、呼び出しを書いた行）。
+	// typo の行が後ろなら、typo の行を抜いた（替えた）版と同じ答え（その版が通るなら typo の行の G22）で、typo の行が前なら typo の行の G22。
+	const refusalOf = (lines) => {
+		try {
+			resolve(src([...PRE, ...lines]));
+			return null;
+		} catch (e) {
+			return { reason: e.reason, gate: e.gate, line: e.line === undefined ? undefined : e.line - PRE.length };
+		}
+	};
+	const ORDER = [
+		// [名前, typo の行が後ろの源, typo の行を抜いた（替えた）源, typo の行が前の源, [後ろの源の typo の行, 前の源の typo の行, 名指し]]
+		["素の関数の実体の本体（pz $inc）", ["pz : f ? f + 1", "tf : x ?", "\tx > 0 : pz $inc", "\tx > 1 : typo", "\t7"], ["pz : f ? f + 1", "tf : x ?", "\tx > 0 : pz $inc", "\tx > 1 : x", "\t7"],
+			["pz : f ? f + 1", "tf : x ?", "\tx > 1 : typo", "\tx > 0 : pz $inc", "\t7"], [4, 3, "typo"]],
+		["括りの関数の実体（hg 1）", ["hg : [s] ? s + _", "tf : x ?", "\thg 1 : 1", "\ttypo : 2", "\tx"], ["hg : [s] ? s + _", "tf : x ?", "\thg 1 : 1", "\tx"],
+			["hg : [s] ? s + _", "tf : x ?", "\ttypo : 2", "\thg 1 : 1", "\tx"], [4, 3, "typo"]],
+		["既定値の中から括りの関数を呼ぶ G7（R139）", ["gz :", "\t\tx", "\t\ty : (ln w) & 1", "\t\tz : typo", "\t? x"], ["gz :", "\t\tx", "\t\ty : (ln w) & 1", "\t? x"],
+			["gz :", "\t\tx", "\t\tz : typo", "\t\ty : (ln w) & 1", "\t? x"], [4, 3, "typo"]],
+		["素の関数の実体の本体（枝の条件の 1 : pz $inc）", ["pz : f ? f + 1", "tf : x ?", "\t1 : pz $inc", "\ttypo : 1", "\tx + 1"], ["pz : f ? f + 1", "tf : x ?", "\t1 : pz $inc", "\tx : 1", "\tx + 1"],
+			["pz : f ? f + 1", "tf : x ?", "\ttypo : 1", "\t1 : pz $inc", "\tx + 1"], [4, 3, "typo"]],
+		// 自分を呼ぶ再帰：実体の本体の門は、この定義の書いた行（`x + 1`・`x > 0`）でも呼んだ行で比べる
+		["自分を呼ぶ再帰の実体（枝の条件の 1 : tf $inc）", ["tf : x ?", "\t1 : tf $inc", "\ttypo : 1", "\tx + 1"], ["tf : x ?", "\t1 : tf $inc", "\tx : 1", "\tx + 1"],
+			["tf : x ?", "\ttypo : 1", "\t1 : tf $inc", "\tx + 1"], [3, 2, "typo"]],
+		["自分を呼ぶ再帰の実体（枝の値の x > 0 : tf $inc）", ["tf : x ?", "\tx > 0 : tf $inc", "\tx > 1 : typo", "\tx + 1"], ["tf : x ?", "\tx > 0 : tf $inc", "\tx > 1 : x", "\tx + 1"],
+			["tf : x ?", "\tx > 1 : typo", "\tx > 0 : tf $inc", "\tx + 1"], [3, 2, "typo"]],
+		// 枝の値のブロックの中の呼び出しは、それを書いた行で比べる（囲む枝の行でない）
+		["枝の値のブロックの中の pz $inc", ["pz : f ? f + 1", "tf : x ?", "\tx > 0 :", "\t\tx > 2 : pz $inc", "\t\tx > 1 : typo", "\t\t7", "\t9"],
+			["pz : f ? f + 1", "tf : x ?", "\tx > 0 :", "\t\tx > 2 : pz $inc", "\t\tx > 1 : x", "\t\t7", "\t9"],
+			["pz : f ? f + 1", "tf : x ?", "\tx > 0 :", "\t\tx > 1 : typo", "\t\tx > 2 : pz $inc", "\t\t7", "\t9"], [5, 4, "typo"]],
+		["枝の値のブロックの中の自分を呼ぶ再帰", ["tf : x ?", "\tx > 0 :", "\t\tx > 2 : tf $inc", "\t\tx > 1 : typo", "\t\t7", "\tx + 1"],
+			["tf : x ?", "\tx > 0 :", "\t\tx > 2 : tf $inc", "\t\tx > 1 : x", "\t\t7", "\tx + 1"],
+			["tf : x ?", "\tx > 0 :", "\t\tx > 1 : typo", "\t\tx > 2 : tf $inc", "\t\t7", "\tx + 1"], [4, 3, "typo"]],
+	];
+	for (const [name, after, without, before, [afterLine, g22Line, zero]] of ORDER) {
+		for (const toV of [(s) => s, toW]) {
+			const tag = toV === toW ? "（typo を w に替えた版）" : "";
+			total++;
+			const base = refusalOf(without);
+			const got = refusalOf(after.map(toV));
+			const want = base || { reason: GATE_REASON.G22, gate: "G22", line: afterLine };
+			if (got && JSON.stringify(got) === JSON.stringify(want)) ok(`本体と同じ読みの G22 の順 ${name}${tag} → ${want.gate} @${want.line}`);
+			else fail(`本体と同じ読みの G22 の順 ${name}${tag}`, `got: ${JSON.stringify(got)}  want: ${JSON.stringify(want)}`);
+			total++;
+			let e;
+			try {
+				resolve(src([...PRE, ...before.map(toV)]));
+			} catch (x) {
+				e = x;
+			}
+			if (e && e.gate === "G22" && e.line === PRE.length + g22Line && String(e.message).includes(G22_HEAD(toV(zero)))) ok(`本体と同じ読みの G22 の順 ${name}${tag}：前の行の G22`);
+			else fail(`本体と同じ読みの G22 の順 ${name}${tag}：前の行の G22`, !e ? "断るはずが通った" : `got: ${e.reason} ${e.gate || ""} @${e.line - PRE.length}`);
+		}
+	}
+}
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

@@ -166,6 +166,9 @@ export function interpret(source, { workLimit = WORK_LIMIT, nestLimit = NEST_LIM
   const { trees, diagnostics, rows, lineOf } = resolve(source);
   // exhausted は深さの上限に当たった回数（lookup が、上限で欠けた値を覚えないために見る）。frames は答えを出している途中の呼び出しを関数ごとに（callFn）。
   const cx = { defs: new Map(), notices: [], noticed: new Set(), lineOf, nest: 0, nestLimit, work: 0, workLimit, exhausted: 0, frames: new Map() };
+  // ファイルのいちばん外が取り込み（後置 `@`）のある範囲か（P2）。取り込みのある範囲（ここか、名前を書いた所を囲む関数の本体、importedAt）の定義の見えない名前は
+  // 取り込み先の名前かもしれないので、値はまだ（V12）。取り込みの無い範囲なら未定義の名前で `!_`（R21）。範囲は読む段と同じ（resolve.js の hasImportIn）。
+  cx.fileImports = rows.some(importsInRow);
 
   // ファイルのいちばん外の定義（順序に依らない。同じ名前の2つ目は読む段が name-duplicate で止める）。前は、右辺が書いた `!_` 1つの定義を書かなかったことと
   // 同じにしていた（R113、isUnitRow）。2026-11-09 の R138 の片2 から、その行は読む段の void-written が先に断る。
@@ -231,6 +234,31 @@ const isOp = (row, sym) => !!row && row.type === "op" && row.sym === sym;
 const bareAtom = (t) => !!t && t.type === "atom" && t.pre.length === 0 && t.post.length === 0;
 const bareName = (t) => (bareAtom(t) && t.core.c === "name" ? t.core.name : null);
 const singleTerm = (row) => (row && row.type === "seq" && row.terms.length === 1 ? row.terms[0] : null);
+// 取り込み（後置 `@`、P2）のある範囲か。範囲は読む段と同じく、ファイルのいちばん外と関数の本体（resolve.js の hasImportIn）：行の木のどこか（括り・中置の辺も）に
+// 後置 `@` があるか。入れ子の `?` の中は、その関数の本体の範囲なので見ない。
+function importsInRow(row) {
+  if (!row) return false;
+  if (row.type === "seq") return row.terms.some(importsInTerm);
+  if (row.sym === "?") return false;
+  return importsInRow(row.left) || importsInRow(row.right);
+}
+function importsInTerm(t) {
+  if (!t) return false;
+  if (t.type === "infix") return importsInTerm(t.left) || importsInTerm(t.right);
+  return t.post.includes("@") || (!!t.core.rows && t.core.rows.some(importsInRow));
+}
+// 関数の本体ごとの答えを覚える（呼ぶたびに本体を歩かない）。
+const bodyImports = new WeakMap();
+function importsInBody(body) {
+  if (!body) return false;
+  if (!bodyImports.has(body)) bodyImports.set(body, importsInRow(body));
+  return bodyImports.get(body);
+}
+// 名前を書いた所（env は囲む関数の本体の範囲の鎖）が取り込みのある範囲か。
+function importedAt(cx, env) {
+  for (let e = env; e; e = e.parent) if (e.imports) return true;
+  return cx.fileImports;
+}
 
 // 定義の行（左が名前1つの `:`）なら名前、ほかは null。公開の印 `#` の付いた名前はまだ（V12）。
 function defName(row, line) {
@@ -255,12 +283,14 @@ function valueOf(stack, line) {
 // 名前と定義（V9）
 // ---------------------------------------------------------------------------
 
-// 走らせずに分かる名前の値（仮引数・覚えた値）。定義を走らせる要る時と、定義の見えない名前は NEED（呼ぶ側が lookup で回す）。
+// 走らせずに分かる名前の値（仮引数・覚えた値・未定義の名前）。定義を走らせる要る時と、取り込みのある範囲の定義の見えない名前は NEED（呼ぶ側が lookup で回す）。
 const NEED = Symbol("need");
 function known(cx, name, env) {
   for (let e = env; e; e = e.parent) if (e.vars.has(name)) return e.vars.get(name);
   const d = cx.defs.get(name);
   if (d && "value" in d) return d.value;
+  // 取り込みの無い範囲の未定義の名前は `!_`（R21。読む段が warning の name-undefined で知らせる）。
+  if (!d && !importedAt(cx, env)) return UNIT;
   return NEED;
 }
 
@@ -268,8 +298,7 @@ function* lookup(cx, name, env, line) {
   const k = known(cx, name, env);
   if (k !== NEED) return k;
   const d = cx.defs.get(name);
-  // 定義の見えない名前は、取り込み（後置 `@`）のある範囲の名前だけが来る（取り込みの無い範囲の未定義の名前は、読む段の name-undefined が先に断る、R138）。
-  // 取り込み先の値はまだ持っていない（V12）。前（R111）は `!_` と読んでいた。
+  // 定義の見えない名前がここへ来るのは、取り込み（後置 `@`）のある範囲だけ（known の注）。取り込み先の値はまだ持っていない（V12）。
   if (!d) throw notYet(`取り込みの先にあるかもしれない名前 \`${name}\` の値`, line);
   if (d.busy) throw notYet("値の定義の輪", line);
   d.busy = true;
@@ -621,7 +650,7 @@ function* callFn(cx, f, args, line) {
     for (;;) {
       // 本体を走らせる（前の runBody を溶かした）。
       const bf = frame.f;
-      const env = { vars: new Map(bf.params.map((p, i) => [p, frame.args[i]])), parent: bf.env };
+      const env = { vars: new Map(bf.params.map((p, i) => [p, frame.args[i]])), parent: bf.env, imports: importsInBody(bf.body) };
       const bline = cx.lineOf(bf.body) ?? bf.line;
       const bt = singleTerm(bf.body);
       let r;
@@ -863,8 +892,8 @@ function bracketedId(c) {
   return isIdAtom(t) || (bareAtom(t) && bracketedId(t.core));
 }
 
-// 芯が算術の線の内か：字面・`!_`・仮引数・定義の見えない名前と、それを算術の中置でつないだ物、それを1つ括った物。定義の見えない名前は、取り込み（後置 `@`）のある
-// 範囲の名前だけが来て（ほかは読む段の name-undefined が先に断る、R138）、値は lookup が V12 のまだで止める。前（R111）は `!_` と読んでいた。
+// 芯が算術の線の内か：字面・`!_`・仮引数・定義の見えない名前と、それを算術の中置でつないだ物、それを1つ括った物。定義の見えない名前は、取り込みの無い範囲なら
+// 未定義の名前で値は `!_`（R21、known）、取り込みのある範囲なら lookup が V12 のまだで止める。
 function arithCore(cx, c, env) {
   switch (c.c) {
     case "lit":
