@@ -6749,6 +6749,38 @@ const r94Passes = [
 	["R95 [+] inc w~（前の見本は `[+] inc []~`、片5 は未知）", r94w("[+] inc w~"), "(apply (compose [+] inc) w~)", "A"],
 	["R95 [* 2,] inc w~（点なしを頭にした合成。前の見本は `[* 2,] inc []~`）", r94w("[* 2,] inc w~"), "(unit (compose [* 2,] inc))", "A", { leftoverDiag: ["(compose [* 2,] inc)"] }],
 	["R95 i w~ inc は inc（前の見本は `i []~ inc`、片5 は G18）", r94w("i w~ inc"), "(unit inc)", "A", { leftoverDiag: ["inc"] }],
+	// R95・R31・R84：畳む2項の点なし（比べの点なしも）とそれを頭にした合成と、それを指す名前が受けた項が `!_` と分かる値（印 zero、R49）だけなら、長さ 0 の流れ `w~` を
+	// 受けた形と同じに、項の名前を残して A。
+	["R95 [+] w は `[+] w~` と同じ A（R84）", r94w("[+] w"), "(apply [+] w)", "A", { diagCount: 0 }],
+	["R95 [+] inc w は `[+] inc w~` と同じ A", r94w("[+] inc w"), "(apply (compose [+] inc) w)", "A", { diagCount: 0 }],
+	["R95 [+] w inc は `[+] w~ inc` と同じ A", r94w("[+] w inc"), "(apply inc (apply [+] w))", "A", { diagCount: 0 }],
+	["R95 [*] w も A", r94w("[*] w"), "(apply [*] w)", "A", { diagCount: 0 }],
+	["R95 [&] w も A", r94w("[&] w"), "(apply [&] w)", "A", { diagCount: 0 }],
+	["R95 [|] w も A", r94w("[|] w"), "(apply [|] w)", "A", { diagCount: 0 }],
+	["R95 [;] w も A", r94w("[;] w"), "(apply [;] w)", "A", { diagCount: 0 }],
+	["R95 比べの点なし [<] w も `[<] w~` と同じ A", r94w("[<] w"), "(apply [<] w)", "A", { diagCount: 0 }],
+	["R95 比べの点なし [==] w も A", r94w("[==] w"), "(apply [==] w)", "A", { diagCount: 0 }],
+	["R95 [+] (w) は `[+] w` と同じ A（[x] ≅ x）", r94w("[+] (w)"), "(apply [+] [w])", "A", { diagCount: 0 }],
+	["R95 [+] [w] も A", r94w("[+] [w]"), "(apply [+] [w])", "A", { diagCount: 0 }],
+	["R95 [+] (w~) も A（R84 の括り）", r94w("[+] (w~)"), "(apply [+] [w~])", "A", { diagCount: 0 }],
+	["R95 [+] (w < 3) も A（R49 の印 zero の括り）", r94w("[+] (w < 3)"), "(apply [+] [w < 3])", "A", { diagCount: 0 }],
+	["R95 pf : [+] ⏎ pf w は `pf w~` と同じ A", r94w(["pf : [+]", "pf w"]), "(apply pf w)", "A", { diagCount: 0 }],
+	["R95 u : [+] w ⏎ u 5 は u が値で (construct u 5) の A", r94w(["u : [+] w", "u 5"]), "(construct u 5)", "A", { diagCount: 0 }],
+	["R95 ([+] w) + 1 は A", r94w("([+] w) + 1"), "(+ [[+] w] 1)", "A", { diagCount: 0 }],
+	// R27・R84：`||_||` の口（`[~x]` の参照の口）が受けた項が長さ 0 と分かる流れだけなら、`||_|| w` と同じ空の器で、受けた所には知らせを足さない。
+	["R27 ||_|| w~ は `||_|| w` と同じ空の器（R84）", r94w("||_|| w~"), "(apply ||_|| w~)", "A", { diagCount: 0 }],
+	["R27 v : ||_|| w~ ⏎ v 1 2 は v が値 0 で (construct v 1 2)", r94w(["v : ||_|| w~", "v 1 2"]), "(construct v 1 2)", "A", { diagCount: 0 }],
+	["R27 ||_|| w~ w~ は `||_|| w w` と同じく葉を1つ残す", r94w("||_|| w~ w~"), "(apply ||_|| w~)", "A", { diagCount: 0 }],
+	["R27 ||_|| w~ , 5 は (, (apply ||_|| w~) 5)", r94w("||_|| w~ , 5"), "(, (apply ||_|| w~) 5)", "A", { diagCount: 0 }],
+	["R27 (||_|| w~) * 3 は `(||_|| w) * 3` と同じ", r94w("(||_|| w~) * 3"), "(* [||_|| w~] 3)", "A", { diagCount: 0 }],
+	["R27 inc (||_|| w~) 5 は `inc (||_|| w) 5` と同じく括りが値", r94w("inc (||_|| w~) 5"), "(construct (apply inc [||_|| w~]) 5)", "A", { diagCount: 0 }],
+	["R27 nm : ||_|| ⏎ nm w~ は `nm w` と同じ空の器", r94w(["nm : ||_||", "nm w~"]), "(apply nm w~)", "A", { diagCount: 0 }],
+	["R27 fy : y ? ||_|| w~ ⏎ fy 1 は本体の根が値で知らせ無し", r94w(["fy : y ? ||_|| w~", "fy 1"]), "(apply fy 1)", "A", { diagCount: 0 }],
+	["R27 u : ||_|| w~ ⏎ $u は値に当てた `$`（`u : ||_|| w` と同じ dollar-non-function）", r94w(["u : ||_|| w~", "$u"]), "$u", "A", { severities: ["warning/dollar-non-function"] }],
+	// R11：合成は前の関数から受ける。`||_||` を頭にした合成は `||_||` の口が w~ を受け、`||_||` の前に値の口の関数があればその口が受けて消える（R112、`inc w~` と同じ）。
+	["R27 ||_|| w~ inc は `||_|| w inc` と同じ", r94w("||_|| w~ inc"), "(apply inc (apply ||_|| w~))", "A", { diagCount: 0 }],
+	["R27 ||_|| inc w~ は `||_|| inc w` と同じ", r94w("||_|| inc w~"), "(apply (compose ||_|| inc) w~)", "A", { diagCount: 0 }],
+	["R112 inc ||_|| w~ は inc の値の口が w~ を消して、何も受けていない合成（`inc ||_|| w` と同じ）", r94w("inc ||_|| w~"), "(unit (compose inc ||_||))", "A", { leftoverDiag: ["(compose inc ||_||)"] }],
 	// 包み（`inc ([+] inc []~)`・`5 [* 2,] []~`・`$[i []~]`）・本体（`k4 : [~t] ? [+] t~` ⏎ `k4 []`）・R95 の外の括りの最後の括り（`fq []~`・`(f3 _ 2) 1 []~`）の書いた
 	// `[]~`・`[]` の行は外した（括りの口の `fq w~` は上の「R83〜R93」の節）。
 	// 問い2 の記録（`fold $add []` の G16 は今のまま）：G16 は書いた時点で長さ 0 と分かる List を畳む形にだけ当たり、実行時に空になる List では当たらない。

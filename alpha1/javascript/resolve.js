@@ -7909,8 +7909,7 @@ function seqUnitAt(st, i, top) {
   const fn = s && s.fn;
   if (!fn || s.tainted) return false;
   if (fn.type === "pfGreedyUnary" || fn.type === "pfSeat") return true;
-  // got：その口がもう受けた項。後ろの項は、書いた `!_`・`!_` と分かる値・穴・関数（合成に入る）のほかがその口へ来る。
-  const shared = (got) => got.length > 0 || st.items.slice(i + 1).some((t) => !isMark(t) && !seqUnitItem(t) && !isHoleItem(t) && !!t.kind && t.kind.k !== "L");
+  const shared = (got) => portShared(st, i, got);
   if (isIdFn(fn)) {
     const next = top.stages[top.stages.indexOf(s) + 1];
     return next && next.group === s.group && next.fn && next.fn.type === "norm" ? shared(s.recv) : true;
@@ -7920,6 +7919,12 @@ function seqUnitAt(st, i, top) {
     return s.recv.length >= fixed && shared(s.recv.slice(fixed));
   }
   return false;
+}
+// 参照の口（`||_||` の恒等射の段・括りの関数の最後の括り）が、畳み込みの i 番目の項より前にもう受けた項 got を持つか、i より後ろにその口へ来る項があるか（R137・R27・R122）。
+// 後ろの項は、書いた `!_`・長さ 0 の流れの印・`!_` と分かる値・穴・関数（合成に入る）のほかがその口へ来る。持たなければ、i 番目の項はその口に1つで着いた物
+// （seqUnitAt・markStep）。
+function portShared(st, i, got) {
+  return got.length > 0 || st.items.slice(i + 1).some((t) => !isMark(t) && !seqUnitItem(t) && !isHoleItem(t) && !!t.kind && t.kind.k !== "L");
 }
 // R137・R74：空白の並びの頭の葉 x（classifyItems の葉）が、後ろに関数の項が続く時に畳み込みで消えるか。書いた `!_` と長さ 0 の流れの印は値の隣で消え（markStep）、
 // R49 の印 zero の項は空の積み上げで単位として消え（seqUnitAt）、まだ何も受けていない恒等射（`_`・`i : _` の i）は後ろの関数に替わる（R74、foldStep）。
@@ -8628,6 +8633,13 @@ function markStep(st, i, top) {
   if (x.emptyFrom && refPort && streamMouths(s) === "whole" && s.recv.length === stageShape(s).fixed && argRun(st.items, i).end) {
     feed(top, x.emptyFrom);
     if (entryDone(top)) st.stack[st.stack.length - 1] = markSaturated(top, renderEntry(top));
+    return;
+  }
+  // R27・R84：`||_||` の口（恒等射の段の後ろにノルム。`[~x]` の参照の口）に着いた長さ 0 の流れは、`!_` と分かる値の `||_|| w` の w と同じ所で、空の器として受ける：
+  // その口がまだ何も受けておらず、後ろにもその口へ来る項が無い所の最初の1つ（seqUnitAt の `||_||` の行と同じ数え方、portShared）。ほかは下の R28・R105 で消える
+  // （`||_|| w~ 5` は `||_|| 5`、`||_|| w~ w~` は `||_|| w~`）。流れは値の印として受け、木は書いた綴りのまま（`(apply ||_|| w~)`）。
+  if (x.emptyFrom && isIdFn(fn) && isNormIdentity(top, s) && !portShared(st, i, s.recv)) {
+    feed(top, asValueMark(x));
     return;
   }
   // 2026-10-23 までは、主語の口が決まらない逆適用（§5 Q5）の後の `_` をここで先に見ていた（`5 f2 _` は R28 の終わりで A、ほかは G8。前の綴り）。
@@ -9688,17 +9700,19 @@ function passStream(e, s) {
 // 左、`[<]`・`[<=]` はいちばん小さい要素、`[>]`・`[>=]` はいちばん大きい要素、`[==]`・`[=]` は全部等しければその要素。R31 の
 // 2026-11-05 の寄せ4。前は、比較は一番右か `_`（前の綴り））。だから要素に関数が混ざれば、畳んだ結果は関数になりうる（`gs : 1 , inc` の
 // `[&] gs` は inc）。
-// - A：書いた `!_`（印。中置の被演算子と同じ、R15）・数（R24）・中身の見える List で、深く見て要素が全部 A の物（`[1 2 3]`・
-//   `vs`・`[' 0]` で引いた List）。
+// - A：`!_` の印（長さ 0 と分かる流れ `w~`。中置の被演算子と同じ、R15・R84）と、`!_` と分かる値（R49 の印 zero の名前と括り・印 zero の中置の木、unitRank が 2 の物：
+//   `w`・`(w)`・`[w]`・`(w~)`・`(w < 3)`。R84 で `w~` と同じ物なので、`[+] w` は `[+] w~` と同じ A、R95）・数（R24）・中身の見える List で、深く見て要素が全部 A の物
+//   （`[1 2 3]`・`vs`・`[' 0]` で引いた List）。
 // - 未知：ほかの全部。要素に L か未知が見える器（`gs`・`(inc , 1)`。並びの中では G7）、中身の見えない A（裸の仮引数・適用の
 //   結果・`$` の番地。器かもしれず、器なら要素に関数が見えるかもしれない）、構造体（欄を畳む読みは決まっていない）。
-//   括り1つの `(y)`・`([< 3,] 1 5 2)` も、中の行の形が見えなければ未知（`[x]≅x` なので `(y)` は y と同じ）。
+//   括り1つの `(y)`・`([< 3,] 1 5 2)` も、中の行の形が見えなければ未知（`[x]≅x` なので `(y)` は y と同じ）。綴りで `!_` と分かるが R49 の類でない括り
+//   （`(inc , double)`・`(_ | inc)`、unitRank が 1）は A に数えない（R95 が A と書くのは R49・R84 の物）。
 // 前（2026-10-21 の R31 の最初の版）は1項ならいつも A にしていて、`z : [&] gs` の `z 5` を黙って構築と読んだ（確かめで見つかった
 // 黙った誤答。R31 の前の `[&]` はアリティの分からない点なしで、未知か G7 だった）。中置で書いた同じ物（`gs ' 0 & gs ' 1`）・
 // 同じ器を撒く形（`gs~`、Q20）・`[' 0] fs` も未知か G7 なので、それと揃える。
 // k ≥ 2 は中置と同じく A（`[&] 1 gs` は `1 & gs` と同じで、gs は器の値）。
 function foldOneKind(arg) {
-  if (isMark(arg)) return A();
+  if (unitRank(arg) >= 2) return A();
   const d = descOfTree(arg);
   if (isScalar(d)) return A();
   if (d.k === "A" && !d.spread && d.shape && d.shape.s === "list" && deepKind(d) === "A") return A();

@@ -6350,5 +6350,69 @@ law("52 未定義の名前は `!_` と分かる名前と同じ答え：X に typ
 	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
 });
 
+// ---------------------------------------------------------------------------
+// 法則53：点なしの頭の後ろの並びの項で、`!_` と分かる名前 w と長さ 0 の流れ w~ を入れ替えても、綴りのほかは同じ答え（R84・R95・R27）
+// ---------------------------------------------------------------------------
+//
+// 比べる綴り：頭 H53 の後ろの並び P53 の X に、`!_` と分かる名前 w（R115 の `w : pw ' zz`）を入れた形と、それを撒いた w~ を入れた形。頭は、畳む2項の点なし
+// （比べの点なしも）・`||_||` と、それを括った物と番地から開いた物（`(||_||)`・`@[$[||_||]]`）と、それを指す名前（`pf : [+]`・`nm : ||_||`・`n2 : nm`）と、それを
+// 頭にした合成（`[+] inc`・`||_|| inc`）と、それを値の口の関数の後ろに置いた合成（`inc [+]`・`inc ||_||`。X は前の inc の値の口に着く、R11・R112）。
+// 文脈 C53 で包む（根・名前・名前の `$`・括って値の演算子・`,` の辺・関数の本体・値の口の括り・値の後ろ）。
+// 何を同じと見るか：断れば reason・門。通れば、各行の木（w~ を w に読み替えて）と種類と、知らせ（重さ・reason・名前の w~ を w に読み替えて）。期待値は書かない。
+// なぜ同じか：R84 の「長さ 0 と分かる流れは、`!_` と分かる値と同じで、置いた所の読みも同じ」。畳む2項の点なしが受けた所は R95（項の名前を残して A、R31）、
+// `||_||` の口が受けた所は R27（空の器）。
+// 当てない所：中置の被演算子（`w~ + 1` は撒く項）・括りの関数の最後の括り（R64 の撒いた器そのもの）・点なしの可変長の口と恒等射（`[* 2,]`・`[inc,]`・`i`、R95 の
+// 何も受けていない形）・`|_|`（§6.4 の囲みの行）・`$w`。
+const PRE53 = [INC, "pw : [a : 1]", "w : pw ' zz", "pf : [+]", "nm : ||_||", "n2 : nm"];
+const H53 = ["[+]", "[&]", "[|]", "[;]", "[<]", "[==]", "||_||", "(||_||)", "@[$[||_||]]", "pf", "nm", "n2", "[+] inc", "||_|| inc", "inc [+]", "inc ||_||"];
+const P53 = ["X", "X X", "X 5", "5 X", "X inc", "X inc X", "(X)", "[X]"];
+const C53 = [
+	["根", (x) => [x]], ["名前", (x) => [`q : ${x}`, "q 1 2"]], ["名前の $", (x) => [`q : ${x}`, "$q"]], ["括って値の演算子", (x) => [`(${x}) * 3`]],
+	["`,` の辺", (x) => [`${x} , 5`]], ["本体", (x) => [`t : y ? ${x}`, "t 1"]], ["値の口の括り", (x) => [`inc (${x}) 5`]], ["値の後ろ", (x) => [`5 ${x}`]],
+];
+const asW53 = (s) => s.replace(/(^|[^A-Za-z0-9_])w~/g, "$1w");
+const read53 = (lines) => {
+	try {
+		const r = resolve(src([...PRE53, ...lines]));
+		return {
+			text: `${r.trees.slice(-lines.length).map((t) => `${show(t)} : ${kindOf(t)}`).join(" ⏎ ")} ／ ${r.diagnostics.map((d) => `${d.severity}/${d.reason}/${d.name}@${d.line}`).sort().join(" ")}`,
+		};
+	} catch (e) {
+		return e.reason ? { text: `断り ${e.reason} ${e.gate || ""}` } : { crash: `${e.name}: ${e.message}` };
+	}
+};
+law("53 点なしの頭（畳む2項の点なし・比べの点なし・`||_||`、それを指す名前と合成）の後ろの並びの項で、w と w~ を入れ替えても、綴りのほかは同じ木・種類・知らせ（R84・R95・R27）", () => {
+	const problems = [];
+	const count = { 比べた組: 0, 通る組: 0, 断る組: 0, "w を葉に残す組（R31・R27）": 0, "何も受けていない関数の組（R112・R42）": 0 };
+	for (const h of H53) {
+		for (const p of P53) {
+			for (const [cname, c] of C53) {
+				const form = (x) => c(`${h} ${p.replace(/X/g, x)}`);
+				const a = read53(form("w~"));
+				const b = read53(form("w"));
+				count.比べた組++;
+				const label = `${cname} ${JSON.stringify(form("w~").join(" ⏎ "))}`;
+				if (a.crash || b.crash) {
+					problems.push(`${label}：例外 ${a.crash || b.crash}`);
+					continue;
+				}
+				const ta = asW53(a.text);
+				if (ta !== b.text) {
+					problems.push(`${label}：w~ ${ta}  ⇔  w ${b.text}`);
+					continue;
+				}
+				if (b.text.startsWith("断り")) count.断る組++;
+				else {
+					count.通る組++;
+					if (/(^|[ ([])w[ )\]]/.test(b.text)) count["w を葉に残す組（R31・R27）"]++;
+					if (b.text.includes("(unit ")) count["何も受けていない関数の組（R112・R42）"]++;
+				}
+			}
+		}
+	}
+	for (const [k, v] of Object.entries(count)) if (!v && k !== "断る組") problems.push(`「${k}」の組が無い（法則がその枝を見ていない）`);
+	return { problems, note: Object.entries(count).map(([k, v]) => `${k} ${v}`).join("・") };
+});
+
 console.log(`\n${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);
