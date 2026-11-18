@@ -110,7 +110,7 @@
 | 28 | 単相化 `F a…` と、β の `bf …` と、同じ本体の括りの関数 `pt a…` | R81 | bindParams・writtenDepth |
 | 29 | `C[@p]` と `C[@[p]]`（本体に同じ名前の枝を置いても） | R78・R128 | classify |
 | 31 | `!_` と分かる名前 wz の長さ 0 の流れ `C[X[wz~]]` と `C[X[[wz]~]]` | R83・R84・R95 | emptyMark・markStep・pointfreeOf |
-| 32 | `F op 1`・`1 op F` と `F == 1`・`1 == F` | R76・R87 | classifyInfix |
+| 32 | `F op 1`・`1 op F` と `F == 1`・`1 == F`（並びの項と値の口の算術とビットは `F + 1`・`1 + F`） | R76・R87・R49 | classifyInfix |
 | 33 | 番地の組 `L + R` と `R + L`、括り・名前で包んだ物 | R62 | addressOp・hexFace |
 | 35 | `(P + A) + B` と `P + (A + B)`、`A + B` と `B + A` ほか | R62・R97 | addressOp |
 | 36 | `$` を通る輪と、輪の外の値 u36 に替えた綴り | R103 | nameKindOf・passThrough・selfReaderTarget |
