@@ -35,7 +35,7 @@
 | foldStep（7768） | 畳みの1歩：いちばん上と次の項の種類で、適用・合成・積むに分ける。未知の値の上でも積む | R35・R47・R120 | 1・5・7 |
 | single（7734） | 1つの項を節にする。括らない `_`（cat hole）は恒等射 `{type:"id"}` | R29 | 11・13 |
 | holeStep（7923） | 畳みの中の括らない `_`：口の外は恒等射、口の中は R46（括りの関数の段は G5） | R44・R46 | 11・14 |
-| markStep（7975）・isMark（7745）・emptyMark（7348）・writtenEmptyMark（7379） | `!_` と分かる値の印を口で読む：値の口では消え、既定値の口では既定値、畳む点なしの口では被演算子 | R83・R84・R95・R112 | 31・39・50 |
+| markStep（8615）・isMark（8384）・emptyMark（7980）・writtenEmptyMark（8011）・portShared（7926） | `!_` と分かる値の印を口で読む：値の口では消え、既定値の口では既定値、畳む点なしの口では被演算子、`||_||` の口ではその口に1つで着いた最初の1つを空の器（R27） | R83・R84・R95・R112・R27 | 31・39・50・53 |
 | identityGate（8320）・reduceFold（7446）・withoutIdentity（7462） | 恒等射の段を閉じる時に単位律の割れを見つけ、書いた並びで恒等射を消して畳み直す | R74・R126 | 13 |
 | refuseHole（5615）・refuseOperandHole（5629） | 中置・点なしの被演算子の `_` を G7 で断る（`,`・`\|`・`;` を除く） | R87・§6.2 G7 | — |
 | newEntry（8095）・addGroup（8100）・feed（8150）・putArg（8160） | 関数の項を段に開いて持ち、実引数を最初の閉じていない段の口に1つずつ入れる。後ろに来た関数は段を足す（合成） | R11・R40・R47 | 1・7 |
@@ -46,7 +46,7 @@
 | plainApplyKind（9411）・restCloseKind（8554）・restHoleKind（8632） | 素の関数と穴の関数の足りた適用の種類は本体の根（A なら A、ほかは未知） | §3.4・R120 | 6・26 |
 | applyKind（8731） | desc の並びを feed で当てた種類 | §3.4 | 1 |
 | mapOver（8761）・foldOver（8772）・elemsOfContainer（8681）・refuseMapped（8755） | `[F,]`・貪欲な単項・畳む点なしを器の要素ごとに当て、器の中身に関数か未知が見えれば G7 | R31・R50・§6.2 G7 | 15 |
-| foldOneKind（9057）・reportNotFolded（2454） | 畳む2項の点なしの k = 1 と、畳まない2項の点なしの pointfree-not-folded | R31・R32 | 15・21 |
+| foldOneKind（9714）・reportNotFolded（2492） | 畳む2項の点なしの k = 1（印 zero の物と長さ 0 の流れは A、R95）と、畳まない2項の点なしの pointfree-not-folded | R31・R32・R95・R84 | 15・21・53 |
 | streamStep（8802）・streamInto（8813）・composedMouths（8878） | 撒いた流れを段（合成なら合成全体）の口で受ける。口が数えられなければ G19 | R51・§6.2 G19 | 15・19 |
 | partialFn（9066）・patternPartial（3493）・internPartial（2207） | 足りない適用（k < n）の関数。括りの関数は当てた物を覚え、残りが来た所で元の関数の実体を作る | R24・R42 | 2・7 |
 | markSaturated（9139） | 口が全部埋まった関数を値にする（余りは foldStep が後ろに積む） | R35 | 7 |
@@ -128,6 +128,7 @@
 | 50 | 行 X と `w \| X`・`X \| w`・`w ; X`・`X ; w`（`(w)` も） | R137 | logicSide・logicRest・resolveBlockBody |
 | 51 | R138 で断る項（`!_`・`$!_`・`[]`・`~[]`）を包みの下に置いた綴りどうし | R138 | refuseWrittenVoid |
 | 52 | 未定義の名前と `!_` と分かる名前 w を入れ替えた綴り（木・種類・断りは同じで、未定義の側は name-undefined を書いた所ごとに1つ足す。値の段も） | R21・R49・R128・R139 | undefinedNameNotices・lookup・writtenKinds・interpret.js の known |
+| 53 | 点なしの頭（畳む2項の点なし・比べの点なし・`||_||`、それを括った物・番地から開いた物・指す名前・合成）の後ろの並びの項で、w と w~ を入れ替えた綴り（綴りのほかは同じ木・種類・知らせ） | R84・R95・R27 | foldOneKind・markStep・portShared |
 
 欠番：8・9・27・30・34・40・42・43・44。
 
