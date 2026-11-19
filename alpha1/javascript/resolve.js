@@ -1748,7 +1748,7 @@ const liftOf = (d) => (!!d && d.k === "A" && !d.spread && !d.shape && !!d.lift ?
 const readerOf = (d) => refOf(d) || vrefOf(d) || addrOf(d) || liftOf(d);
 // 書いた `!_` を指すと分かっている値（R63、2026-10-26。§5 Q64 の答え）：欄の右辺の `!_`（`[s : !_]`）・書いた void だけの括り（前の綴りの `[_]`）・書いた `!_` を右辺に持つ
 // ファイルの値の定義の名前（`un : !_`）の desc に印 zero を付け、括りの関数の実体へ欄・要素・裸の仮引数で渡しても持ち越す（実体の鍵 `!_`）。実体の中の
-// `$s` は、`$!_` と同じ零射 `$[x ? !_]` の番地（dollarNameTarget）。印の無い形の見えない値は、今のまま `!_` か言い切れない（G20）。
+// `$s` は、s と同じ `!_` と分かる値（印 zero、R56。dollarNameTarget）。
 // 2026-10-28 の片9b から、取り込みの無い範囲の未定義の名前（R111）・無い欄の名前と無い欄を引いた物（R115）も印 zero を持つ。欄の `[s : !_]` は R113 で書かなかったことと
 // 同じ（`[]`）なので、印 zero の欄にはならない。値の口に着いた印 zero の名前と括りは、書いた `!_` と同じに読む（R112、isKnownUnitItem）。
 const zeroOf = (d) => (!!d && d.k === "A" && !d.spread && !d.shape && !!d.zero && !d.ref && !d.vref && !d.addr ? d : null);
@@ -2004,7 +2004,7 @@ function rowsShape(trees) {
   if (trees.every(isField)) {
     const names = trees.map((t) => t.fieldName);
     if (new Set(names).size !== names.length || trees.some((t) => isSpreadNode(t.right))) return null;
-    // 欄の右辺が書いた `!_`（`[s : !_]`）なら、`!_` を指す印 zero を付ける（R63。実体の中の `$s` が零射の番地と分かる）。
+    // 欄の右辺が書いた `!_`（`[s : !_]`）なら、`!_` を指す印 zero を付ける（R63。実体の中の `$s` は s と同じ `!_` と分かる値、R56）。
     return { s: "struct", fields: trees.map((t) => ({ name: t.fieldName, desc: isMark(t.right) ? zeroDesc() : descOfTree(t.right) })) };
   }
   if (trees.length === 1) return shapeOfTree(trees[0]);
@@ -2024,7 +2024,7 @@ function pickKeyOf(term) {
 // 持ち上げた物（関数を指す番地 ref・値を読む参照 vref、名前・括り・仮引数で運んだ物も）の desc から引く：関数なら指す関数（L。`@[$inc]` と同じ dollarOpened）、
 // 値なら指す値の desc（`@[$v]` と同じ openSelfReader。`$v` の輪の中なら、下ろす所を通る輪で name-cycle、R103）。字面の `' k` の k が 0 でなければ、1つの物の
 // 領域の外なので `!_`（印 zero の値）。持ち上げでない物・先の種類の分からない持ち上げ（lift）・番地の算術で作った点と差・名前や式の鍵は今のまま（null を返し、
-// pickDesc が読む）。`$!_`（と `!_` を指す名前・`$[]~`）は `!_` の持ち上げではなく零射 `[x ? !_]` の番地（R56・R63・R104）なので、`' 0` は零射そのもの（`@[$!_]` と同じ）。
+// pickDesc が読む）。`!_` と分かる物に当てた `$`（`$w`、R56）は印 zero の値で、その `' k` は classifyInfix が読む（R102。`$w ' 0` は `$w` そのもの）。
 // 括り1つで運んだ持ち上げ（`[$five] ' 0`）も下ろす：括り1つは [x] ≅ x で `$five` と同じ印を持つ（R49・R60。`[vs] ' 0` が `vs ' 0` と読むのと同じで、解決器は
 // `[x] ' 0` を x とは読まない。`[5] ' 0` は未知）。主の Claude の 10:17 の例え「`[v] ' 0` が v なのと同じ」は規則にしていない（§5 Q78 (f)）。
 // 根拠：主の Claude の読み「`$v ' 0` は、持ち上げてから0番目を取るので v そのもの。`[v] ' 0` が v なのと同じで、C の `(&v)[0]` とも同じ。」「`$v ' 1` は1つ分の
@@ -2204,7 +2204,7 @@ function internDesc(d) {
   // 鍵に入れる（`$+8`。上の値を読む参照と同じ）。
   else if (addrOf(d)) id = internLeaf(d.addr === "pt" ? (d.w ? `$+${d.w}` : "$+") : "$-$");
   // 書いた `!_` を指すと分かっている値（R63）：`!_`。中身の見えない A と別の鍵にする（同じ鍵だと、`h [s : !_]` と `h [s : (inc 5)]` が実体を分け合い、
-  // 本体の `$s` が零射の番地か G20 かを、先に解いた方が決める。§5 Q64 の影響）。
+  // 本体の `$s` が `!_` と分かる値か値を読む参照かを、先に解いた方が決める。§5 Q64 の影響）。
   else if (zeroOf(d)) id = internLeaf("!_");
   // 先の種類の分からない持ち上げ（2026-10-27 の片8、liftOf）：中身の見えない A と別の鍵（`@` で先を読まない、値の演算子では G21）。
   else if (liftOf(d)) id = internLeaf("$?");
@@ -3023,8 +3023,8 @@ function valueOfRoot(F, root, scope) {
     if (el) value.elements = el;
     const sh = shapeOfTree(root);
     if (sh) value.shape = sh;
-    // 右辺が書いた `!_` を指すか（R56、2026-10-25）。`q : !_` の `$q` は `$!_` と同じ零射の番地。2026-10-26 の R63（§5 Q64 の答え）から、desc にも印 zero を
-    // 付け、実体の鍵に入れる（括りの関数に欄・要素・裸の仮引数で渡しても、実体の中の `$s` が零射の番地と分かる。internDesc の `!_`）。R56 の片では desc に
+    // 右辺が書いた `!_` を指すか（R56、2026-10-25）。`q : !_` の `$q` は q と同じ `!_` と分かる値。2026-10-26 の R63（§5 Q64 の答え）から、desc にも印 zero を
+    // 付け、実体の鍵に入れる（括りの関数に欄・要素・裸の仮引数で渡しても、実体の中の `$s` も `!_` と分かる値になる。internDesc の `!_`）。R56 の片では desc に
     // 入れなかった（入れると実体の鍵が見ない印が実体を跨いで分け合われうる、pointsToMark の注。R63 で鍵に入れたので、その心配は無い）。
     // 2026-10-28 の片9b の確かめの直し：右辺の木そのものが印 zero を持つ物（無い欄を引いた `ob ' c`・`no ' s`（R115）、`$v ' 1` の領域の外（R102））も、名前は同じ印を
     // 持ち越す（`:` はメタ。括り1つの rowsInfo の `zeroOf(root.kind)` と同じ）。前は木で `_`（前の綴り）を指す物（pointsToMark）だけを見ていて、`w : ob ' c` の w が印を落とし、
@@ -3240,7 +3240,7 @@ function writtenDepth(lines, F) {
     // ほかの右（`x @ k` の右も）は解くので、書いた形を数える。
     if (t.type === "infix") return 1 + Math.max(termDepth(t.left, inValue), t.sym === "'" && pickKeyOf(t.right) ? 1 : termDepth(t.right, inValue));
     // `$名前` は、名前が関数なら指す関数の印を持つ番地で、鍵の深さは 2（R49。internDesc の ref）。浅くならない側に倒して 2 と数える。
-    // 2026-10-25 の R55〜R57 から、印を持つ番地は `$名前` のほかにも、`$!_`（零射、R56）と、前置の印の組み合わせ `$@f`（R57）がある。どれも 2 と数える。
+    // 前置の印の組み合わせ `$@f`（R57）と `$!_`（読む段の void-written が先に断る、R138）も 2 と数える。
     if (t.core.c === "name") return t.pre.length || t.post.length ? (t.pre[0] === "$" && !t.post.length ? 2 : 1) : nameDepth(t.core.name);
     if (t.core.c === "unit" && t.pre.length === 1 && t.pre[0] === "$" && !t.post.length) return 2;
     if (t.core.rows) return 1 + t.core.rows.reduce((m, r) => Math.max(m, treeDepth(r, inValue)), 0);
@@ -3498,7 +3498,7 @@ function patternFn(F, op, params, defScope, label) {
 // 書いた `!_` と分かる値（R63）。印の無い実引数では今のまま、本体を1回だけ、裸の仮引数を A として解く（中身の見えない A。bodyRootOf）。実体の鍵・深さ・輪・
 // 守りと、本体の門を呼んだ行で名指しする所は、括りの関数の実体（R24・R25、instantiate）と同じ仕組みに乗せる（仮引数は全部裸：bindParams が印だけを持ち越し、
 // 印ごと鍵に入れる）。答えは括りの関数の実体と同じく、本体の根が A なら A、ほかは未知（本体の根の点・差の印は持たない。持たせるかは §5 Q66 の残り）。
-// これで `use : f x ? @f x` ⏎ `use $inc 5` の `@f` は inc（A）、`gg : f ? map $f vs` ⏎ `gg un` の実体の `$f` は零射の番地。`tg : g ? @g vs~` ⏎ `tg $add` は、
+// これで `use : f x ? @f x` ⏎ `use $inc 5` の `@f` は inc（A）、`gg : f ? map $f vs` ⏎ `gg w` の実体の `$f` は w と同じ `!_` と分かる値（R56）。`tg : g ? @g vs~` ⏎ `tg $add` は、
 // tg の定義の行（印の無い1回の読み）が G19 で断るので閉じない（§5 Q45 の残り）。
 // 定義の行の木には実体を描かない（素の関数の本体は、印の無い1回の木のまま）。部分適用は当てた物（bound）を持ち越し、口が全部埋まった所で実体を作る（partialFn）。
 // 穴の関数（`(use $inc _) 5`・`(ff _) $5`）は、頭と、書いた実引数と穴の位置を持ち越し、口が埋まった所で頭の適用として作る（holeFnOf、2026-10-26 の確かめの直し）。
@@ -3685,7 +3685,7 @@ function bindParams(params, argDescs, plain = false) {
         texts.push(descText(d));
         return;
       }
-      // 番地の算術で作った点・差（R62）と、書いた `!_` を指す値（R63）も、印を持ち越して鍵に入れる（本体の `f - $v` が差か、`$f` が零射の番地か）。
+      // 番地の算術で作った点・差（R62）と、書いた `!_` を指す値（R63）も、印を持ち越して鍵に入れる（本体の `f - $v` が差か、`$f` が `!_` と分かる値か）。
       if (addrOf(d) || zeroOf(d)) {
         descs.set(p.name, addrOf(d) ? (d.w ? { k: "A", addr: d.addr, w: d.w } : { k: "A", addr: d.addr }) : zeroDesc());
         keys.push(descKey(d));
@@ -4043,8 +4043,9 @@ function elementKind(node) {
 //   （'ptilde'（前の綴りの `~_`）は 2026-10-27 の R88 で無くなった。`~!_` は括った書いた void（前の綴りの `[_]`）と同じ plain の葉、R79）
 //   印と穴は位置で読みが決まる（§3.5、markStep・tryHole）ので、葉の desc は未知にしておく。決まった所でだけ A（印）か L（恒等射）にする。
 
-function classify(term, ctx) {
+function classify(term, ctx, fresh = false) {
   if (term.type === "infix") return classifyInfix(term, ctx);
+  if (!fresh && isStackedTerm(term) && ctx && ctx.F) return classifyStacked(term, ctx);
   const { pre, core, post } = term;
   const view = { v: "atom", text: writeTerm(term) };
   const plain = (desc, extra = {}) => ({ cat: "plain", desc, view, ...extra });
@@ -4092,6 +4093,9 @@ function classify(term, ctx) {
     const pd = pointedDesc(core, ctx);
     const d = refOf(pd);
     if (d) return plain({ k: "L", fn: dollarOpened(d.ref) }); // `$` で物にした括りの関数は、呼んだ実体の余る関数を見る（R75、dollarOpened）
+    // R78：x が印 zero の物（`!_` と分かる名前・括り・仮引数と、`!_` と分かる物に当てた `$` の項。`@w`・`@[$w]`・`@q`（`q : $w`）、R49）なら、`@` の先が `!_` なので、
+    // `@x` もそれと同じ `!_` と分かる値（印 zero）。置いた所の読みは `!_` と分かる名前を置いた時と同じ（classifyItems の isKnownUnitItem）。
+    if (zeroOf(pd)) return plain(zeroDesc());
     const v = vrefOf(pd);
     if (v) return plain(openSelfReader(v.vref, ctx));
     // 番地の算術で作った点・差（R62）を開く：ずらした点が指す物は、差が指す物の要素の幅の倍数かと一緒に型の段で決まるので、解決器の段では分からない。
@@ -4099,6 +4103,11 @@ function classify(term, ctx) {
     if (addrOf(pd)) throw refuseOpenAddress(writeTerm(term), pd);
     return { cat: "input", desc: { k: "L", fn: { type: "input" } }, view };
   }
+  // R78・R56：`@` の先が `$`・`@` を当てた項（`@$w`・`@$q`（`q : $w`）・未定義の名前の `@$typo`・`@$[$w]`・`@$(w < 3)`・`@@[$[$w]]`）で、その項が `!_` と分かる値
+  // （印 zero、R49）なら、`@` の先が `!_` なので、`@x` もそれと同じ `!_` と分かる値（印 zero）。前置の印は核に近い物から結ぶ（R57）ので、`@` の先は前置の印を1つ
+  // 外した項で、本体の classify で読む（zeroTail）。中身に書いた物の知らせは、その項を読んだ所で出す（R103）。先が `!_` と分からない物（関数の番地の `@$inc`・
+  // 値に当てた `$` の `@$vs`・`@@[$inc]`）は下の表に無い組み合わせ。
+  if (post.length === 0 && pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && core.c !== "indent" && zeroTail(term, 1, ctx)) return plain(zeroDesc());
   // 後置 `~`（撒く項）。
   if (pre.length === 0 && post.length === 1 && post[0] === "~") return classifySpread(term, view, ctx);
   // 前置 `~`（R79、2026-10-26。§5 Q14 の答え）：前置の印は単一の対象か括りの式にだけ係るので、`~x` は x を要素1つの List に持ち上げた物で、書いた
@@ -4110,9 +4119,16 @@ function classify(term, ctx) {
   // 2項以上の並びにあれば G4（§5 Q14 の残り）。→ 2026-10-27 の R88 で G4 を廃止し、`~!_` も括った書いた void（前の綴りの `[_]`）と同じ項にした（下の `~` の枝の注）。
   // `~$x`（2026-10-26 の確かめの直し）：前置の印は核に近い物から結ぶ（R53・R57）ので `~($x)`。`$x` は単一の対象（関数を指す番地か値を読む参照、R60）なので、
   // `[$x]` と同じ項（関数を値として持つ List を作るなら `$` を付ける、R75 の案内と同じ線）。前は前置の印2つの表に無い組み合わせで、未知（並びの中で G7）。
+  // `$` の後ろに印を重ねた `~$$x`・`~$-x` も、`$$x`・`$-x` が `$` の項で単一の対象なので、`[$$x]`・`[$-x]` と同じ項（`~$$w` は `[$$w]` で、`~w` と同じ読み、R56）。
   // ほかの印との組み合わせ（`~-5`・`~!x`・入力の `~@uart`）は今のまま表に無い組み合わせ（§5 Q14 の残り）。
-  if (post.length === 0 && pre.length === 2 && pre[0] === "~" && pre[1] === "$" && core.c !== "indent") {
-    const b = bracketInfo({ c: "bracket", rows: [{ type: "seq", terms: [{ type: "atom", pre: ["$"], core, post: [] }] }] }, ctx);
+  if (post.length === 0 && pre.length >= 2 && pre[0] === "~" && pre[1] === "$" && core.c !== "indent") {
+    const b = bracketInfo(liftedBracket(term), ctx);
+    return { cat: "plain", desc: b.desc, view: { ...view, inner: b.trees }, isQBracket: b.isQ };
+  }
+  // `~@x`（R79・R78）：`@x` が `!_` と分かる値（印 zero。`~@w`・`~@[$w]`）なら、`@x` は単一の対象なので、`~@x` は `[@x]` と同じ項（`~$x` と同じ線。`~w` と同じ読み）。
+  // 先の分からない `@x`（入力の `~@uart`）と関数を開いた `@x`（`~@[$inc]`）は、今のまま表に無い組み合わせ（§5 Q14 の残り）。
+  if (post.length === 0 && pre.length >= 2 && pre[0] === "~" && pre[1] === "@" && core.c !== "indent" && isZeroTail(term, 1, ctx)) {
+    const b = bracketInfo(liftedBracket(term), ctx);
     return { cat: "plain", desc: b.desc, view: { ...view, inner: b.trees }, isQBracket: b.isQ };
   }
   if (post.length === 0 && pre.length === 1 && pre[0] === "~") {
@@ -4135,7 +4151,11 @@ function classify(term, ctx) {
   // 括らない `_`：穴（その口の恒等射、§3.5）。読みは位置で決まる（口の中は穴：tryHole・holeRefusal、口の外は恒等射：holeStep、R44・R46）。
   if (post.length === 0 && pre.length === 1 && pre[0] === "!" && core.c === "unit") return { cat: "hole", desc: U(), view };
   // 値の演算子の印：A の核なら A、L・未知・`!_` の核なら未知（§2、Q22）。核が `_` なら識別子の id（下）。
-  if (pre.every((p) => VALUE_PREFIX.has(p)) && post.every((p) => p === "!")) {
+  // R56・R78：値の印（前置 `!`・`-`・`!!`）の後ろが `$`・`@` を当てた項で、その項が `!_` と分かる値（印 zero）なら、前置の印は核に近い物から結ぶ（R57）ので、
+  // 値の印はその項に係る（`!$w` は `!($w)`、`!@w` は `!(@w)`）。置いた所の読みは、同じ所に w を置いた `!w` と同じ（tail がその項の読み）。
+  const tailAt = pre.findIndex((p) => !VALUE_PREFIX.has(p));
+  const tail = tailAt > 0 && (pre[tailAt] === "$" || pre[tailAt] === "@") && !post.length && core.c !== "indent" ? zeroTail(term, tailAt, ctx) : null;
+  if (tail || (pre.every((p) => VALUE_PREFIX.has(p)) && post.every((p) => p === "!"))) {
     // 識別子の id（2026-11-09、R138）：括らずに書いた値の印（前置 `-`・`!!`、後置 `!`。重ねた `-_!`・`!!_!` も）の核の `_` は、名前の id（`i : _` の i）と同じに読む
     // （法則11）。内部では、書いた `_` はいちばん内側に前置 `!` を足した id（印 nId、tokenize の写し）なので、その `!` を外し、核を名前の恒等射と同じ desc にして、下の R87 の道
     // （関数に演算子を直接充てた解なしの `!_`。恒等射なので知らせない、R48 の線）へ渡す。葉は書いたまま（`-_ 5` は `(construct -_ 5)` の A）。前（片1 の写しの後）は、核の id を
@@ -4143,10 +4163,10 @@ function classify(term, ctx) {
     // 根拠：U [2026-11-09 13:18:07 2617ea04]「まず、-x とかなら括らない話は分かるけど、 -_ は括らないとポイントフリーとして認識できない。」「他方で括らないというなら、識別子が
     // 当たるよね。」、U [2026-11-09 13:22:43 8ce7b5d8]「前は _ 今は !_ で辻褄があったから、仕様変更をちゃんと追いかけて！」（仕様 R138 の識別子の id）。重ねた印へ当てたのは R。
     // ほかの位置の `_`（中置の被演算子・枝の条件・手続きの行・前置 `~`・`~$`・`@`・後置 `~` の印）へは広げない（R138。今の G7 と未知のまま）。
-    const idCore = core.c === "unit" && !!core.nId && pre.length > 0 && pre[pre.length - 1] === "!";
-    if (core.c === "unit" && !idCore) return plain(U());
-    const marks = idCore ? pre.slice(0, -1) : pre;
-    const inner = idCore ? { cat: "plain", desc: { k: "L", fn: { type: "id" } }, view: { v: "atom", text: "_" } } : classify({ type: "atom", pre: [], core, post: [] }, ctx);
+    const idCore = !tail && core.c === "unit" && !!core.nId && pre.length > 0 && pre[pre.length - 1] === "!";
+    if (!tail && core.c === "unit" && !idCore) return plain(U());
+    const marks = tail ? pre.slice(0, tailAt) : idCore ? pre.slice(0, -1) : pre;
+    const inner = tail || (idCore ? { cat: "plain", desc: { k: "L", fn: { type: "id" } }, view: { v: "atom", text: "_" } } : classify({ type: "atom", pre: [], core, post: [] }, ctx));
     // 核の view（括りなら解いた中の木 inner を持つ）を、印の付いた項の view にも置く（R97 の intTerm が `-(5)`・`!!(2 + 3)` の核を読む。2026-10-27 の片7 の確かめの直し）。
     view.coreView = inner.view;
     // 値の印（前置 `-`・`!!`・後置 `!`）は値の演算子：核が関数を指す番地なら G7、番地の点・差なら G21（R62、§5 Q66）、素の関数の裸の仮引数なら札に覚える（R60 の細かい所。
@@ -4163,12 +4183,98 @@ function classify(term, ctx) {
     // 数に値の印を当てても数（SCALAR の注）。ただし前置 `!` は外す：`!` を計算の `!_` に当てると書いた `_`（穴、§3.5）と同じ恒等射で、`!_` でない物に当てると
     // `!_` になる。だから `!x` は数にならず、x が `!_` になる物（`1 < 0`・`/ 0`）なら関数になる。数と読むと、
     // `f !(1 < 0)` の実体で `h 5` を黙って構築と読む。
-    return plain(isScalar(inner.desc) && !pre.includes("!") ? scalarDesc() : A());
+    return plain(isScalar(inner.desc) && !(tail ? marks : pre).includes("!") ? scalarDesc() : A());
   }
   // 後置 `@`（取り込み）・前置 `#`・表に無い印の組み合わせ（`@f~` など。`$` が前に付いた項は、印の組み合わせに依らず上の `$` の枝
   // classifyDollar で決める）は未知（§2、G7）。片イ（R120）から、その未知は並びの中でも G7 で断らず畳む（foldStep）。
   touchCore(core, ctx);
   return plain(U());
+}
+// `$`・`@` を重ねた項と、値の印・前置 `~` の後ろの `$`・`@` の項（前置の印が2つ以上で、`$` か `@` がある：`@$x`・`@@x`・`!$x`・`!@x`・`~@x`・`~$x`・`$$x`・`$$x~`）。
+const isStackedTerm = (t) => t.pre.length >= 2 && t.core.c !== "indent" && (t.pre.includes("$") || t.pre.includes("@"));
+// その項は、後ろの項が `!_` と分かる値かを読んで見て（zeroTail・isZeroTail。R56・R78・R79）、分からなければ表に無い組み合わせの所で核をもう一度読む（touchCore）。
+// 後ろの項の中に同じ形を入れ子にすると（`@$[@$[… 5] 5]`・`~@[inc !$[… 5] 5]`・`inc @$[… 5]`）、外の段を読むたびに中の段を読み直すので、読む数が深さの2乗で増える
+// （覗き読みでは段ごとに倍）。だから、同じ所（memoPlace・samePlace）で読み直すときは、先に読んだ答えを使う（resolveMarkedSeq と同じ覚え。表は memos.stacked）。
+function classifyStacked(term, ctx) {
+  const table = memos.stacked;
+  const st = memoStart(ctx);
+  const m = memoHit(table, term, st);
+  if (m) {
+    if (m.error) throw m.error;
+    return m.value;
+  }
+  let value;
+  try {
+    value = classify(term, ctx, true);
+  } catch (e) {
+    if (e instanceof OperationError && e.cycleFrom === undefined) memoKeep(table, term, st, { error: e });
+    throw e;
+  }
+  memoKeep(table, term, st, { value });
+  return value;
+}
+// 項 term の前置の印の k 番目から後ろと核と後置の印の項（前置の印は核に近い物から結ぶので、外の印 k 個の先、R57）。書いた項と k ごとに1つの写し（知らせを書いた
+// 項で1回にする所が、同じ項を読み直しても同じ写しを見る）。
+const TAIL_TERMS = new WeakMap();
+function tailTerm(term, k) {
+  let byK = TAIL_TERMS.get(term);
+  if (!byK) TAIL_TERMS.set(term, (byK = new Map()));
+  let t = byK.get(k);
+  if (!t) byK.set(k, (t = { type: "atom", pre: term.pre.slice(k), core: term.core, post: term.post }));
+  return t;
+}
+// 前置 `~` の項 term（`~$x`・`~@x`）と同じ括り `[$x]`・`[@x]` の核（R79）。書いた項ごとに1つ（中の `$x` の知らせを書いた項で1回にする。tailTerm と同じ）。
+const LIFTED_BRACKETS = new WeakMap();
+function liftedBracket(term) {
+  let b = LIFTED_BRACKETS.get(term);
+  if (!b) LIFTED_BRACKETS.set(term, (b = { c: "bracket", rows: [{ type: "seq", terms: [tailTerm(term, 1)] }] }));
+  return b;
+}
+// R56・R78：tailTerm(term, k) が `!_` と分かる値（印 zero、R49）なら、その項を ctx で読んだ答え（置いた所の読みに使う。中身に書いた物の知らせはこの読みで出す、
+// R103）。`!_` と分かる値でなければ null。isZeroTail は、`!_` と分かる値かだけを見る（読むのは呼んだ側）。
+function zeroTail(term, k, ctx) {
+  const seen = seeZeroTail(term, k, ctx);
+  if (!seen.zero) return null;
+  return seen.read || classify(tailTerm(term, k), ctx);
+}
+const isZeroTail = (term, k, ctx) => seeZeroTail(term, k, ctx).zero;
+// `!_` と分かる値かは、本体の classify で、知らせを出さずに（diag の無い ctx で）読んで見て、断りは `!_` と分からない側に数える。ctx に知らせの出し先が無ければ、
+// 見た読みがそのまま ctx の読みなので、それを返す（read）。読みの途中で、読みより前から解いている名前へ戻る輪に当たったら、その輪の断り（F.cycleRefused）は戻す
+// （emptyStreamTerm と同じ。断りは、表に無い組み合わせの読みのまま、行を解く所で出る）。
+// 見た答えは、同じ所（memoPlace・samePlace。知らせの出し先を除いた ctx で比べる）で見直すときに使う（memos.zeroTail）：後ろの項の中に同じ形を入れ子にすると
+// （`@$[@$[… 5] 5]`・`!$[inc !$[inc … 5] 5]`）、段ごとに、見る読みと、置いた所の読み（`!_` と分かれば ctx の読み、分からなければ表に無い組み合わせの touchCore）の
+// 2回中を読むので、段ごとに読む数が倍になる。覚えは速さのためだけの物で、答えは覚えに依らない（同じ所の見直しは同じ答え）。輪の断りの覚え（F.cycleRefused・
+// F.againRefused）に触れた読みは覚えない。覗き読み（peekRead）の間は、その覗き読みだけの表を使う。
+function seeZeroTail(term, k, ctx) {
+  const t = tailTerm(term, k);
+  const F = ctx.F;
+  const cx = { ...ctx, diag: null };
+  const table = memos.zeroTail;
+  const place = memoPlace(F, cx);
+  let list = table.get(t);
+  if (list && list[0].F !== F) list = null;
+  const m = list && list.find((r) => samePlace(r, place));
+  if (m) return { zero: m.zero, read: null };
+  const start = F.stack.length;
+  const cycle = F.cycleRefused;
+  const again = F.againRefused;
+  let keep = true;
+  let l = null;
+  try {
+    l = classify(t, cx);
+  } catch (e) {
+    if (!(e instanceof OperationError)) throw e;
+    if (e.cycleFrom !== undefined || F.cycleRefused !== cycle) keep = false;
+    if (F.cycleRefused !== cycle && F.cycleRefused && F.cycleRefused.cycleFrom < start) F.cycleRefused = cycle;
+  }
+  const zero = !!l && l.cat === "plain" && !!zeroOf(l.desc);
+  if (keep && F.cycleRefused === cycle && F.againRefused === again) {
+    list = table.get(t);
+    if (!list || list[0].F !== F) table.set(t, (list = []));
+    if (list.length >= MARKED_SEQ_KEEP) list.shift();
+    list.push({ ...place, zero });
+  }
+  return { zero, read: zero && !ctx.diag ? l : null };
 }
 
 // ---- `$` の先は1つの関数（R53・R54〜R57、G20） ----
@@ -4184,13 +4290,12 @@ function classify(term, ctx) {
 // - 後置の印（`~`・`!`・`@`）が付いた項（`$vs~`・`$inc~`・`$fs~`・`$inc!`・`$5!`・`$x@`・`$_~`）：`$` と後置の印のどちらが先に結ぶ読みでも、
 //   1つの関数と言い切れない（撒いた形は並びで、`!` は値の印、`@` は取り込み）。前（R53）は、核が関数か読みの先が門に当たる物（`$inc~`・`$fs~`・
 //   `$inc!`）を表に無い組み合わせの未知にして、根・`,` の辺・`:` の右辺では通していた（§5 Q55）。
-// - 書いた `!_` の `$!_`：`$[x ? !_]`（零射。何を受けても `!_` を返す1引数の関数）を物にした番地（R56）。指す関数の印（R49）は ZERO_FN。
-//   名前・括りを通して書いた `!_` を指す物（括った書いた void を `$` に渡した形（前の綴りの `$[_]`・`$[[_]]`）・`q : !_` ⏎ `$q`・`q : !_` ⏎ `$[q]`）も同じ（[x] ≅ x、`:` はメタで名前は右辺を指す。
-//   pointsToMark）。並びの中の `!_` は今までどおり余積の単位（R15）で、`!_` を `[x ? !_]` と読むのは `$` で物にする所だけ。`!_` を指すかは desc に
-//   入れず（入れると実体の鍵が見ない印が実体を跨いで分け合われる）、書いた所の木と名前の定義で見る。括りの関数の実体で仮引数に `!_` が
-//   渡った名前（`h : [s] ? $s` ⏎ `h [s : !_]`）は、渡された物の desc だけを見るので今のまま G20（断る側）。
+// - `!_` と分かる物の `$`（R56）：先が `!_` と分かる値（印 zero、R49）なら、`$` を当てた物も同じ `!_` と分かる値（印 zero）で、指す関数は無い。置いた所では先と同じに
+//   読む（並びの中と `,`・`|`・`;` の辺は単位律で消え、値の演算子の項は `!_`、`@` で開いても `!_`（R78）。法則54）。名前・括りを通して `!_` を指す物（`q : $w` ⏎ `$q`・
+//   `$[w]`・`$$w`・`$[$w]`・`$w~`）も、括りの関数の実体で仮引数に `!_` と分かる物が渡った名前（`h : [s] ? $s` ⏎ `h [s : w]`、R49）も同じ（[x] ≅ x、`:` はメタで
+//   名前は右辺を指す。pointsToMark）。書いた `!_` に直に当てた `$!_` は、読む段の書いた void の断り（R138）が先に当たる。
 // - `$_` は恒等射を物にした番地（今までどおり A）。U〔答え〕[2026-10-25 00:25 8dfc006e]「$!_ も同じ理屈で、$に渡せる。」。指す関数の印（R49）は
-//   1引数の恒等射 `[x ? x]`（ID1_FN。`$!_` が `[x ? !_]` の ZERO_FN なのと対）。恒等射の別名（`i : _` の `$i`、局所の `h : _` の `$h`、`$[i]`・
+//   1引数の恒等射 `[x ? x]`（ID1_FN）。恒等射の別名（`i : _` の `$i`、局所の `h : _` の `$h`、`$[i]`・
 //   `$[i , _]`）も同じ印（下の isRowIdentity。i 自身の種類は、R29 の並び全体を受ける恒等射のまま）。2026-10-25 の §5 Q56 の答え：主の Claude の問い
 //   「…Q56 は `$!_` が `[x ? x]` を指す、でいい？」（07:29 UTC）に U〔答え〕[2026-10-25 07:34 2772473e]「そうか分かった！ map : f [~l] ? [@f,] l~ に
 //   対して、 map $!_ .. と map $[!_] .. で分かれる。 安心した。」。`map $_ vs` は恒等射の写像で vs、`map $[!_] vs` は否定の写像（`[!_]` は否定の
@@ -4220,7 +4325,7 @@ function classify(term, ctx) {
 //   指す番地は今のまま G7。
 //   同じ日の確かめの直しから、形の見えない値で中身に関数か未知が見える物（枝で選ぶ括り `$[5 > 1 : inc]`、形の綴り `A(U)`）と、括りの関数の実体で
 //   渡された形の見えない値の名前（`h [s : _]`（前の綴り）の `$s`、§5 Q64。dollarNameTarget）は G20。→ 2026-10-26 の R63（§5 Q64 の答え）から、書いた `!_` と
-//   分かる値（印 zero）は零射の番地で通る。印の無い形の見えない値は今のまま G20。
+//   分かる値（印 zero）は `$` を当てても同じ `!_` と分かる値（R56）。印の無い形の見えない値は下の片8 の持ち上げた番地。
 //   根拠：U [2026-10-25 07:51 533071da]「よく考えるんだ。 / $ は Reader と Writer のための単なる接頭辞として、それが偶々アドレスを渡すと読むと同じ読みが
 //   出来るだけと読み替えるとおもしろいはずだ。」。主の Claude の問い「`$` を Reader と Writer を作る接頭辞と読み替えて、`$値` も参照として通す（Q54 は
 //   これで閉じる）、でいい？」（07:57 UTC）に、U〔答え〕[2026-10-25 08:37 533071da]「それで不都合が起きなければ。 / 細かい問題が起きるなら、もう一度
@@ -4233,7 +4338,7 @@ function classify(term, ctx) {
 //   関数の番地か値の番地の点かは決まらないので、`@` は印の無い前置 `@` と同じく先を読まず、値の演算子に置けば G21、撒けば R57 と同じ G20。警告は、実体で値と分かった所
 //   （括りの関数の実体で渡された形の見えない値）だけ出す。G20 に残るのは、後置の印と組んだ形（R57）・中で余る関数（R59・R75。中身の並びそのものの値の上に積まれた
 //   関数 `$[5 inc]` も）・書いた `,` の積（R101、単位律の後）と、先の名前の読みが決まらない所（括りの欄の名前の R54 の理由。§5 Q10・Q78）だけ。長さ 0 と分かる流れに
-//   後置の `~` を付けた形（`$[]~`・`$[[]~]`）は `[]~ = !_`（R84）で `$!_` と同じ零射の番地（R104、§5 Q75 (d)）。持ち上げの中身を解いている途中に、持ち上げより前から
+//   後置の `~` を付けた形（`$[]~`・`$[[]~]`）は `[]~ = !_`（R84）で `$!_` と同じ `!_` と分かる値（R104、R56）。持ち上げの中身を解いている途中に、持ち上げより前から
 //   解いている名前へ戻る輪は、持ち上げを通る輪で値の輪ではないので通す（R103。classifyDollar の輪の握りつぶし。輪の定義から定義の時に下ろす所が見えれば
 //   通さない、liftRingLowering）。
 //   根拠：U [2026-10-27 10:11 UTC 58a809c9]「$が関数以外のものを運んでいたら警告クラスだｗ」「…$は必ず持ち上げだと読んでごらん。 / 筋が通る」、U [10:24]「この段階で,が
@@ -4243,11 +4348,15 @@ function classify(term, ctx) {
 function classifyDollar(term, ctx, plain) {
   const { pre, core, post } = term;
   if (post.length) {
-    // R104：長さ 0 と分かる流れ（`$[]~`・`$!_~`・括った書いた void の流れ（前の綴りの `$[_]~`）・`e0 : []` の `$e0~`）は `[]~ = !_`（R84）なので `$!_`。ほかの後置の印は R57 の G20。
-    if (emptyStreamTerm({ type: "atom", pre: pre.slice(1), core, post }, ctx)) return plain({ k: "A", ref: ZERO_FN });
+    // R56・R57：長さ 0 と分かる流れ（`!_` と分かる名前の `w~`・`q~`（`q : $w`）・`[w]~`、R84）の `$` は、その流れと同じ `!_` と分かる値（印 zero）。`$` を重ねた
+    // `$$w~` も、どちらが先に結ぶ読みでも `!_` と分かる値で割れない（内の `$w~` が印 zero）。ほかの後置の印は R57 の G20 で、言い分は書いた項（`$$vs~`）を名指す
+    // （内の `$vs~` の G20 は、印 zero かを見る所の断りなので捕まえる。zeroTail）。
+    if (emptyStreamTerm(tailTerm(term, 1), ctx)) return plain(zeroDesc());
+    if (pre.length >= 2 && pre[1] === "$" && zeroTail(term, 1, ctx)) return plain(zeroDesc());
     throw refuseDollar(term, null, ctx, { where: "post" });
   }
-  if (pre.length === 1 && core.c === "unit") return plain({ k: "A", ref: ZERO_FN });
+  // 書いた `!_` の `$!_` は読む段の void-written が先に断る（R138）。ここに来ても、`!_` の `$` は R56 の `!_` と分かる値。
+  if (pre.length === 1 && core.c === "unit") return plain(zeroDesc());
   if (pre.length === 2 && pre[1] === "!" && core.c === "unit") return plain({ k: "A", ref: ID1_FN });
   // R103：持ち上げの中身を解いている途中で、持ち上げより前から解いている名前へ戻る輪（輪のいちばん下の枠が、ここに来る前から積まれている）は、持ち上げを通る輪。
   // 持ち上げは中身を評価しないので、値の輪ではない。輪を握りつぶし、中身はその輪の答えが出るまで分からない値を読む参照（印 selfOf、R73 の `$v` と同じ）で通す。
@@ -4289,8 +4398,8 @@ function classifyLift(term, ctx, plain) {
     // `$!_`、`$vs~` は R57 の G20）。前はここで外側の R57 として断り、`$[$[]~]` が `$[$_]`（前の綴り。値の持ち上げで警告）と割れた（確かめの指摘）。
     const marked = dollarFree(postMarkedInside(core));
     if (marked) {
-      // R104：中身が長さ 0 と分かる流れ1つ（`$[[]~]`・`$[!_~]`）なら、括った書いた void の `$`（前の綴りの `$[_]`）と同じ零射の番地（[x] ≅ x と `[]~ = !_`）。
-      if (emptyStreamTerm(marked, ctx)) return plain({ k: "A", ref: ZERO_FN });
+      // R56・R84：中身が長さ 0 と分かる流れ1つ（`$[w~]`・`$[[w]~]`）なら、[x] ≅ x で `$w~` と同じ `!_` と分かる値（印 zero）。
+      if (emptyStreamTerm(marked, ctx)) return plain(zeroDesc());
       throw refuseDollar(term, null, ctx, { where: "post", inner: marked });
     }
     const dead = [];
@@ -4302,7 +4411,7 @@ function classifyLift(term, ctx, plain) {
     const one = b.trees.length === 1 ? unitReduced(b.trees[0]) : null;
     const leafTerm = dollarFree(one && one.t === "leaf" && one.term && one.term.type === "atom" ? one.term : null);
     if (leafTerm && leafTerm.post.length) {
-      if (emptyStreamTerm(leafTerm, ctx)) return plain({ k: "A", ref: ZERO_FN }); // R104（`$[[]~ , _]` は `$[[]~]`）
+      if (emptyStreamTerm(leafTerm, ctx)) return plain(zeroDesc()); // R56・R84（`$[w~ w~]` は `$[w~]`）
       throw refuseDollar(term, null, ctx, { where: "post", inner: leafTerm });
     }
     if (one && one.kind && one.kind.k === "A" && one.kind.spread) throw refuseDollar(term, one.kind, ctx, { where: "spread" });
@@ -4318,7 +4427,7 @@ function classifyLift(term, ctx, plain) {
       throw refuseDollarProduct(term, els, ctx);
     }
     // 中身が名前1つに縮み、その名前が括りの関数の実体で渡された形の見えない値なら、`$名前` と同じ（`$[s , _]`・`$[!_ , s]` は `$s`。2026-10-26 の R63 の片で
-    // 見つけた：R60 の確かめの片は名前1つの綴り `$s`・`$[s]` だけを断り、縮む綴りは値を読む参照で通っていた。書いた `!_` と分かる値は下の zero で零射）。
+    // 見つけた：R60 の確かめの片は名前1つの綴り `$s`・`$[s]` だけを断り、縮む綴りは値を読む参照で通っていた。書いた `!_` と分かる値は下の zero で `!_` と分かる値）。
     // 2026-10-27 の片8 から、G20 でなく持ち上げた番地で通して警告する（R100。dollarNameTarget の opaque）。
     const oneName = one && one.t === "leaf" && one.term && one.term.type === "atom" && !one.term.pre.length && !one.term.post.length && one.term.core.c === "name" ? one.term.core.name : null;
     const opaque = !!oneName && instOpaqueName(oneName, ctx);
@@ -4336,12 +4445,16 @@ function classifyLift(term, ctx, plain) {
       int: () => (one ? !!intTree(one, ctx) : allScalar(b.trees, ctx)),
     };
   } else {
-    const atom = { type: "atom", pre: pre.slice(1), core, post: [] };
+    // `$` の先は、前置の印を1つ外した項（`$$vs` の `$vs`・`$-inc` の `-inc`。後置の印は上の classifyDollar が先に読むので無い）。書いた項ごとに1つの写し（tailTerm）
+    // なので、篩と本体の所で同じ項を読み直しても、先の項の知らせ（R100 の dollar-non-function・R87 の leftover-lambda）は書いた所で1つ。
+    const atom = tailTerm(term, 1);
     const inner = classify(atom, ctx);
     target = { kind: inner.cat === "plain" ? inner.desc : U(), int: () => !!intTerm(atom, inner.view, ctx) };
   }
   if (target.dead) throw refuseDollar(term, target.kind, ctx, { ...target, where: "dead" });
-  if (target.unit) return plain({ k: "A", ref: ZERO_FN });
+  // R56：先が `!_` と分かる物（印 zero の名前・括り・仮引数と、`$` を重ねた `$$w`・`$[$w]`、R49）なら、`$` の項はその物と同じ `!_` と分かる値（印 zero）で、知らせない。
+  // 置いた所の読みは、その物を置いた時と同じ（classifyItems の isKnownUnitItem。R112・R61・R137・R122）。
+  if (target.unit || zeroOf(target.kind)) return plain(zeroDesc());
   const kind = target.kind;
   // 撒いた形を指す名前（`w : vs~` の `$w`）は、`:` はメタで `$vs~` と同じ形なので、R57 と同じく G20。
   if (kind && kind.k === "A" && kind.spread) throw refuseDollar(term, kind, ctx, { ...target, where: target.where || "spread" });
@@ -4349,8 +4462,8 @@ function classifyLift(term, ctx, plain) {
   // 指すかが決まらない所なので、R99 の読み替えの外に置いた。寄せ1（R128）の前は、関数の本体の局所の名前の理由（入れ子の括りの中だけ・枝のある本体・隠し・同じ範囲に
   // 2つ・局所の `$` の輪・それを裸で書いた別名）もここだった。本体の行は何も定義しないので、`$名前` は本体の行を見ずに仮引数・ファイルの定義・未定義の名前を引く。
   if (target.where && NAME_UNDECIDED.has(target.where)) throw refuseDollar(term, kind, ctx, target);
-  // 括りの関数の実体で渡された形の見えない値（R63 の印の無い物）：実体では値と分かるので警告する（R100）。`!_` か `!_` でない値かは分からない（`$!_` は零射の番地、
-  // 値は値を読む参照で、`@f 1` の読みが割れる、§5 Q64）ので、持ち上げた番地（印 lift）で通す。前は G20。
+  // 括りの関数の実体で渡された形の見えない値（R63 の印の無い物）：実体では値と分かるので警告する（R100）。`!_` か `!_` でない値かは分からない（`!_` なら
+  // `!_` と分かる値、値なら値を読む参照で、`@f 1` の読みが割れる、§5 Q64）ので、持ち上げた番地（印 lift）で通す。
   // 2026-10-28 の片8 の確かめの直し：渡された物の中身に関数か未知が見える（形の綴り `A(U)`。枝で選ぶ括り `[5 > 1 : inc]`）なら、書いた所に直に置いた `$[5 > 1 : inc]`
   // と同じく関数かもしれないので知らせない（下の A(U) の枝と同じ）。前は実体を通すと「関数ではありません」と言い切り、包み方で知らせが割れた（確かめの指摘）。
   if (target.opaque) {
@@ -4387,7 +4500,7 @@ function reportLift(term, ctx, target, what) {
   const inner = writeTerm({ ...term, pre: term.pre.slice(1) });
   const opaque =
     what === "opaque"
-      ? `（括りの関数の実体で渡された値です。\`!_\` と分かる値なら零射 \`$[x ? !_]\` の番地（R56）で知らせませんが、形の見えない値はどちらか分からないので、\`@\` で開いても先を読みません。§5 Q64）`
+      ? `（括りの関数の実体で渡された値です。\`!_\` と分かる値なら同じ \`!_\`（R56）で知らせませんが、形の見えない値はどちらか分からないので、\`@\` で開いても先を読みません。§5 Q64）`
       : "";
   pushDiag(
     ctx,
@@ -4398,7 +4511,7 @@ function reportLift(term, ctx, target, what) {
 }
 
 // R104（2026-10-27 の片8、§5 Q75 (d)）：項 t（`$` を外した先）が、後置の `~` 1つで長さ 0 と分かる流れか（`[]~`・`!_~`・括った書いた void の流れ（前の綴りの `[_]~`）・`[[]]~`・`e0 : []` の `e0~`）。
-// `[]~ = !_~ = !_`（R84）なので、`$` で持ち上げれば `$!_` と同じ零射の番地。撒く項の読み（classifySpread）の数と isKnownEmpty で見る（classifyInfix の unitIfEmpty と同じ）。
+// `[]~ = !_~ = !_`（R84）なので、`$` を当てても `!_` と分かる値（R56）。撒く項の読み（classifySpread）の数と isKnownEmpty で見る（classifyInfix の unitIfEmpty と同じ）。
 // 撒く項に読めない物（関数・Reader を撒く形）は false（R57 の G20 のまま）。
 // 2026-10-28 の片8 の確かめの直し：撒く名前を解いている途中の輪に当たったら（`v : 1 , $v~`）、長さ 0 とは言えないので false。探りで作った輪の断り（F.cycleRefused）は
 // 戻す（探りの前から解いている名前へ戻る輪だけ。writtenProductRow と同じ）。前は戻さず、R57 の G20 を投げた後に resolve の最後が name-cycle で断り、輪の外の綴り
@@ -4559,9 +4672,6 @@ function postMarkedInside(core) {
   return !t.pre.length && t.core.c === "bracket" ? postMarkedInside(t.core) : null;
 }
 
-// `$!_` が指す関数（R56）：`[x ? !_]` の零射。口は1つで、何を受けても本体は書いた `!_`（印＝値、本体の根は A。`[x ? !_] 5` は A）。
-// 出どころ（idKey）は綴りの無い定数で、書いた `$[x ? !_]` とは実体の鍵が別になる（答えの木は同じ。法則18）。
-const ZERO_FN = { type: "plain", origin: "plain", n: 1, getBodyRoot: () => "A", idKey: "零射[x ? !_]" };
 // `$_`（と恒等射の別名の `$i`）が指す関数（§5 Q56 の答え、2026-10-25）：1引数の恒等射 `[x ? x]`。口は1つで、本体は受けた裸の仮引数（素の関数の
 // 裸の仮引数は A、本体の根は A。書いた `[x ? x]` と同じ）。出どころ（idKey）は綴りの無い定数で、書いた `$[x ? x]` とは実体の鍵が別になる（答えの
 // 木は同じ。法則18）。
@@ -4603,11 +4713,11 @@ function dollarNameTarget(name, ctx) {
   for (let s = ctx.scope; s; s = s.parent) {
     if (s.descs && s.descs.has(name)) {
       // 括りの関数の実体で渡された、形の見えない値（`h : [s] ? $s` ⏎ `h [s : !_]` の s・`[x ~xs]` で受けた `[un 5]` の要素・値を受けた裸の仮引数）：渡された
-      // 物が書いた `!_` なら R56 の零射の番地、ほかの値なら値を読む参照で、desc からはどちらか言い切れない（R56 の R の所が「断る側への割れ」として G20 に
+      // 物が書いた `!_` なら R56 の `!_` と分かる値、ほかの値なら値を読む参照で、desc からはどちらか言い切れない（R56 の R の所が「断る側への割れ」として G20 に
       // 残していた形。R60 の片で値を読む参照として通り、`rd1 $s 0` の実体が `(construct @f 1)` で、同じ `_` の `rd1 $_ 0` の `(apply @f 1)` と割れていた（前の綴り）。
       // 2026-10-25 の確かめの指摘、§5 Q64）。形の見える値（`{s:N}`・`[N…]`）と番地・参照は今のまま通す。
       // 2026-10-26 の R63（§5 Q64 の答え）：渡された物が書いた `!_` と分かっていれば（印 zero：欄の `[s : !_]`・`[s : un]`・前の綴りの `[s : [_]]`（欄に括った書いた void）、要素が全部 `!_` の
-      // List、`!_` を指す名前を受けた裸の仮引数）、`$!_` と同じ零射 `$[x ? !_]` の番地（`@f 1` は零射を当てた `!_` で、`!_ 1` の並びではない）。印の無い形の
+      // List、`!_` を指す名前を受けた裸の仮引数）、`$` を当てても同じ `!_` と分かる値（R56。`@f` も `!_`、R78）。印の無い形の
       // 見えない値は、今のまま `!_` か言い切れない（G20）。番地の算術で作った点・差（R62）は `!_` でないので、値を読む参照で通る。
       const d = s.descs.get(name);
       if (zeroOf(d)) return { kind: d, unit: true };
@@ -4917,7 +5027,7 @@ function selfReaderHolds(F, def) {
     const t = dollarNameTarget(def.name, ctx);
     if (t.self) return false;
     // 2026-10-27 の片8（R103）：持ち上げは中身を評価しないので、v を解き終えた種類が値でなくても（関数・未知・書いた `!_`・形の見えない値）、持ち上げだけを通る
-    // 輪は通す。木を残す段で `$v` を v の種類でふつうに読み直す（関数なら指す関数の印、値なら値を読む参照で R100 の警告、`!_` なら零射の番地）。`$v` そのものが断ら
+    // 輪は通す。木を残す段で `$v` を v の種類でふつうに読み直す（関数なら指す関数の印、値なら値を読む参照で R100 の警告、`!_` と分かる物なら `!_` と分かる値）。`$v` そのものが断ら
     // れる形（中で余る関数 R59・撒いた形 R57）は、その門の行の断り。前（R73）は値を読む参照の読みと合う v（値）だけを通し、ほかは name-cycle だった。
     if (t.dead || (t.kind && t.kind.k === "A" && t.kind.spread)) return "gate";
     return true;
@@ -5723,7 +5833,10 @@ function classifyInfix(term, ctx) {
     if (l.cat === "hole") throw refuseHole(`中置 \`${term.sym}\` の被演算子`);
     // 書いた `!_`（と長さ 0 の流れ）を名前で引けば、無い欄なので `!_`（R115。`un ' s`・`[] ' s` と同じ）。
     // 引く器の側に丸ごと残った関数（`inc ' 0`・`i ' 0`・`[inc] ' 0`）は、R87 で評価する所の `!_` なので、引いた値も `!_` と分かる値（印 zero、R49・R26）。
-    const desc = boxIsFunction(l) ? zeroDesc() : l.cat === "plain" ? lowerPick(l.desc, key, ctx) || pickDesc(l.desc, key) : l.cat === "unit" ? pickDesc(zeroDesc(), key) : U();
+    // R102：`!_` と分かる値の `$` の項（`$w`・`$q`・`$$w`、それを括り1つで包んだ物、R56）を字面の整数の鍵で引けば、`' 0` はその項そのもので、ほかの k は領域の外で、
+    // どちらも `!_` と分かる値（印 zero）。
+    const zeroLifted = l.cat === "plain" && !!zeroOf(l.desc) && key.int !== undefined && isDollarTerm(term.left);
+    const desc = boxIsFunction(l) || zeroLifted ? zeroDesc() : l.cat === "plain" ? lowerPick(l.desc, key, ctx) || pickDesc(l.desc, key) : l.cat === "unit" ? pickDesc(zeroDesc(), key) : U();
     return { cat: "plain", desc, view: { v: "infix", sym: term.sym, left: l.view, right: rawView(term.right) } };
   }
   const r = term.right ? unitIfEmpty(classify(term.right, ctx)) : null;
@@ -5794,6 +5907,14 @@ function zeroAnswerInfix(term, l, r) {
   if (!ZERO_ANSWER_STAGES.has(term.stage)) return false;
   const zero = (x) => x.cat === "unit" || (x.cat === "plain" && !!zeroOf(x.desc));
   return zero(l) || zero(r);
+}
+// 項 t が `$` の項（前置の印のいちばん外が `$`）か、それだけを1行で括った物（[x] ≅ x）か（R102 の `$x ' k` の左）。
+function isDollarTerm(t, depth = 0) {
+  if (!t || t.type !== "atom" || depth > 16) return false;
+  if (t.pre.length && t.pre[0] === "$") return true;
+  if (t.pre.length || t.post.length || t.core.c !== "bracket" || t.core.rows.length !== 1) return false;
+  const row = t.core.rows[0];
+  return !!row && row.type === "seq" && row.terms.length === 1 && isDollarTerm(row.terms[0], depth + 1);
 }
 // 段18 の引く器の側の項 x（classify の答え）が丸ごとの関数（恒等射・括った関数・部分適用も）か。入力の `@x`（cat "input"）と関数の番地（`$inc`、A）は入らない。
 const boxIsFunction = (x) => !!x && x.cat === "plain" && x.desc.k === "L";
@@ -6201,6 +6322,91 @@ function mouthsOf(fn) {
 // 行の木（括りとブロックの中の行も）なら、解く間、読む段の今の行（F.line）をその行にし、断りにその行を持たせる（R127 の書いた行、2026-11-06 の寄せ5。
 // 前は F.line がいちばん外の行か前もって解く定義の行のままだった）。スタックのため閉包を作らずに書く。
 function resolveTree(tree, ctx) {
+  if (ctx && ctx.F && isMarkedSeq(tree)) return resolveMarkedSeq(tree, ctx);
+  return resolveTreeAt(tree, ctx);
+}
+// 前置の印に `$`・`@` のある項1つの並び（`$w`・`$[…]`・`@[…]`・`~@w`（isMarkedZeroTerm）と、値の印の後ろの `!$w`・`!@[…]`）。単位になりうる綴りの篩
+// （mayBeUnit・spelledUnit）と、`!_` と分かる値かを見る所（zeroTail）は、それを解いて見て（R56・R78）、消えなければ同じ並びを本体の所でもう一度解く。中身に同じ篩が
+// 入れ子になると、段ごとに解く数が倍になる（`$[add 1 , $[add 1 , …]]` の深さ 12 で 0.2 秒、14 で 1 秒）。だから、同じ所（同じ F・同じ読みの ctx（sameCtx）・同じ行・
+// 同じ枠の積み（深さと頂）・同じ無名の本体の積み）で解き直すときは、先に解いた答えを使う。解く間に ctx の溜め（MEMO_ACCS）へ積んだ物は覚えておき、別の溜めで使う
+// ときは、その溜めへ同じ物を積む。輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物と、輪の断りは覚えない（断りを握りつぶして戻す所が、解き直しで
+// 同じ覚えを作る）。覚えの表は memos.seq（覗き読みの間は、その覗き読みだけの表。peekRead）。
+const MARKED_SEQ_KEEP = 8; // 1つの並び・項に覚える所の数（篩の所と、評価する所・`|` の辺など、同じ並びを違う ctx で解く所）
+const isMarkedSeq = (tree) => !!tree && tree.type === "seq" && tree.terms.length === 1 && tree.terms[0].type === "atom" && tree.terms[0].pre.some((p) => p === "$" || p === "@");
+// ctx の印のうち、偽のときに値を問わない物（読む所はどれも真偽だけを見る：`ctx.evaluate || false`・`!!ctx.delayed`・`!!ctx.bodyRoot`・`if (ctx.deferLeft)`・
+// `ctx.logicPlace && …`）。無い・null・false を同じに数える。
+const CTX_FLAG_KEYS = new Set(["evaluate", "delayed", "bodyRoot", "deferLeft", "logicPlace"]);
+// ctx の溜め：解く間に積むだけの列（`$[…]` の中で余った関数の ctx.dead・`|`・`;` の辺の後回しの知らせの ctx.deferLeft と ctx.evaluate.defer）。読みは決めない。
+const MEMO_ACCS = [(c) => c.dead, (c) => c.deferLeft, (c) => (c.evaluate ? c.evaluate.defer : null)];
+const isAcc = (k, j) => (j === undefined ? k === "dead" || k === "deferLeft" : k === "evaluate" && j === "defer");
+const sameSlot = (x, y, acc) => x === y || (acc && Array.isArray(x) && Array.isArray(y));
+// 2つの ctx が同じ読みを決めるか：どの印も同じ物（印の中の素の物（`{at, sym}` など）は、その中の物がどれも同じ）。溜めは、どちらにも列があれば同じに数える。
+// ctx は作った後に書き換えない（`{ ...ctx, … }` で作る）。
+function sameCtx(a, b) {
+  if (a === b) return true;
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const x = a[k];
+    const y = b[k];
+    if (sameSlot(x, y, isAcc(k))) continue;
+    if (CTX_FLAG_KEYS.has(k) && !x && !y) continue;
+    if (!x || !y || typeof x !== "object" || typeof y !== "object" || Array.isArray(x) || Array.isArray(y)) return false;
+    if (Object.getPrototypeOf(x) !== Object.prototype || Object.getPrototypeOf(y) !== Object.prototype) return false;
+    const kx = Object.keys(x);
+    if (kx.length !== Object.keys(y).length || kx.some((j) => !sameSlot(x[j], y[j], isAcc(k, j)))) return false;
+  }
+  return true;
+}
+// 覚えの所：同じ答えになる見直しの所（同じ F・同じ読みの ctx（sameCtx）・同じ行・同じ枠の積み（深さと頂）・同じ無名の本体の積み）。memos の3つの表で使う。
+function memoPlace(F, ctx) {
+  const depth = F.stack.length;
+  const cn = F.collectors.length;
+  return { F, ctx, depth, top: depth ? F.stack[depth - 1] : null, cn, ctop: cn ? F.collectors[cn - 1] : null, line: F.line };
+}
+const samePlace = (r, p) => r.F === p.F && r.depth === p.depth && r.top === p.top && r.cn === p.cn && r.ctop === p.ctop && r.line === p.line && sameCtx(r.ctx, p.ctx);
+// 覚えを引く前の、ctx で解き始める所の印：所と、ctx の溜め（MEMO_ACCS）とその長さと、輪の断りの覚え。
+function memoStart(ctx) {
+  const F = ctx.F;
+  const accs = MEMO_ACCS.map((f) => f(ctx) || null);
+  return { place: memoPlace(F, ctx), accs, lens: accs.map((a) => (a ? a.length : 0)), cycle: F.cycleRefused, again: F.againRefused };
+}
+// 表 table で、key を同じ所（st.place）で先に解いた答えの記録（無ければ null）。ctx の溜めが先に解いた時と別の列なら、その時に積んだ物を同じに積む。
+function memoHit(table, key, st) {
+  const list = table.get(key);
+  const m = list && list[0].F === st.place.F ? list.find((r) => samePlace(r, st.place)) : null;
+  if (!m) return null;
+  st.accs.forEach((a, i) => {
+    if (a && a !== m.accs[i]) a.push(...m.pushed[i]);
+  });
+  return m;
+}
+// 解いた答え rec（value か error）を覚える。輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物は覚えない。
+function memoKeep(table, key, st, rec) {
+  const F = st.place.F;
+  if (F.cycleRefused !== st.cycle || F.againRefused !== st.again) return;
+  let list = table.get(key);
+  if (!list || list[0].F !== F) table.set(key, (list = []));
+  if (list.length >= MARKED_SEQ_KEEP) list.shift();
+  list.push({ ...st.place, accs: st.accs, pushed: st.accs.map((a, i) => (a ? a.slice(st.lens[i]) : [])), ...rec });
+}
+function resolveMarkedSeq(tree, ctx) {
+  const table = memos.seq;
+  const st = memoStart(ctx);
+  const m = memoHit(table, tree, st);
+  if (m) {
+    if (m.error) throw m.error;
+    return m.value;
+  }
+  let value;
+  try {
+    value = resolveTreeAt(tree, ctx);
+  } catch (e) {
+    if (e instanceof OperationError && e.cycleFrom === undefined) memoKeep(table, tree, st, { error: e });
+    throw e;
+  }
+  memoKeep(table, tree, st, { value });
+  return value;
+}
+function resolveTreeAt(tree, ctx) {
   const l = tree && ctx && ctx.F ? rowTreeLine.get(tree) : undefined;
   if (l === undefined) return resolveTreeIn(tree, ctx);
   const F = ctx.F;
@@ -6618,7 +6824,13 @@ const zeroOrFn = (k) => k === "zero" || k === "fn";
 // - 門の断り（OperationError）と資源の守り（スタックの溢れ・合成の幅）も種類の未知（null）。G22 の判定には使わない（門は行を解く所で、いつもの順に出る）。
 // - 知らせは呼んだ側が捨てる列を渡す。素の関数の裸の仮引数の札（paramTag）には覚えない。
 // - F の覚え（実体の表・呼んだ所・作った数・守りと止めた所・旗・枠・覚えた答え・知らせを出した所・行ほか）は写して、終わったら中身を戻す。
+// - 同じ所で解き直す時の覚え（memos）は、その覗き読みだけの新しい表を使い、終わったら捨てて外の表に戻す（入れ子の覗き読みも自分の表を作る）。覗き読みの答えは
+//   外の表に入らず、外の表の答えも覗き読みでは使わない（覗き読みは実体を作らず、F を戻すので、外の読みと答えが違いうる）。
 let peeking = 0;
+// 同じ所で解き直す時の覚えの表（速さのためだけの物で、答えは覚えに依らない）：単位になりうる並び（resolveMarkedSeq）・`!_` と分かる値かを見た答え（seeZeroTail）・
+// `$`・`@` を重ねた項（classifyStacked）。
+const freshMemos = () => ({ seq: new WeakMap(), zeroTail: new WeakMap(), stacked: new WeakMap() });
+let memos = freshMemos();
 class PeekStop extends Error {}
 function snapshotF(F) {
   const saved = [];
@@ -6655,6 +6867,8 @@ function restoreF(F, saved) {
 }
 function peekRead(F, f) {
   const saved = snapshotF(F);
+  const outer = memos;
+  memos = freshMemos();
   peeking++;
   try {
     return f();
@@ -6663,6 +6877,7 @@ function peekRead(F, f) {
     throw e;
   } finally {
     peeking--;
+    memos = outer;
     restoreF(F, saved);
   }
 }
@@ -6861,10 +7076,15 @@ function writtenKinds(F) {
     if (isIdTerm(t)) return "fn";
     // 前置 `~` の1要素の List は書いた `[x]`（R79。[x] ≅ x で `~w` は `!_` と分かる値、`~inc` は関数）。
     if (pre.length === 1 && pre[0] === "~" && !post.length) return core.c === "indent" ? "other" : coreKind(core, cx);
+    // `~$x`・`~@x` は `[$x]`・`[@x]`（R79）：本体の読み（`!_` と分かる物に当てた `$`・印 zero の物に当てた `@` を持ち上げた `~$w`・`~@w` は `!_` と分かる値、R56・R78）。
+    if (pre.length >= 2 && pre[0] === "~" && (pre[1] === "$" || pre[1] === "@") && !post.length && core.c !== "indent") return peekTerm(t, cx);
     // 長さ 0 と分かる流れ（`w~`、R84）。
     if (!pre.length && post.length === 1 && post[0] === "~") return coreKind(core, cx) === "zero" ? "zero" : "other";
-    // 前置 `@`：本体の読み（関数の印のある番地を開けばその関数、R49・R78。先の分からない `@x` は入力の項で "other"）。
+    // 前置 `@`：本体の読み（関数の印のある番地を開けばその関数、印 zero の物を開けば `!_` と分かる値、R49・R78。先の分からない `@x` は入力の項で "other"）。
     if (pre.length === 1 && pre[0] === "@" && !post.length && (core.c === "name" || core.c === "bracket")) return peekTerm(t, cx);
+    // `$` の項と、`$`・`@` を重ねた `@$x`・`@@x`：本体の読み（`!_` と分かる物に当てた `$`（`$w`・`$[typo]`・`$w~`・`$$w`）と、その `@`（`@$w`・`@$[$w]`・`@@[$[$w]]`）は
+    // `!_` と分かる値、R56・R78。関数の番地（`$inc`）と値に当てた `$`（`$vs`）は "other"）。
+    if (pre[0] === "$" || (pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && !post.length)) return peekTerm(t, cx);
     return "other";
   };
   const coreKind = (core, cx) => {
@@ -7195,8 +7415,7 @@ function namesPattern(name, ctx, inDefault) {
 // 「0 × A ≅ 0 で `_`」は点の無い集合の圏の読みで、圏を取り違えていた）。消えるのは書いた `!_`（印）だけで、名前や括りを通した `!_`（`un : !_` の un・
 // 括った書いた void（前の綴りの `[_]`））は今までどおり閉じた1つの項（R56 の R の所と同じ、並びの中の前の綴りの `[_] 5` が `(construct [_] 5)` なのと揃える）。
 // 両方とも単位なら（R の所）：両方とも書いた `!_`（`!_ , !_`）は `!_`（どちらを残しても同じ葉）。`!_` と分かる値と恒等射（`w , _`・`_ , w`・`w , i`）は、
-// 2026-11-16（恒等射の片）から、恒等射が単位でないので `!_` の側だけが消え、恒等射が残る（`x : _ , w` の x は恒等射）。前は 2026-10-26 の R71（§5 Q61 の答え、
-// U〔答え〕[2026-10-25 21:56 c8ccdd69]「Q61 / _ に落としていい」）で `!_` に落としていた（`$[!_ , _]`（前の綴り）は零射の番地、R56）。
+// 恒等射が単位でないので `!_` の側だけが消え、恒等射が残る（`x : _ , w` の x は恒等射。2026-11-16 の恒等射の片）。
 //
 // R66（2026-10-26、§5 Q3 の答え）：左の被演算子が関数を含む余積の並びでも、その最後の項 x が、括りの関数 F（最後の仮引数が括り）の最後の括りに最初に入る
 // 項なら（F の前は値だけ、F の後ろは値だけで、その数が F の残りの口の数）、`F … x , R` は `F … (x , R)`：積で List を組んで、その口に渡す（`f 1 , 2 , 3` は
@@ -7412,6 +7631,9 @@ function zeroOperand(t) {
 // `,` の単位になりうる綴り（R61）：解いて単位（isUnitOperand）かを見る前の、綴りの篩。名前1つ（定義が `!_` と分かる値かもしれない、R137）と、書いた `!_` 1つ。
 // それどうしの `,` も。R137 から、単位になりうる綴りの1行の括り（括った書いた void（前の綴りの `(_)`））と、書いた `!_` だけの並び（`!_ !_`）も。`_` も篩は通る
 // （mayBeIdentity）が、2026-11-16（恒等射の片）から、解いた恒等射は単位に数えない。
+// R56・R78・R66：`$`・`@` を当てた項1つ（isMarkedZeroTerm：`$w`・`$[w]`・`$$w`・`$q`・`$w~`・`@w`・`@[$w]`・`@$w`・`~$w`・`~@w`）も、先が `!_` と分かる物なら、その物と
+// 同じ `!_` と分かる値で、置いた所の読みも同じ（R61 の 1 で先に消え、R66 はその後の鎖に当たる）。篩は綴りだけで、解いて単位かを見る所（isUnitOperand。項の
+// desc の印 zero で付く knownUnit）が、関数の番地（`$inc`）・値に当てた `$`（`$vs`）・恒等射の番地（`$_`）を消さない側に分ける。
 function mayBeUnit(tree) {
   if (!tree) return false;
   if (tree.type !== "seq") return tree.sym === "," && mayBeUnit(tree.left) && mayBeUnit(tree.right);
@@ -7419,6 +7641,9 @@ function mayBeUnit(tree) {
     const t = tree.terms[0];
     if (t.type === "atom" && !t.pre.length && !t.post.length && t.core.c === "unit") return true;
     if (t.type === "atom" && !t.pre.length && !t.post.length && t.core.c === "bracket" && t.core.rows.length === 1 && mayBeUnit(t.core.rows[0])) return true;
+    if (isMarkedZeroTerm(t)) return true;
+    // 前置 `~` の項（R79：`~x` は書いた `[x]` と同じ項）も、`[x]` と同じ篩（`~w` は `[w]`）。
+    if (t.type === "atom" && t.pre.length === 1 && t.pre[0] === "~" && !t.post.length && (t.core.c === "name" || (t.core.c === "bracket" && t.core.rows.length === 1 && mayBeUnit(t.core.rows[0])))) return true;
   }
   if (tree.terms.length >= 2 && tree.terms.every(isUnitTerm)) return true;
   return mayBeIdentity(tree);
@@ -7946,14 +8171,21 @@ function leadVanishes(x) {
 // どれも同じ。穴は !_ だけ。…」。前（R94 の片）は名前と名前を括った物を当てず、`inc un 5` は `(construct (apply inc un) 5)`、`inc [_] 5`（前の綴り）は `(apply inc 5)` で割れていた
 // （§5 Q75 (e)）。
 function isKnownUnitItem(t, leaf) {
-  // 段12〜22 の中置の項で、印 zero の物（R49：`w < 3`・`1 ~ inc`・`inc ' 0`・`0 @ inc`・`pw ' zz`）も、それを1行で括った物と同じに読む。
+  // 段12〜22 の中置の項で、印 zero の物（R49：`w < 3`・`1 ~ inc`・`inc ' 0`・`0 @ inc`・`pw ' zz`・`$w ' 0`）も、それを1行で括った物と同じに読む。
   if (t && t.type === "infix") return !!zeroOf(leaf.desc);
-  if (!t || t.type !== "atom" || t.post.length) return false;
+  if (!t || t.type !== "atom") return false;
+  // R56・R78：`!_` と分かる物に当てた `$` と、印 zero の物に当てた `@` の項（`$w`・`$[w]`・`$$w`・`$q`・`@w`・`@[$w]`・`@$w`。長さ 0 と分かる流れの `$w~` も）は、
+  // その物と同じ `!_` と分かる値で、置いた所の読みも同じ。先が `!_` と分かる物かは、項の desc の印 zero で見る（classifyDollar・classify の `@` の枝）。
+  if (isMarkedZeroTerm(t)) return !!zeroOf(leaf.desc);
+  if (t.post.length) return false;
   if (t.pre.length && !(t.pre.length === 1 && t.pre[0] === "~")) return false;
   if (t.core.c !== "name" && t.core.c !== "bracket") return false;
   const d = leaf.desc;
   return !!zeroOf(d) || isEmptyBracket(d);
 }
+// 項 t の前置の印のいちばん外が `$` か `@` の項（`$x`・`$$x`・`@x`・`@$x`・`@@x`・`$x~`）か。前置 `~` を付けた `~$x`・`~@x` は `[$x]`・`[@x]` と同じ括りの項（classify）。
+const isMarkedZeroTerm = (t) =>
+  !!t && t.type === "atom" && t.core.c !== "indent" && t.pre.length >= 1 && (t.pre[0] === "$" || t.pre[0] === "@" || (t.pre[0] === "~" && (t.pre[1] === "$" || t.pre[1] === "@"))) && (!t.post.length || (t.pre[0] === "$" && t.post.length === 1 && t.post[0] === "~"));
 // R94：書いた `[]` と、中身が連結の単位で詰まって `[]` になる書いた括り。List の中の書いた `!_` は連結の単位で消える（U〔答え〕[2026-10-26 11:35 c8ccdd69]「…[]~ = _~ = _
 // / [] = _ / をきちんと念頭に」）ので、括った書いた void（前の綴りの `[_]`）・`[!_ !_]` は `[]`。要素1つの括りは中身と同じ（[x] ≅ x）ので、`[[]]`・前の綴りの `[[_]]`・`([])` も `[]`。前置 `~` は書いた `[x]` と
 // 同じ項（R79・R88）なので、`~!_`・`~[]` も `[]`。名前（`e0 : []` の e0・`un : !_` の un）と名前を括った物（`[e0]`）は当てない：名前を通した `!_` は R63 の「`_` と分かる値」（前の綴り）
