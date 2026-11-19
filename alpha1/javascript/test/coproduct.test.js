@@ -4339,6 +4339,54 @@ law("`$`・`@` を重ねた項を2項以上の括りの中に深さ 160 まで�
 	}
 	return out;
 });
+// 読む段は、`$`・`@` を重ねた項（`@$x`・`~@x`・`!$x`・`@@x`）の後ろの項を、`!_` と分かる値かを見る読みと置いた所の読みで2回読み、`,` の辺の単位になりうる綴り
+// （括り・前置 `~` の括り）を、単位かを見る篩の読みと本体の読みで2回読む。同じ所の同じ項・辺の2回目は1回目と同じ答えなので、中に同じ形を入れ子にしても、読む段の時間は
+// 深さに対して指数で伸びない：後ろの項の括りの中に無名の関数を当てた形（`@$[[y ? X] 5]`）、`,` の鎖の真ん中に括りを置いた形（`(w , X , w)`）、`'` の区間を当てた並びと
+// `,` の辺の部分適用を当てた括り（`(w [' 0] X)`・`((add 1 , X) 5)`。本体の枝と既定値では、定義の所の G22 を決める書いた木の歩きもその形を読む）。1本 NEST_FAST_MS の上限を、
+// 深さ 8・10・12・14・16・20・40 で、行の根・本体の枝の値・既定値・`,` の鎖の辺の所で見る（上限を超えたら、それより深い所は見ない。直した時にこの試験の中で測って、
+// 1本いちばん長くて 50ms ほど、2184 本で 4 秒ほど）。答えも見る：いちばん内に `$w` を
+// 置いた形と w を置いた形、`$vs` を置いた形と `$[vs]` を置いた形は、綴りのほかは同じ木・種類・知らせ・断り（NEST_INNERS）。いちばん内の `$inc`・`@w`・`~$w` は時間だけを見る。
+const NEST_FAST_MS = 1000;
+law("後ろの項の括りに無名の関数を当てた `$`・`@` を重ねた項と、`,` の鎖の真ん中の括りと、区間と部分適用を当てた括りを深さ 40 まで入れ子にしても、速く、いちばん内の `$w` は w と、`$vs` は `$[vs]` と同じ", () => {
+	const out = [];
+	const W = ["pw : [a : 1]", "w : pw ' zz", "inc : x ? x + 1", "add : x y ? x + y", "vs : 1 , 2 , 3"];
+	const PLACES = [
+		["行の根", (s) => [s]],
+		["枝の値", (s) => ["f : x ?", `\tx > 0 : ${s}`, "\t7"]],
+		["既定値", (s) => ["gz :", "\t\tx", `\t\ty : ${s}`, "\t? x + y"]],
+		["`,` の鎖の辺", (s) => [`1 , ${s} , 2`]],
+	];
+	const LAMBDA_FORMS = ["@$[[y ? X] 5]", "~@[[y ? X] 5]", "!$[[y ? X] 5]", "@@[[y ? X] 5]", "@$[[y ? X]]", "@$[[y ? X y] 5]", "(inc @$[[y ? X] 5])"];
+	const COMMA_FORMS = ["(w , X , w)", "[w , X , w]", "(w , w , X , w)", "(w , [X] , w)", "~[w , X , w]", "(w , ~X , w)"];
+	const KIND_FORMS = ["(w [' 0] X)", "((add 1 , X) 5)"];
+	const SINGLES = ["$inc", "@w", "~$w"];
+	for (const form of [...LAMBDA_FORMS, ...COMMA_FORMS, ...KIND_FORMS]) {
+		const inners = [...NEST_INNERS, ...(COMMA_FORMS.includes(form) ? SINGLES.map((x) => [x]) : [])];
+		for (const [where, place] of PLACES) {
+			for (const [a0, b0, re] of inners) {
+				for (const d of [8, 10, 12, 14, 16, 20, 40]) {
+					const nest = (x) => {
+						for (let i = 0; i < d; i++) x = form.replace("X", () => x);
+						return x;
+					};
+					const label = `${where}の ${form}（いちばん内 ${a0}・深さ ${d}）`;
+					const a = nestRead(W, place(nest(a0)));
+					if (a.got.startsWith("例外")) out.push(`${label}：${a.got.slice(0, 160)}`);
+					const b = b0 ? nestRead(W, place(nest(b0))) : null;
+					if (b) {
+						const ta = a.got.replace(re, (m, p) => (typeof p === "string" ? p : "") + b0);
+						if (ta !== b.got) out.push(`${label}：${a0} ${a.got.slice(-120)}  ⇔  ${b0} ${b.got.slice(-120)}`);
+					}
+					if (a.ms > NEST_FAST_MS || (b && b.ms > NEST_FAST_MS)) {
+						out.push(`${label}：${a.ms}ms${b ? `・${b.ms}ms` : ""}`);
+						break;
+					}
+				}
+			}
+		}
+	}
+	return out;
+});
 
 // ---------------------------------------------------------------------------
 // R49〜R51（2026-10-24 に試しで入れ、2026-10-25 に決定）：番地は指す関数を運ぶ・`[F,]` の写像・撒いた並びは流れの1項

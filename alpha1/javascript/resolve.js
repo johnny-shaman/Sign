@@ -745,7 +745,14 @@ function writeRow(words) {
   return parts.join(" ");
 }
 
+// 書いた括り・囲み b（前段の語の列）の綴りは b だけで決まるので、書いた括りごとに1回綴る（入れ子の括りの項を読むたびに中まで綴ると、読む数×深さで伸びる）。
+const WRITTEN_BLOCKS = new WeakMap();
 function writeBlock(b) {
+  let s = WRITTEN_BLOCKS.get(b);
+  if (s === undefined) WRITTEN_BLOCKS.set(b, (s = writeBlockIn(b)));
+  return s;
+}
+function writeBlockIn(b) {
   const inner = b[1].map(writeRow).join(" ⏎ ");
   switch (BLOCK_TAG[b[0]]) {
     case "bracket":
@@ -1638,26 +1645,35 @@ function undefinedNameNotices(lines, F) {
 // （U〔答え〕[2026-10-29 12:18:19 32fe4b9c]「ガイドに戻す」）。前（2026-10-26 の R80）は、枝の無い本体の左が名前1つの `:` の行を局所の定義と読み、その名前を
 // 関数の範囲に数えていた（局所の名前の読みと隠しの見張り、localInfo・localDefsOf は寄せ1 で外した）。
 function scanLocals(tree, scope, F) {
-  if (!tree) return;
-  if (tree.type === "seq") return tree.terms.forEach((t) => scanLocalsTerm(t, scope, F));
-  if (tree.sym === "?") return;
-  if (tree.sym === ":") {
-    const n = singleBareName(tree.left);
-    if (n) {
-      if (!paramInChain(scope, n) && !F.defs.has(n) && (scope.field || !localInChain(scope.parent, n))) scope.locals.add(n);
-    } else scanLocals(tree.left, scope, F);
-    return scanLocals(tree.right, scope, F);
-  }
-  scanLocals(tree.left, scope, F);
-  scanLocals(tree.right, scope, F);
+  for (const n of colonNamesOf(tree)) if (!paramInChain(scope, n) && !F.defs.has(n) && (scope.field || !localInChain(scope.parent, n))) scope.locals.add(n);
 }
-function scanLocalsTerm(term, scope, F) {
+// 行 tree の中（入れ子の関数の本体を除く）で `:` の左に1語で置かれた名前を、書いた順に（scanLocals が範囲で選ぶ前の物）。綴りだけで決まるので、書いた行ごとに1回集める
+// （入れ子の括りを読むたびに中まで集めると、読む数×深さで伸びる）。
+const COLON_NAMES = new WeakMap();
+const NO_NAMES = [];
+function colonNamesOf(tree) {
+  if (!tree) return NO_NAMES;
+  let names = COLON_NAMES.get(tree);
+  if (names) return names;
+  const parts = [];
+  if (tree.type === "seq") tree.terms.forEach((t) => colonNamesOfTerm(t, parts));
+  else if (tree.sym === ":") {
+    const n = singleBareName(tree.left);
+    if (n) parts.push([n]);
+    else parts.push(colonNamesOf(tree.left));
+    parts.push(colonNamesOf(tree.right));
+  } else if (tree.sym !== "?") parts.push(colonNamesOf(tree.left), colonNamesOf(tree.right));
+  names = parts.some((p) => p.length) ? parts.flat() : NO_NAMES;
+  COLON_NAMES.set(tree, names);
+  return names;
+}
+function colonNamesOfTerm(term, parts) {
   if (!term) return;
   if (term.type === "infix") {
-    scanLocalsTerm(term.left, scope, F);
-    scanLocalsTerm(term.right, scope, F);
+    colonNamesOfTerm(term.left, parts);
+    colonNamesOfTerm(term.right, parts);
   } else if (term.core.rows) {
-    for (const r of term.core.rows) scanLocals(r, scope, F);
+    for (const r of term.core.rows) parts.push(colonNamesOf(r));
   }
 }
 function paramInChain(scope, name) {
@@ -4272,7 +4288,7 @@ function seeZeroTail(term, k, ctx) {
     list = table.get(t);
     if (!list || list[0].F !== F) table.set(t, (list = []));
     if (list.length >= MARKED_SEQ_KEEP) list.shift();
-    list.push({ ...place, zero });
+    list.push({ ...memoRecord(place), zero });
   }
   return { zero, read: zero && !ctx.diag ? l : null };
 }
@@ -6322,17 +6338,28 @@ function mouthsOf(fn) {
 // 行の木（括りとブロックの中の行も）なら、解く間、読む段の今の行（F.line）をその行にし、断りにその行を持たせる（R127 の書いた行、2026-11-06 の寄せ5。
 // 前は F.line がいちばん外の行か前もって解く定義の行のままだった）。スタックのため閉包を作らずに書く。
 function resolveTree(tree, ctx) {
-  if (ctx && ctx.F && isMarkedSeq(tree)) return resolveMarkedSeq(tree, ctx);
+  if (ctx && ctx.F && (isMarkedSeq(tree) || isSieveBracket(tree))) return resolveMarkedSeq(tree, ctx);
   return resolveTreeAt(tree, ctx);
 }
-// 前置の印に `$`・`@` のある項1つの並び（`$w`・`$[…]`・`@[…]`・`~@w`（isMarkedZeroTerm）と、値の印の後ろの `!$w`・`!@[…]`）。単位になりうる綴りの篩
-// （mayBeUnit・spelledUnit）と、`!_` と分かる値かを見る所（zeroTail）は、それを解いて見て（R56・R78）、消えなければ同じ並びを本体の所でもう一度解く。中身に同じ篩が
-// 入れ子になると、段ごとに解く数が倍になる（`$[add 1 , $[add 1 , …]]` の深さ 12 で 0.2 秒、14 で 1 秒）。だから、同じ所（同じ F・同じ読みの ctx（sameCtx）・同じ行・
-// 同じ枠の積み（深さと頂）・同じ無名の本体の積み）で解き直すときは、先に解いた答えを使う。解く間に ctx の溜め（MEMO_ACCS）へ積んだ物は覚えておき、別の溜めで使う
-// ときは、その溜めへ同じ物を積む。輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物と、輪の断りは覚えない（断りを握りつぶして戻す所が、解き直しで
-// 同じ覚えを作る）。覚えの表は memos.seq（覗き読みの間は、その覗き読みだけの表。peekRead）。
+// 前置の印に `$`・`@` のある項1つの並び（`$w`・`$[…]`・`@[…]`・`~@w`（isMarkedZeroTerm）と、値の印の後ろの `!$w`・`!@[…]`）と、単位になりうる綴りの括り1つの並び
+// （`(w , X , w)`・`[X]`・`~[w , X]`。isSieveBracket）。単位になりうる綴りの篩（mayBeUnit・spelledUnit・vanishedSeq の idOf・unitRest・writtenUnit・resolveProduct の残る辺）と、
+// `!_` と分かる値かを見る所（zeroTail）は、それを解いて見て（R56・R78・R61）、消えなければ同じ並びを本体の所でもう一度解く。中身に同じ篩が入れ子になると、段ごとに解く数が
+// 倍になる（`$[add 1 , $[add 1 , …]]`・`(w , (w , … , w) , w)`）。だから、同じ所（同じ F・同じ読みの ctx（sameCtx）・同じ行・同じ枠の積み（深さと頂）・同じ無名の本体の積み
+// （memoPlace））で解き直すときは、先に解いた答えを使う。解く間に ctx の溜め（MEMO_ACCS）へ積んだ物は覚えておき、別の溜めで使うときは、その溜めへ同じ物を積む。
+// 輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物と、輪の断りと、書いた所を持たない知らせ（loudPushes）を出した物は覚えない（断りを握りつぶして戻す所が、
+// 解き直しで同じ覚えを作る。書いた所を持たない知らせは、解き直すと同じ物がもう一度出る）。覚えの表は memos.seq（覗き読みの間は、その覗き読みだけの表。peekRead）。
 const MARKED_SEQ_KEEP = 8; // 1つの並び・項に覚える所の数（篩の所と、評価する所・`|` の辺など、同じ並びを違う ctx で解く所）
 const isMarkedSeq = (tree) => !!tree && tree.type === "seq" && tree.terms.length === 1 && tree.terms[0].type === "atom" && tree.terms[0].pre.some((p) => p === "$" || p === "@");
+// 括り（前置 `~` の括りも）1つの並びで、単位になりうる綴り（mayBeUnit）の物。綴りだけで決まるので、書いた並びごとに1回見る。
+const SIEVE_BRACKETS = new WeakMap();
+function isSieveBracket(tree) {
+  if (!tree || tree.type !== "seq" || tree.terms.length !== 1 || tree.terms[0].type !== "atom" || tree.terms[0].core.c !== "bracket") return false;
+  let v = SIEVE_BRACKETS.get(tree);
+  if (v === undefined) SIEVE_BRACKETS.set(tree, (v = mayBeUnit(tree)));
+  return v;
+}
+// 書いた所（at）を持たないので解き直すたびに出る知らせ（reportLeftover）を出した数。覚えは、解く間にこれが増えた答えを覚えない。
+let loudPushes = 0;
 // ctx の印のうち、偽のときに値を問わない物（読む所はどれも真偽だけを見る：`ctx.evaluate || false`・`!!ctx.delayed`・`!!ctx.bodyRoot`・`if (ctx.deferLeft)`・
 // `ctx.logicPlace && …`）。無い・null・false を同じに数える。
 const CTX_FLAG_KEYS = new Set(["evaluate", "delayed", "bodyRoot", "deferLeft", "logicPlace"]);
@@ -6357,17 +6384,34 @@ function sameCtx(a, b) {
   return true;
 }
 // 覚えの所：同じ答えになる見直しの所（同じ F・同じ読みの ctx（sameCtx）・同じ行・同じ枠の積み（深さと頂）・同じ無名の本体の積み）。memos の3つの表で使う。
+// 無名の本体の積み（F.collectors、beginCollect）は、同じ頂の積みか、どの本体もまだ依りを覚えていない（deps・cyc が空）積みどうしで、積んだ所（start）と名指し（label）が
+// 段ごとに同じなら同じ積み：本体の依りは、解いている途中の枠を読んだ所（addCycle）でだけ足され、足せば空でなくなるので、依りの空な積みの上の読みは、積みの物に依らず
+// 積んだ所と名指しだけで決まる（pendingNow も空の依りを読む）。だから、依りの空な積みの上で読み始めて読み終えた時も空だった答え（memoRecord の quiet）は、同じ形の別の
+// 積み（同じ無名の関数を同じ所でもう一度読んで作った積み）の上でも使う。
 function memoPlace(F, ctx) {
   const depth = F.stack.length;
   const cn = F.collectors.length;
   return { F, ctx, depth, top: depth ? F.stack[depth - 1] : null, cn, ctop: cn ? F.collectors[cn - 1] : null, line: F.line };
 }
-const samePlace = (r, p) => r.F === p.F && r.depth === p.depth && r.top === p.top && r.cn === p.cn && r.ctop === p.ctop && r.line === p.line && sameCtx(r.ctx, p.ctx);
-// 覚えを引く前の、ctx で解き始める所の印：所と、ctx の溜め（MEMO_ACCS）とその長さと、輪の断りの覚え。
+const quietCollectors = (cs) => cs.every((c) => !c.deps.size && !c.cyc.size);
+// 記録 r の積みと、今の所 p（今の F.collectors）の積みが同じか。
+function sameCollectors(r, p) {
+  if (r.ctop === p.ctop) return true;
+  const cs = p.F.collectors;
+  if (!r.quiet || !quietCollectors(cs)) return false;
+  return r.cs.every((c, j) => c === cs[j] || (c.start === cs[j].start && c.label === cs[j].label));
+}
+const samePlace = (r, p) => r.F === p.F && r.depth === p.depth && r.top === p.top && r.cn === p.cn && r.line === p.line && sameCollectors(r, p) && sameCtx(r.ctx, p.ctx);
+// 覚える記録の所：所 p と、読み終えた時の無名の本体の積みの写しと、その積みのどの本体も依りを覚えていないか。
+function memoRecord(p) {
+  const cs = p.F.collectors;
+  return { ...p, cs: cs.slice(), quiet: quietCollectors(cs) };
+}
+// 覚えを引く前の、ctx で解き始める所の印：所と、ctx の溜め（MEMO_ACCS）とその長さと、輪の断りの覚えと、書いた所を持たない知らせの数。
 function memoStart(ctx) {
   const F = ctx.F;
   const accs = MEMO_ACCS.map((f) => f(ctx) || null);
-  return { place: memoPlace(F, ctx), accs, lens: accs.map((a) => (a ? a.length : 0)), cycle: F.cycleRefused, again: F.againRefused };
+  return { place: memoPlace(F, ctx), accs, lens: accs.map((a) => (a ? a.length : 0)), cycle: F.cycleRefused, again: F.againRefused, loud: loudPushes };
 }
 // 表 table で、key を同じ所（st.place）で先に解いた答えの記録（無ければ null）。ctx の溜めが先に解いた時と別の列なら、その時に積んだ物を同じに積む。
 function memoHit(table, key, st) {
@@ -6379,14 +6423,14 @@ function memoHit(table, key, st) {
   });
   return m;
 }
-// 解いた答え rec（value か error）を覚える。輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物は覚えない。
+// 解いた答え rec（value か error）を覚える。輪の断りの覚え（F.cycleRefused・F.againRefused）が解く間に変わった物と、書いた所を持たない知らせを出した物は覚えない。
 function memoKeep(table, key, st, rec) {
   const F = st.place.F;
-  if (F.cycleRefused !== st.cycle || F.againRefused !== st.again) return;
+  if (F.cycleRefused !== st.cycle || F.againRefused !== st.again || loudPushes !== st.loud) return;
   let list = table.get(key);
   if (!list || list[0].F !== F) table.set(key, (list = []));
   if (list.length >= MARKED_SEQ_KEEP) list.shift();
-  list.push({ ...st.place, accs: st.accs, pushed: st.accs.map((a, i) => (a ? a.slice(st.lens[i]) : [])), ...rec });
+  list.push({ ...memoRecord(st.place), accs: st.accs, pushed: st.accs.map((a, i) => (a ? a.slice(st.lens[i]) : [])), ...rec });
 }
 function resolveMarkedSeq(tree, ctx) {
   const table = memos.seq;
@@ -6906,9 +6950,11 @@ function writtenKinds(F) {
   const defKinds = new Map();
   const defOpen = new Map(); // 右辺を見ている途中の名前 → 見始めた深さ
   let defLow = Infinity; // 今見ている右辺の中でまた引いた、見ている途中の名前のいちばん浅い深さ
+  let openHits = 0; // 見ている途中の名前をまた引いた数（once が、輪に依らない答えかを見る）
   const defKind = (def) => {
     if (defKinds.has(def)) return defKinds.get(def);
     if (defOpen.has(def)) {
+      openHits++;
       defLow = Math.min(defLow, defOpen.get(def));
       return "other";
     }
@@ -7052,7 +7098,25 @@ function writtenKinds(F) {
     if (left.length === 1 && (left[0] === "other" || kinds[kinds.length - 1] !== "zero")) return left[0];
     return r ? peekRow(r, cx) : "other";
   };
-  const row = (t, cx) => {
+  // 書いた木 t を範囲 cx で見た種類（row・term）は、t と範囲（引く名前の定義と、覗き読みの範囲 cx.scope）だけで決まるので、同じ木を同じ範囲でもう一度見る時は先に見た
+  // 種類を使う（区間を開くかを見る所（openSection・soleSection）と並びの項の種類が同じ項・辺を見るので、入れ子の段ごとに見る数が倍になる）。見ている途中の名前に
+  // 当たった種類（輪の "other"、openHits）は、その名前を見ている間だけの物なので覚えない。
+  const once = (f) => {
+    const seen = new WeakMap(); // 木 → 範囲 → 種類
+    return (t, cx) => {
+      if (!t) return f(t, cx);
+      let byScope = seen.get(t);
+      if (byScope && byScope.has(cx.scope)) return byScope.get(cx.scope);
+      const hits = openHits;
+      const k = f(t, cx);
+      if (openHits === hits) {
+        if (!byScope) seen.set(t, (byScope = new Map()));
+        byScope.set(cx.scope, k);
+      }
+      return k;
+    };
+  };
+  const row = once((t, cx) => {
     if (!t) return "other";
     if (t.type === "seq") return t.terms.length === 1 ? term(t.terms[0], cx) : seqKind(t.terms, cx, t);
     if (!t.left || !t.right) return "other";
@@ -7060,8 +7124,8 @@ function writtenKinds(F) {
     if (R48_ROW_SYMS.has(t.sym)) return zeroOrFn(row(t.left, cx)) || zeroOrFn(row(t.right, cx)) ? "zero" : "other";
     if (t.sym === "#") return zeroOrFn(row(t.left, cx)) ? "zero" : "other"; // `#` の左は書く場所（R87）。右（書き込む値、R116）は数えない
     return "other"; // `:`・`?`・改行
-  };
-  const term = (t, cx) => {
+  });
+  const term = once((t, cx) => {
     if (!t) return "other";
     if (t.type === "infix") {
       if (!t.left || !t.right) return "other";
@@ -7086,7 +7150,7 @@ function writtenKinds(F) {
     // `!_` と分かる値、R56・R78。関数の番地（`$inc`）と値に当てた `$`（`$vs`）は "other"）。
     if (pre[0] === "$" || (pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && !post.length)) return peekTerm(t, cx);
     return "other";
-  };
+  });
   const coreKind = (core, cx) => {
     if (core.c === "name") return nameKind(core.name, cx);
     if (core.c === "unit") return core.nVoid ? "zero" : "other"; // 書いた `!_`（読む段の void-written が先に断る）
@@ -7702,6 +7766,17 @@ function makeLambda(op, ctx) {
   }
   return { params, scope };
 }
+// 書いた `?` op を外の範囲 ctx.scope の上で読む時の範囲（makeLambda）。同じ op を同じ外の範囲の上で読み直す時は同じ範囲：範囲は書いた `?` と外の範囲だけで決まり、
+// 作った後に書き換えない（括りの関数の実体の範囲は instScope が別に作って書き足す）ので、同じ物を使えば、本体の中の同じ所の読み直し（memoPlace の ctx.scope）が
+// 同じ所に数えられる。
+const LAMBDA_SCOPES = new WeakMap(); // 書いた `?` → 外の範囲 → makeLambda の答え
+function lambdaIn(op, ctx) {
+  let byScope = LAMBDA_SCOPES.get(op);
+  if (!byScope) LAMBDA_SCOPES.set(op, (byScope = new WeakMap()));
+  let lam = byScope.get(ctx.scope);
+  if (!lam) byScope.set(ctx.scope, (lam = makeLambda(op, ctx)));
+  return lam;
+}
 
 // G16（R33、§5 Q21 の答え）：`?` で作る関数の本体の根が裸の関数（L）。関数を返すなら `$` を明示する（U 09-11 23:58「関数を返す
 // 関数なら、$は明示というルール」、U 10-21 12:50「adder が返すべきは [+ m] じゃなくて $[+ m]」。U〔答え〕10-21 15:58：書く人が `$` を
@@ -7795,7 +7870,7 @@ function resolveLambda(op, ctx) {
       inDefault.row ? rowTreeLine.get(inDefault.row) : undefined
     );
   }
-  const lam = makeLambda(op, ctx);
+  const lam = lambdaIn(op, ctx);
   const named = ctx.F.namedLambdas.has(op);
   // 無名の素の関数は、本体を解く間に引いた仮置きを覚える（collectedRoot の注）。
   const col = lam.params.plain && !named ? beginCollect(ctx.F, `無名の関数 \`[${cutShape(writeTree(op))}]\` の本体`) : null;
@@ -8556,7 +8631,7 @@ function reportLeftover(tree, ctx, at = null, why = null) {
   if (at && ctx.F) {
     if (ctx.F.reportedLeft.has(at)) return;
     ctx.F.reportedLeft.add(at);
-  }
+  } else loudPushes++;
   const name = show(tree);
   pushDiag(
     ctx,
