@@ -16,10 +16,11 @@
 | parseParams（851）・bracketParamOf（1016） | 仮引数の並びを読み、括りの仮引数を素直な括り（1行・裸の名前・末尾にだけ `~rest`）とそれ以外に分ける | R24・R64 | 4 |
 | resolveLambda（6968）・makeLambda（6884） | `?` で関数を作る。外の仮引数は範囲の親（parent）で読む | §1.2 P3・§2 | 4 |
 | patternNode（7083） | 括りの関数の節を作り、呼ばれない本体は `(defer …)` のまま置く | R25 | 3 |
-| classify（4002）・A（1676）・U（1677） | 葉ごとに種類と desc を付ける。`@x` は ref なら指す関数、vref なら指す値。括らない `_` は cat hole | §2・R78 | 11・17・29 |
+| classify（4046）・A（1712）・U（1713） | 葉ごとに種類と desc を付ける。`@x` は ref なら指す関数、vref なら指す値、印 zero なら同じ印 zero の値。括らない `_` は cat hole | §2・R78 | 11・17・29・54 |
+| classifyStacked（4198）・tailTerm（4219）・liftedBracket（4228）・zeroTail（4235）・seeZeroTail（4248） | `$`・`@` を重ねた項（`@$x`・`@@x`・`~$x`・`~@x`・`!$x`）は、後ろの項（書いた項ごとに1つの写し）が印 zero ならその印 zero の値。`~$x`・`~@x` は `[$x]`・`[@x]` と同じ項 | R56・R57・R78・R79 | 54・55 |
 | lookup（2386） | 名前を範囲で引く。裸の仮引数は使う回数に依らず A（素の関数なら札 pv 付き）。取り込みの範囲の外の定義の無い名前は印 zero（`w : pw ' zz` の w と同じ、R21） | §2・R21 | 4・28・52 |
 | undefinedNameNotices（1540） | 見える範囲に定義の無い名前を、書いた所ごとに warning の name-undefined で知らせる（呼ばない本体・解かない所も。取り込みのある範囲は P2） | R21 | 52 |
-| classifyDollar（4199）・pointedDesc（5569）・openSelfReader（4631）・dollarOpened（5125） | `$` の持ち上げと先の印（関数の番地・値を読む参照・lift・零射の番地）、先の分かる `@` の下ろし | R49・R56・R57・R78・R99・R100 | 17・18・29 |
+| classifyDollar（4348）・pointedDesc（5732）・openSelfReader（4783）・dollarOpened（5288）・classifyLift（4388）・reportLift（4496） | `$` の持ち上げと先の印（関数の番地・値を読む参照・lift・印 zero の値）、先の分かる `@` の下ろし | R49・R56・R57・R78・R99・R100 | 17・18・29・54・55 |
 | classifySpread（5737）・isSpreadNode（1890） | 後置 `~` の項を流れの1項にする。器の中身に関数か未知が見えれば G7 | R51・§6.2 G7 | 15・19 |
 | pointfreeOf（5926）・mapPointfree（6068） | 1行の括りの点なし（区間・席・席の写像・畳む2項・畳まない2項・貪欲な単項・`[F,]`・段18）の関数を作る | R31・R32・R35・R41・R50・R77・R95 | 1・5・7・10・15・21・31 |
 | pickKeyOf（1981）・lowerPick（1997）・pickDesc（2009）・classifyInfix（5654） | `x ' k` の鍵（字面の整数と裸の名前）と引いた物の desc。構造体に無い欄は `!_`（zeroDesc）、数から引けば未知、`$x ' 0` は x | R26・R77・R102・R115 | 1・3・37 |
@@ -52,11 +53,11 @@
 | markSaturated（9139） | 口が全部埋まった関数を値にする（余りは foldStep が後ろに積む） | R35 | 7 |
 | renderEntry（9187） | 適用・合成の木を書く（実引数が2つ以上なら構築、合成の子は開く） | R8・R47 | 4・7 |
 | noteExcess（8421）・excessLength（8455） | `~rest` の無い括りの仮引数に長い List が来た所の bracket-excess | §6.2 | 2・16・23 |
-| resolveProduct（6716）・productOperand（6773）・vanishedSeq（6783） | `,` の辺を辺の中で左から畳み、恒等射と `!_` と分かる辺を単位として消す（恒等射かは辺ごとに見る） | R19・R61・R121・R137 | 12・23 |
+| resolveProduct（7463）・productOperand（7523）・vanishedSeq（7534）・mayBeUnit（7637） | `,` の辺を辺の中で左から畳み、恒等射と `!_` と分かる辺を単位として消す（恒等射かは辺ごとに見る）。印 zero の `$`・`@` の項と `~w` も、単位になりうる綴りとして篩う | R19・R61・R121・R137 | 12・23・54 |
 | productIntoRefPort（6691）・commaItems（1901）・listShapeOf（1893） | 最後の口が参照の口なら `F … x , R` を `F … (x , R)` として渡す | R64・R66 | 23 |
 | finishTrees（7644）・leftoverUnit（7669）・reportLeftover（7689）・fillDefaults（8080） | 積み上げを構築の節にする。評価する所に残った口の開いた関数は `(unit …)` で `!_` にして leftover-lambda、既定値の口だけが開いた部分適用は既定値で埋める | R42・R47・R48・R52・R76・R107 | 5・7・24・41 |
 | bareReturnUnit（7509） | 本体の返す所の裸の関数を `!_` にして bare-function-return | R125 | 26 |
-| writtenKinds（6670）・unitRowRefusals（6911）・peekRead（6656） | 本体の枝の条件と値・既定値の行の項の種類を書いた木で決め、印 zero なら G22。部分の項は本体の読みを実体を作らずに覗いて借り（知らせは捨て、F は写して戻す）、R48 の演算子・段18 の器の側・並びと鎖の読みを重ねる。名前の種類は右辺の書いた木の種類 | R128・R139・R49・R137 | 52 |
+| writtenKinds（6885）・unitRowRefusals（7131）・peekRead（6868） | 本体の枝の条件と値・既定値の行の項の種類を書いた木で決め、印 zero なら G22。部分の項は本体の読みを実体を作らずに覗いて借り（知らせは捨て、F は写して戻す）、R48 の演算子・段18 の器の側・並びと鎖の読みを重ねる。名前の種類は右辺の書いた木の種類。`$`・`@`・`~` の印の項は peekTerm で読む。覗き読みは自分だけの覚えの表を使い、抜ける時に捨てる | R128・R139・R49・R137 | 52・54 |
 | patternFn（3445） | 括りの関数（n は仮引数の数、括り1つで1） | R24 | 2・4 |
 | instantiate（3750）・instRootOf（3821） | 渡した形ごとに実体を作る（鍵は fnKey と bindParams の鍵）。答えは実体の根が A なら中身の見えない A、ほかは未知 | R24・R25 | 2・3・4 |
 | bindParams（3617） | 仮引数ごとの desc と実体の鍵。裸の口は A、印（関数の番地・値を読む参照・lift・点と差・zero）は印ごと持ち越す。R91・R122 の長さを鍵に足す | R24・R81・R91・R122 | 3・4・28 |
@@ -129,6 +130,8 @@
 | 51 | R138 で断る項（`!_`・`$!_`・`[]`・`~[]`）を包みの下に置いた綴りどうし | R138 | refuseWrittenVoid |
 | 52 | 未定義の名前と `!_` と分かる名前 w を入れ替えた綴り（木・種類・断りは同じで、未定義の側は name-undefined を書いた所ごとに1つ足す。値の段も） | R21・R49・R128・R139 | undefinedNameNotices・lookup・writtenKinds・interpret.js の known |
 | 53 | 点なしの頭（畳む2項の点なし・比べの点なし・`||_||`、それを括った物・番地から開いた物・指す名前・合成）の後ろの並びの項で、w と w~ を入れ替えた綴り（綴りのほかは同じ木・種類・知らせ） | R84・R95・R27 | foldOneKind・markStep・portShared |
+| 54 | 印 zero の物に当てた `$`・`@` の形（`$w`・`$q`・`$$w`・`@[$w]`・`@w`・`$w ' 0`・`~$w`・`~@w`・`@$[$w]` ほか 21 形）と、同じ所に w（`~` の形は `~w`）を置いた綴り（綴りのほかは同じ木・種類・知らせ・断りで、PRE の定義の行の木も比べる） | R56・R78・R79・R102 | classifyLift・classify・classifyStacked・mayBeUnit・writtenKinds |
+| 55 | `$` の項（`$$vs`・`$-inc`・`$typo`・`~$$vs` ほか 13）を、`,`・`\|`・`;` の辺・名前の右辺・本体・括りの関数の実体2つの本体ほか 26 の文脈に置いた綴りの知らせ（同じ所に字面か w を置いた綴りの知らせに根の X の知らせを足した物と、多重集合で同じ） | R100・R103・R87 | classifyLift・tailTerm・reportLift・reportLeftover |
 
 欠番：8・9・27・30・34・40・42・43・44。
 
@@ -142,7 +145,7 @@
 - 依りは広く付ける：addCycle（2594）は根に使ったかを見ず、target より上の枠と無名の関数の本体の全部に仮置きの依りを付ける。外れたら答えを下げず、古いと印を付けて解き直す（広い依りで答えを下げると定義の順で割れる）。（§3.4）
 - deps と cyc は「この記録が、どの解いている途中の枠に届くか」の2つの写し。違うのは、未知の記録で deps を捨てる所（entryOf）と、枠を閉じる所の扱い。finishFrame は、外れた枠の deps の記録に古いの印を付け、cyc は当たっても外れても引き継ぐ。abortFrame は、cyc の記録には必ず、deps の記録には未知でない時だけ印を付ける。片方を変える時は、finishFrame・abortFrame の2つずつの輪と、readMemo（2779）の consult／passThrough の分けを揃える。（§3.4・R103）
 - 無名の素の関数：collectedRoot（2739）は枠を積まず（F.collectors・beginCollect・chainFrom の差し込み・pendingNow の collectors）、記録は閉包の cell が持って bodyMemo に載らず、古くなれば読まれた時に枠を積んで解き直す。手順は bodyRootOf（3004）の写しなので、片方を直す時はもう片方も直す。この閉包は、解き直しの途中に自分の仮置き A を読まれて根が A でなかった時に枠を外れ（failed）にしない（bodyRootOf の 3034・instRootOf の 3859 はする）。その仮置きを読んだ記録が古いの印を受けずに残りうるので、その形を法則3 の並べ替えで確かめる（黙った誤答になるかは未確認）。（§3.4・P2）
-- 名前の輪の受け方：cycleError（2677）は name-cycle を作って F.cycleRefused に覚えてから投げる。評価しない所だけがそれを受けて F.cycleRefused を戻す：namesPattern（6594）・classifyDollar（4199）・emptyStreamTerm（4362）・writtenProductRow（4390）・selfReaderTarget（4607）・deadInPatternBody（4997）。評価しない位置や探りを足す時は同じ受け方と戻しが要り、戻さなければ resolve の最後がその輪で断る。（P2・R103）
+- 名前の輪の受け方：cycleError（2715）は name-cycle を作って F.cycleRefused に覚えてから投げる。評価しない所だけがそれを受けて F.cycleRefused を戻す：namesPattern（7344）・classifyDollar（4348）・seeZeroTail（4248）・emptyStreamTerm（4519）・writtenProductRow（4547）・selfReaderTarget（4759）・deadInPatternBody（5160）。評価しない位置や探りを足す時は同じ受け方と戻しが要り、戻さなければ resolve の最後がその輪で断る。（P2・R103）
 - 既定値を覗いた所を通る輪：namesPattern は、輪のいちばん下の枠が覗く前から途中の輪（`inDefault && e.cycleFrom < start`）を握りつぶし、F.cycleRefused を覗く前に戻して false を返す。覗いた定義の中だけで閉じる輪は投げ直す。そこへ届くのは構造体の欄の仮引数のブロックの関数の既定値（法則3 の Q30_PASS_FORMS）。§6.2 の name-cycle の行に足す候補。（R25・R103）
 - 仮置きの上でだけ通る輪：consult（2577）・passThrough（2586）は、仮置きを読んだ道でも上に値の定義の枠があれば name-cycle にする。そのため輪を閉じる道が仮置きの上でだけ通る形も、入口に依らず同じ言い分で断る：`pb : [y ~ys] ? y + 1`・`g : x ?` ⏎ `⇥pb [k x]` ⏎ `⇥ek`・`k : x ? pb [g x]`・`ek : k 1`・`pf : g 1` は、5つの定義の 120 通りの並べ方のどれでも `ek` の行の name-cycle。resolve.js 2664〜2671 の注は「pf が先なら G7」と書いていて、今の答えと合わないので直す所。（P2・R103）
 - 解き直しの守り：guardAgain（2517）の上限は枠を積んだ鍵の数（F.frameKeys.size）。例外が繰り返す形（namesPattern が握りつぶす輪）では、理屈が破れていなくても当たりうる（読みを決めずに断る）。（§6.2 resolve-again-limit・§5 Q25）
@@ -188,6 +191,7 @@
 - 実体の分け合い：同じ綴り・同じ範囲の `?` の関数は実体の答えを分け合う（lambdaKey・fnKey）。α 同値は保つが、門の行（materialize の lamLine、instanceError の e0.line）は実体を先に作った関数の本体の行になる。名指しの名前は呼んだ所の名前なので、名前と行が別の関数を指すことがある（coproduct.test.js 8460〜8466）。続きの行と、`?` の行に括らずに書いた本体の文法の断りと、使う所の `#` も書き始めの行を指す。R127 の「書いた行」に寄せる所として §6.4 に足す候補。（R25・R127）
 - 括りの仮引数の読み：素直な括り（1行で裸の名前が並び、末尾にだけ `~rest` が1つ）を射影で読む。入れ子の括り `[[a b] c]`・2行の括り・途中か2つの `~rest` の括りの名前は、どの実体でも未知（bracketParamOf の notSimple → bindParams の `!p.simple`）で、並びでは種類の未知な項として畳む。実体の鍵は、ほかの括りと同じく渡された物の desc で作る。§2 の「括りの仮引数の中の名前」の行に足す候補。（R24・R64・R91）
 - 括りで受けた物の細目（bindBracket）：構造体を `[n… ~rest]` で受けた `~rest` は、名前で受けなかった欄の構造体（欄は書いた順）。List の要素は mergeElems で1つにまとめ、形が揃えばその形、違えば中身の見えない A、関数か未知が1つでも見えれば未知（関数の要素も未知）。長さは形に入れず、R91 の足りない長さだけ鍵に足す。撒く項を含む並び（`[vs~ 4]`）は要素を数えず中身の見えない A（listShapeOf）。中身の見えない A を受けた `~rest` は元の器の elements を持ち越し（`r~` の G7 のため）、名前は未知。（R24・R91・R115・§6.2 G7）
-- `,` の辺が恒等射かは辺ごとに見る（vanishedSeq。`,` は両辺が恒等射の時だけ恒等射）。辺を丸ごと解いて捨てると、名前の `,` の鎖で残りを1段ごとに解き直して倍々に遅くなり、coproduct.test.js 4145 の速さの試験（名前 40 個の鎖を 5 秒）が落ちる。（R61・R137）
+- `,` の辺が恒等射かは辺ごとに見る（vanishedSeq。`,` は両辺が恒等射の時だけ恒等射）。辺を丸ごと解いて捨てると、名前の `,` の鎖で残りを1段ごとに解き直して倍々に遅くなり、coproduct.test.js 4152 の速さの試験（名前 40 個の鎖を 5 秒）が落ちる。（R61・R137）
+- 同じ所で解き直す時の覚え（memos：resolveMarkedSeq（6391）の seq・seeZeroTail（4248）の zeroTail・classifyStacked（4198）の stacked。鍵は memoPlace（6360）・samePlace（6365）と ctx の溜め MEMO_ACCS）は速さのためだけの物で、答えは覚えに依らない。篩・判定・本体で同じ `$`・`@` の項を読み直すので、覚えが無いと入れ子が段ごとに倍になる（coproduct.test.js の深さの法則3本）。覗き読み（peekRead（6868））は入る所で新しい表にして、抜ける時に外の表に戻す。覚えを足す時は、輪の断り（F.cycleRefused・F.againRefused）が変わった読みを覚えず、覚え無しの写しで試験と探りが1字も変わらないことを見る。（R56・R78）
 - 守りの細目：深さの上限は（32 × 書いた括りの関数と実体を作る素の関数の数 + 1）× 書いたいちばん深い形で、解く前にソースだけから決める（INSTANCE_DEPTH_MARGIN 3155。§5 Q25 の値の一覧に 32 を足す候補）。確定した実体 512 が数えるのは、呼んだ時にどの枠も仮置きに頼っておらず門にも汚れにも当たらない物と、頼った枠が全部当たって閉じた物（settlePending）で、単位は呼んだ `?` ごと。作った実体 1024 は、外れた仮置きの上でだけ作った実体を数から外す（discard。鍵の記録 F.instances には残す）。入れ子 256 は同じ `?` の2つ目から先の途中の実体の和で、素の名前つき関数の本体と値の定義の枠に入ると数え直す（freshNest）。JS のスタックの溢れ（RangeError と正規表現の SyntaxError）は resolve-stack-limit。守りに当たった `?` は、それから新しい実体を作らない（F.guardStops）。合成の幅の守りは、スタックの溢れと同じ席（F.stackRefused、resolve の 9744）に置いて、そこで resolve を止める。（§5 Q25・§6.2）
 - 解く段の断りの順（refusalOf）：解き直しの守り → 汚れていない値を含む輪 → 総数 → 汚れていない行の門 → 作った数・入れ子・スタックと合成の幅の守り → 汚れた輪と門。守りの断りを捕まえた枠の答えと、それを読んだ計算に汚れを付けて運ぶ（taint）。順に依らないと言えるのは汚れていない物の中だけ。R127 の順に足す候補。（P2・R127）
