@@ -506,8 +506,8 @@ function tokenize(words) {
   return toks;
 }
 
-// 1行を木にする。段1〜9 は並びを切り（R1・R20）、段12〜22 は項の中へ先に畳む（P1）。段10 の前置 `~` と
-// 段23〜25 の印は、前段が核に密着させて返すので、項の印として tokenize が持つ。
+// 1行を木にする。段1〜9 は並びを切り（R1・R20）、段12〜22 は項の中へ先に畳む（P1）。段23〜25 の印（前置 `~` も
+// 段24 の前置の印）は、前段が核に密着させて返すので、項の印として tokenize が持つ。
 //
 // 木：{type:'op', sym, stage, left, right}（段1〜9）か {type:'seq', terms}（余積の並び）。
 // 項：{type:'atom', pre, core, post} か {type:'infix', sym, stage, left, right}。
@@ -769,6 +769,8 @@ function writeCore(core) {
   if (core.c === "name") return core.name;
   if (core.c === "lit") return core.text;
   if (core.c === "unit") return "_";
+  // 書いた項の代わりに読む括り（`~x~` の `[x]`、liftedSpread）は、書いた綴り（`~x`）を持つ。
+  if (core.written !== undefined) return core.written;
   return writeBlock(core.raw);
 }
 
@@ -3251,6 +3253,8 @@ function writtenDepth(lines, F) {
     // 2026-10-25 の R60 から、`$` は値の先も通し、値を読む参照は指す値の深さに 1 を足した鍵を持つ（internDesc の vref）。括りでない先（名前・字面・
     // ほかの前置の印の組み合わせ）は、`$` を外した先の深さに 1 を足す（関数の名前 `$inc`・`$!_`・`$@f` は今までどおり 2）。括りの先は下の行の数え方のまま。
     if (t.type === "atom" && t.pre.length && t.pre[0] === "$" && !t.post.length && !t.core.rows) return 1 + termDepth({ ...t, pre: t.pre.slice(1) }, inValue);
+    // `~x~` は `[x]~` と同じ深さに数える（classify が読む写し、liftedSpread。読まない組み合わせでも、深く数える側なので浅くならない）。
+    if (isTildeSpreadTerm(t)) return termDepth(liftedSpread(t).read, inValue);
     // `x ' k` の右が裸の名前か字面の整数なら鍵（欄の名前か位置）で、名前として引かない（R26、pickKeyOf。classifyInfix と同じ）。
     // ほかの右（`x @ k` の右も）は解くので、書いた形を数える。
     if (t.type === "infix") return 1 + Math.max(termDepth(t.left, inValue), t.sym === "'" && pickKeyOf(t.right) ? 1 : termDepth(t.right, inValue));
@@ -4125,6 +4129,16 @@ function classify(term, ctx, fresh = false) {
   if (post.length === 0 && pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && core.c !== "indent" && zeroTail(term, 1, ctx)) return plain(zeroDesc());
   // 後置 `~`（撒く項）。
   if (pre.length === 0 && post.length === 1 && post[0] === "~") return classifySpread(term, view, ctx);
+  // 前置 `~` と後置 `~` の組（`~x~`）：前置の印は後置の印より先に結ぶ（演算子表の段24 と段23）ので、`~x~` は持ち上げてから下ろす物で、`~x` に後置 `~` を当てた物。
+  // `~x` は書いた `[x]` と同じ項（R79。下の枝）なので、いちばん外の前置の印が `~` で後置の印がちょうど `~` 1つの項は、その `~` を外した項 t（内の前置の印は残す。
+  // 前置の印は核に近い物から結ぶ、R57）を括った `[t]~` を読んだ物（`~[1 2]~` は `[[1 2]]~`、`~$w~` は `[$w]~`、`~_~` は `[_]~`）。読むのは書いた項ごとに1つの写し
+  // （liftedSpread）で、葉の綴りは書いたまま。`[t]~` の読みは撒く項の読み（classifySpread）に任せるので、後置 `~` の読みが変われば `~x~` も同じに変わる。
+  // 根拠：U〔答え〕[2026-11-20 23:14:54 UTC 9f9fd58f]「~x~ は、持ち上げてから持ち下げる」（`[t]~` と読むのは、R79 からの1歩の帰結）。
+  // `~t` を `[t]` と読むのは、仕様の R79 が `[t]` と同じ項と言う所（t が書いた核1つ（`_` も。R79・R138 で `~_` は `[_]`）・`$` の項・`!_` と分かる `@` の項。
+  // liftsAsBracket）。下の R79 の枝が `~_` を未知にしているのは実装だけの読み（§6.4）で、`~_~` は仕様どおり `[_]~`（G7）。`~t` が表に無い組み合わせの物（`~!w~`・
+  // `~~w~`・入力の `~@uart~`）・後置の印が2つ以上の物は下の表のまま。いちばん外の前置の印が `$` の `$~w~` は `$` の項の読み（classifyDollar）で、`$` の先の `~w~` を
+  // この読みで見る（emptyStreamTerm）。`@~w~` は下の表のまま。
+  if (isTildeSpreadTerm(term) && liftsAsBracket(liftedSpread(term).head, ctx)) return classify(liftedSpread(term).read, ctx);
   // 前置 `~`（R79、2026-10-26。§5 Q14 の答え）：前置の印は単一の対象か括りの式にだけ係るので、`~x` は x を要素1つの List に持ち上げた物で、書いた
   // `[x]` と同じ項（[x] ≅ x。種類と desc は1行の括り `[x]` のもの）。`~1 2 3` は `(~1) 2 3`、つまり `[1] 2 3`。根拠：U〔答え〕[2026-10-25 22:42 c8ccdd69]「Q14
   // 持ち上げたいなら積の形も使えるからね、一般の式の中なら使う意図が , と被るのは確か。どうしても一要素だけリストに持ち上げたいときの前置~は有りだと思う。
@@ -4244,6 +4258,36 @@ function liftedBracket(term) {
   let b = LIFTED_BRACKETS.get(term);
   if (!b) LIFTED_BRACKETS.set(term, (b = { c: "bracket", rows: [{ type: "seq", terms: [tailTerm(term, 1)] }] }));
   return b;
+}
+// いちばん外の前置の印が `~` で、後置の印がちょうど `~` 1つの項（`~x~`・`~$w~`。classify）。字下げのブロックの持ち上げは表に無い組み合わせ（R79 の枝と同じ）。
+const isTildeSpreadTerm = (t) =>
+  !!t && t.type === "atom" && t.pre.length >= 1 && t.pre[0] === "~" && t.post.length === 1 && t.post[0] === "~" && t.core.c !== "indent";
+// `~x~` の項 term（isTildeSpreadTerm）の2つの写し。書いた項ごとに1つ（覚えの表と知らせは項の物の同一性で引くので、読むたびに作らない。liftedBracket と同じ）。
+//   head：後置の印を外した `~t`（`~t` を `[t]` と読めるかを見る、liftsAsBracket）。
+//   read：t（いちばん外の `~` と後置の印を外した項。内の前置の印は残す）を括った `[t]` に、書いた後置 `~` を当てた項（classify が `~x~` の代わりに読む）。括りの核の綴り
+//   （written、writeCore）は、R79 で `[t]` と同じ項の書いた `~t` なので、read の綴りは書いた `~x~` のまま（葉の木・言い分は書いた綴りで出る）。
+const LIFTED_SPREADS = new WeakMap();
+function liftedSpread(term) {
+  let s = LIFTED_SPREADS.get(term);
+  if (!s) {
+    const head = { type: "atom", pre: term.pre, core: term.core, post: [] };
+    const inner = { type: "atom", pre: term.pre.slice(1), core: term.core, post: [] };
+    const read = { type: "atom", pre: [], core: { c: "bracket", rows: [{ type: "seq", terms: [inner] }], written: writeTerm(head) }, post: term.post };
+    LIFTED_SPREADS.set(term, (s = { head, read }));
+  }
+  return s;
+}
+// 前置 `~` の項 head（`~t`）を、仕様の R79 が書いた `[t]` と同じ項と言う物に読むか：t が書いた核1つ（`_` も。内部で足した id の `!` は数えない、R138 の写し。
+// R79 の枝は `~_` を実装だけの読みで未知にするが、ここは仕様どおり `[_]`、§6.4）か、`$` の項（`~$x`）か、`!_` と分かる値の `@` の項（`~@w`）。ほかの印との組み合わせ（`~!x`・`~~x`・入力の `~@uart`）は表に無い組み合わせ（§5 Q14 の残り）。
+// liftShape はその綴りの篩："bracket"（読む）・"zero"（`@` の項で、先が `!_` と分かる時だけ読む）・null（読まない）。
+function liftShape(head) {
+  const written = head.core.nId ? head.pre.length - 1 : head.pre.length;
+  if (written === 1 || head.pre[1] === "$") return "bracket";
+  return head.pre[1] === "@" ? "zero" : null;
+}
+function liftsAsBracket(head, ctx) {
+  const shape = liftShape(head);
+  return shape === "bracket" || (shape === "zero" && isZeroTail(head, 1, ctx));
 }
 // R56・R78：tailTerm(term, k) が `!_` と分かる値（印 zero、R49）なら、その項を ctx で読んだ答え（置いた所の読みに使う。中身に書いた物の知らせはこの読みで出す、
 // R103）。`!_` と分かる値でなければ null。isZeroTail は、`!_` と分かる値かだけを見る（読むのは呼んだ側）。
@@ -4531,8 +4575,10 @@ function reportLift(term, ctx, target, what) {
 // 2026-10-28 の片8 の確かめの直し：撒く名前を解いている途中の輪に当たったら（`v : 1 , $v~`）、長さ 0 とは言えないので false。探りで作った輪の断り（F.cycleRefused）は
 // 戻す（探りの前から解いている名前へ戻る輪だけ。writtenProductRow と同じ）。前は戻さず、R57 の G20 を投げた後に resolve の最後が name-cycle で断り、輪の外の綴り
 // （`u : vs` ⏎ `v : 1 , $u~`）の G20 と割れた（確かめの指摘）。
+// 撒く項の形には `~x~`（`[x]~` を読んだ物、classify）も入る（spreadShaped）。だから `$~w~`・`$[~w~]`・`$[~w~ ~w~]`・`,` の辺の `~w~` は、`$[w]~`・`$[[w]~]`・
+// `$[[w]~ [w]~]`・`,` の辺の `[w]~` と同じ `!_` と分かる値（`$` と後置の印のどちらが先に結ぶ読みでも `!_` と分かる値で割れない、R57）。
 function emptyStreamTerm(t, ctx) {
-  if (!t || t.type !== "atom" || t.pre.length || t.post.length !== 1 || t.post[0] !== "~") return false;
+  if (!spreadShaped(t)) return false;
   const F = ctx.F;
   const start = F.stack.length;
   const before = F.cycleRefused;
@@ -6739,9 +6785,10 @@ const isUnitTerm = (t) => !!t && t.type === "atom" && !t.pre.length && !t.post.l
 // 書いた `!_` か、長さ 0 と分かる撒いた流れ（R84：`[]~`・`!_~`・`e0 : []` の `e0~` など。並びの項では emptyMark が書いた `!_` と同じ印にする）の項。綴りで並びの形を
 // 見る所（loneHole・点なしの括りの refusePfTail）が、並びの項と同じ数え方をするため（2026-10-27 の R95 の片で、法則31 を点なしの口に広げて見つかった。R95 で恒等射が
 // 受ける長さ 0 の流れも書いた `!_` と同じになり、綴りだけを見ると `_ []~ == 1` は評価する所で `(unit _)`、`_ !_ == 1` は G7 と割れる）。項を作るのと同じ classify で
-// 流れの長さを見るので、呼ぶ側は頭の形（`_`・点なしの形）を先に見てから呼ぶ。
-const isUnitLikeTerm = (t, ctx) =>
-  isUnitTerm(t) || (!!t && t.type === "atom" && !t.pre.length && t.post.length === 1 && t.post[0] === "~" && isEmptyFlow(leafOf(t, classify(t, ctx))));
+// 流れの長さを見るので、呼ぶ側は頭の形（`_`・点なしの形）を先に見てから呼ぶ。撒く項の形には `~x~`（`[x]~` を読んだ物、classify）も入る（spreadShaped）。
+const isUnitLikeTerm = (t, ctx) => isUnitTerm(t) || (spreadShaped(t) && isEmptyFlow(leafOf(t, classify(t, ctx))));
+// 綴りが撒く項の形か：後置の印がちょうど `~` 1つで、前置の印が無いか、`~x~`（isTildeSpreadTerm。`[x]~` と読むかは classify が決め、読まなければ撒く項でない）。
+const spreadShaped = (t) => !!t && t.type === "atom" && t.post.length === 1 && t.post[0] === "~" && (!t.pre.length || isTildeSpreadTerm(t));
 // 並びが括らない `_` 1つか（後ろに書いた `!_` しか続かない `_ !_` も：並びの終わりの `!_` は消える、R28。2026-10-26 に書き直した R28 から。前は `!_ _`（前の綴り）を恒等射の
 // 「終わり」で A にしていて、`1 & !_ _` は通り、`1 & !_` は G7 と割れていた）。長さ 0 と分かる流れも書いた `!_` と同じに数える（isUnitLikeTerm、R95）。
 function loneHole(terms, ctx) {
@@ -7142,6 +7189,9 @@ function writtenKinds(F) {
     if (pre.length >= 2 && pre[0] === "~" && (pre[1] === "$" || pre[1] === "@") && !post.length && core.c !== "indent") return peekTerm(t, cx);
     // 長さ 0 と分かる流れ（`w~`、R84）。
     if (!pre.length && post.length === 1 && post[0] === "~") return coreKind(core, cx) === "zero" ? "zero" : "other";
+    // `~x~` は `[x]~`（classify と同じ写し、liftedSpread）。`~t` が `[t]` と読めない物（liftsAsBracket）は表に無い組み合わせで "other"。`@` の項は先が `!_` と分かる時だけ
+    // `[@x]` と読むが、`[@x]~` を覗いた種類も先が `!_` と分かる時だけ "zero" なので、ここでは綴りの篩（liftShape）だけで分ける。
+    if (isTildeSpreadTerm(t)) return liftShape(liftedSpread(t).head) ? term(liftedSpread(t).read, cx) : "other";
     // 前置 `@`：本体の読み（関数の印のある番地を開けばその関数、印 zero の物を開けば `!_` と分かる値、R49・R78。先の分からない `@x` は入力の項で "other"）。
     if (pre.length === 1 && pre[0] === "@" && !post.length && (core.c === "name" || core.c === "bracket")) return peekTerm(t, cx);
     // `$` の項と、`$`・`@` を重ねた `@$x`・`@@x`：本体の読み（`!_` と分かる物に当てた `$`（`$w`・`$[typo]`・`$w~`・`$$w`）と、その `@`（`@$w`・`@$[$w]`・`@@[$[$w]]`）は
