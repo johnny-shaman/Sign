@@ -44,8 +44,8 @@ Juxtaposed pairs `(LHS, RHS)` reduce to these nodes:
 | **10.5** | `Lambda` | `Lambda` | `compose` | Function composition |
 | **10.4** | `Lambda` | `Atom` | `apply` | Function application |
 | **10.3** | `Atom` | `Lambda` | ~~`apply` (operands swapped)~~ | ~~Reverse application; see §3.1~~ (old spec: reverse application abolished, alpha1 R47) |
-| **10.2** | `Atom \| List \| Struct` | `List~ \| Struct~` | `concat` | Splice the right side in |
-| **10.1** | `Atom \| List \| Struct` | `Atom \| List \| Struct` | `unshift` | Add the right side as one element |
+| **10.2** | `List` (same level) | `List` (same level) | `concat` | Joins terms of the same level **flat** (`xs ys` with `xs : 1 2` and `ys : 3 4` is `[1 2 3 4]`) |
+| **10.1** | `Atom \| List \| Struct` | `Atom \| List \| Struct` | `unshift` | A pair of different levels, or one involving a `Struct`. Raises the shallower side one level at a time to the level of the deepest term and then joins, so the shallower side is added **as one element** of the deeper one (`0 [1 2 3]` is `[0 1 2 3]`; `m [5 6]` with `m : 1 2 , 3 4` gains one row). A struct does not merge its fields; it is one element of the sequence |
 | **10.0** | `Atom` | `Atom` | `construct` | Coproduct (list construction) |
 
 > [!IMPORTANT]
