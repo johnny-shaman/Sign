@@ -44,7 +44,7 @@
 > **Whitespace stacks things on one level; `,`, the line breaks of a bracket of two or more lines, and
 > prefix `~` raise the level; postfix `~` lowers it.** Items placed side by side with whitespace are
 > first brought to the level of the deepest one, then stacked from the left. A number or a character is
-> stacked as a container of length 1, so
+> on level 0; stacked with whitespace, it is lifted into a container of length 1, so
 > `0 [1 2 3]` is `[0 1 2 3]`, `m [5 6]` gains one row, and `m 5 6` gains two rows of length 1.
 > Items on the same level join flat, so writing `[[1 2] [3 4]]` gives `[1 2 3 4]` (a warning is
 > reported where it is written). Write two dimensions as `1 2 , 3 4`, or as a bracket with one row per
@@ -66,8 +66,8 @@
 > ```
 
 > [!NOTE]
-> **When a list (a string, or a name holding a list, too) is passed to a function's parameters, they
-> take its elements from the front.** With `add : x y ? x + y`, `add [1 2]` is `3`.
+> **When a list (a string, or a name holding a list, too) is passed to a function, its bare parameters
+> and its bracket parameters that are not in the last position take the elements from the front.** With `add : x y ? x + y`, `add [1 2]` is `3`.
 > Only a bracket parameter in the last position (`f : [~xs] ? …`) receives the rest of the sequence as
 > one list. To pass a container as it is to a bracket parameter that is not in the last position, the
 > caller separates the containers with `,`, as in `pair [xs , ys]`.
@@ -133,6 +133,7 @@
 > ```
 >
 > Struct fields go on **block lines** (inside `[…]` or indented), one per line. With a single field,
-> `[a : 1]` is a struct too, but a spelling that puts two or more on one line, such as
-> `[a : 1, b : 2]`, does not build a struct. Structs placed side by side with whitespace do not merge
-> their fields; each one is a single element of the sequence.
+> `[a : 1]` is a struct too. Putting two or more on one line, as in `[a : 1, b : 2]`, does not build a
+> struct with two fields: `,` binds tighter than `:`, so the only field is the first one, a, and b does
+> not become a field. Structs placed side by side with whitespace do not merge their fields; each one is
+> a single element of the sequence.
