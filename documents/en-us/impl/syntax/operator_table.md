@@ -46,7 +46,7 @@
 > **The "Left Operand is Unit" / "Right Operand is Unit" columns describe the infix forms (operations).**
 > A section or point-free form (`[+]`, `[* 2,]`, `[<]`, …) is a **function**, so if any written argument is `!_`
 > the result is `!_` by the totality axiom (user ruling 2026-10-05; the exceptions are the point-free forms of the catching `|`: `[|]` and `[| d,]`, below).
-> When no written argument is `!_`, a section gives the same value as the infix form (`[[+] 1 2]` is `1 + 2`; a spread argument `xs~` puts its elements in as written arguments,
+> When no written argument is `!_`, a section gives the same value as the infix form (`[[+] 1 2]` is `1 + 2`; given one List, `[+] vs` folds it because its variable-length port takes the whole run,
 > so compare with the infix over the elements); **their values split exactly on `!_`**
 > (ja-jp `kan_extensions.md` §3.7.4):
 >
@@ -54,7 +54,8 @@
 > - A `!_` written inside a literal container vanishes when the container is built (`[+] [1 !_ 3]` is `4`). The function-position rule is unchanged (`(add !_) 3` is `3`, `add !_ 3` is `!_`)
 > - The logical folds (2026-10-06): `[&]` ("all true") follows the totality axiom and otherwise returns the rightmost argument (`[&] 1 2 3` is `3`, `[&] 1 !_ 3` is `!_`). `[|]` ("at least one true") alone is an exception: it returns the leftmost argument that is not `!_`, and is `!_` only when every argument is `!_` (`[|] !_ 5` is `5`, `[|] 3 5` is `3`). Over a literal container, `[|] [a b c]` is the first, `[&] [a b c]` the last, an empty one `!_`
 > - Being a function, a section does not short-circuit (2026-10-06): every written argument is evaluated once, in the written order (`[|] 5 (w p 7)` evaluates `w p 7` too; the infix `5 | (w p 7)` does not evaluate the right side)
-> - A spread of `!_` is an empty spread and adds no argument (2026-10-06): `[+] 1 !_~ 3` is `4`
+> - Given a container (a List, a String, or a name holding one), a variable-length port takes the whole run: the folding point-free `[+] vs` folds it, and the map `[* 2,] vs` maps it element by element. A bare port (a bare parameter) of a function, and a bracket port that is not the last, join the container first and take elements from the front (`add [1 2]` with `add : x y ? x + y` is `3`). Whether taking elements from the front also reaches sections with one operand written (`[+ 1]` and the like), the get point-free forms (`[' 0]` and the like) and functions with default values is undecided
+> - `!_` is the empty container, so lowering it one level with postfix `~` leaves `!_` (`[+] 1 !_~ 3` is the same as `[+] 1 !_ 3`)
 > - A map whose element operation is the catching `|`, `[| d,]`, shares the `[|]` exception (2026-10-07): it catches `!_` element by element (`[| 0,] 1 !_ 3` is `[1 0 3]`). Every other map follows the axiom (`[& 0,] 1 !_ 3` is `!_`)
 
 | Precedence | Symbol | Position & Type Combinations | Function | Natural Meaning | Operational Semantics | Left Operand is Unit | Right Operand is Unit |
@@ -72,8 +73,8 @@
 | 8 | `!==` | Infix | xnot_equal | Not equal | Structural inequality | Right operand $X$ (Identity) | Left operand $X$ (Identity) |
 | 9 | `,` | Infix* | product | Product (Structural) | Right-associative list construction | Identity | Identity |
 | 10.0 | ` ` | `Atom \| List \| Struct` Infix `Atom \| List \| Struct` | construct | Juxtapose | Structural construction | Identity | Identity |
-| 10.1 | ` ` | `Atom \| List~` Infix `Atom \| List~` | push / unshift | Juxtapose | Prepend / Append to list | Identity | Identity |
-| 10.2 | ` ` | `List~ \| Struct~` Infix `List~ \| Struct~` | concat | Juxtapose | Concatenate list / struct | Identity | Identity |
+| 10.1 | ` ` | `Atom \| List \| Struct` Infix `Atom \| List \| Struct` (different levels, or a `Struct` involved) | push / unshift | Juxtapose | Raises the shallower side one level at a time to the level of the deepest term and then joins, so the shallower side is added **as one element** of the deeper one (`0 [1 2 3]` is `[0 1 2 3]`; `m [5 6]` with `m : 1 2 , 3 4` gains one row). A struct does not merge its fields; it is one element of the sequence | Identity | Identity |
+| 10.2 | ` ` | `List` Infix `List` (same level) | concat | Juxtapose | Joins terms of the same level **flat** (`xs ys` with `xs : 1 2` and `ys : 3 4` is `[1 2 3 4]`) | Identity | Identity |
 | 10.3 | ` ` | `Atom \| List \| Struct` Infix `Lambda` | ~~apply~~ | ~~Reverse apply~~ | ~~Function application~~ (old spec: reverse application abolished, alpha1 R47; the two Unit columns are not decided here) | Identity | Identity |
 | 10.4 | ` ` | `Lambda` Infix `Atom \| List \| Struct` | apply | Apply | Function application | Identity | Identity |
 | 10.5 | ` ` | `Lambda` Infix `Lambda` | compose | Left-associative composition | Function composition | Identity | Identity |
