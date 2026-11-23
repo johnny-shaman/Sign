@@ -563,10 +563,22 @@ const argTerms = (x) => {
 	if (cur) out.push(cur);
 	return out;
 };
+// R142：最初の関数の口が素の口か最後でない括りの口（SPLICE1）なら、その口に来た長さの見える並び（ELEMS1）は繋いで前から1要素ずつ取る（U〔答え〕
+// [2026-11-20 11:17:34 UTC 9f9fd58f]「1」。名前を中身に置き換えても答えは変わらない）。流れはその要素で数え、入れ子の綴りも要素で書く（`inc g `ab`` は
+// `(g (inc \a)) \b`）。区間・点なし・穴の関数・最後の括りの口（`[add _ 10]`・h2・`[+ 1]`・`[' 0]`・head など）は1項で受ける（§5 Q126・R64）。
+const SPLICE1 = new Set(["inc", "double", "add", "adder", "uu", "uu2", "(pr 1)", "(pq 1)", "(uu2 1)", "p1", "(add 1)", "pt", "(pt [1])"]);
+const ELEMS1 = new Map([["`ab`", ["\\a", "\\b"]], ["[1 2 3]", ["1", "2", "3"]]]);
+const spliceFirst1 = (f, xs) => {
+	if (!SPLICE1.has(f)) return xs;
+	const a = ARITY1.get(f);
+	const out = [];
+	for (const t of xs) out.push(...(out.length < a && ELEMS1.has(t) ? ELEMS1.get(t) : [t]));
+	return out;
+};
 // 合成 fs を x に当てた流れ（R40。前は R36）を、括りの入れ子で綴る。inner は途中の綴り（N1 … Nm）、nested は最後に余りを積んだ綴り、
 // cut は恒等射の割れ（G18）、left は最後に残った項の数、wide は null の関数が流れの余りまで受けた数（R41。前は cut で G12(c)）。
 const flowNested1 = (fs, x) => {
-	const xs = argTerms(x);
+	const xs = spliceFirst1(fs[0], argTerms(x));
 	const a0 = arity1At(fs[0], xs.length);
 	if (a0 === undefined) throw new Error(`ARITY1 に ${fs[0]} が無い`);
 	const all = a0 === null || xs.length <= a0;
@@ -867,6 +879,8 @@ law("1 の未知の枝 未知になった後ろの括りの関数の実体は、
 const DEFS2 = [INC, ...M, "pt :", "\tk : 1", "\tother : 2", "", "yn : 3"];
 const UNITS2 = toUnits(DEFS2);
 // [定義, 呼ぶ頭の名前, 前の仮引数に当てる実引数]
+// 前の括りの仮引数に器を1要素として当てるのは前置 `~` の `~[1 2]`（問5：解けない1段の持ち上げで、器のまま1要素）。書いた `[1 2]` は最後でない括りの口で
+// 繋いで前から1要素ずつ取る（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、最後の括りの残りが `2 …` になり、この法則の比べる物でなくなる。
 const HEADS2 = [
 	[["f : [x ~xs] ? x 1"], "f", ""],
 	[["n : [~x] ? x"], "n", ""],
@@ -876,14 +890,14 @@ const HEADS2 = [
 	[["s : [h ~hs] ? (h ' 0) 1"], "s", ""],
 	[["map : f [x ~y] ? x"], "map", "$inc"],
 	[["h : v [x ~xs] ? v 1"], "h", "1"],
-	[["pair : [a ~as] [b ~bs] ? a + b"], "pair", "[1 2]"],
+	[["pair : [a ~as] [b ~bs] ? a + b"], "pair", "~[1 2]"],
 	[["pf : [say] [x ~xs] ? say x"], "pf", "m"],
-	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "p3", "1 [2 3]"],
-	[["pm : [say] [b ~bs] [c ~cs] ? say b"], "pm", "m [2 3]"],
-	[["pair : [a ~as] [b ~bs] ? a + b"], "(pair [1 2])", ""],
-	[["pair : [a ~as] [b ~bs] ? a + b", "pp : pair [1 2]"], "pp", ""],
-	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "(p3 1)", "[2 3]"],
-	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "((p3 1) [2 3])", ""],
+	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "p3", "1 ~[2 3]"],
+	[["pm : [say] [b ~bs] [c ~cs] ? say b"], "pm", "m ~[2 3]"],
+	[["pair : [a ~as] [b ~bs] ? a + b"], "(pair ~[1 2])", ""],
+	[["pair : [a ~as] [b ~bs] ? a + b", "pp : pair ~[1 2]"], "pp", ""],
+	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "(p3 1)", "~[2 3]"],
+	[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "((p3 1) ~[2 3])", ""],
 	[[], "[[x ~xs] ? x 1]", ""],
 ];
 // `zz zz` の zz は未定義の名前で、2026-10-28 の片9b の R111 から `!_` と分かる値（前は R21 の中身の見えない値）。両側に同じ綴りを置いて比べるので法則はそのまま成り立ち、
@@ -2118,6 +2132,9 @@ const ARITY7 = new Map([
 	["inc", 1], ["double", 1], ["g", 1], ["uu", 1], ["add", 2], ["f2", 2], ["pr", 2], ["pt", 2], ["use", 2], ["[<<]", 2], ["f3", 3],
 	["[+]", null], ["pair", null], ["n", null], ["hd", null], ["[+ 1]", 1],
 ]);
+// 口が素の口か最後でない括りの口の関数（R142 で並びを繋ぐ段）と、並びの語の要素の数（ほかの項は1要素）。
+const SPLICE7 = new Set(["inc", "double", "g", "uu", "add", "f2", "pr", "pt", "use", "f3"]);
+const LEN7 = new Map([["[1 2]", 2], ["vs", 3]]);
 // 開いた木の、合成の適用 `(apply (compose F1 … Fm) X)` を、流れの入れ子 `(apply Fm (… (apply F1 x1 … xa) …))` に書き直す。F1 が並びから
 // 自分の口の数だけ受け、後ろの Fi は前の結果と、口の残りの数だけを受け、足りなくなった所から後ろは合成のまま、余りは後ろに積む。
 // 部分適用の頭 `(apply f a)` は f の口から a の数を引く。表に無い関数があれば書き直さない。2026-10-23 までの逆適用の合成の枝（`·rev`
@@ -2157,11 +2174,35 @@ const flowCanon = (t) => {
 		return ARITY7.get(show(f));
 	};
 	if (fs.some((f) => arity(f) === undefined)) return { t: "apply", head, arg };
-	let rest = items(arg);
+	// R142：素の口と最後でない括りの口の段（SPLICE7 の関数と、その部分適用）に来た並びの語（LEN7）は、繋いで前から1要素ずつ取る（U〔答え〕
+	// [2026-11-20 11:17:34 UTC 9f9fd58f]「1」）。木は書いた葉のままで、並びの葉は最初に要素を取った段の実引数に置き、後ろの段が取った残りの要素は葉に
+	// 入ったまま見せない（読む段の木と同じ綴り）。まだ要素を取っていない並びは、区間・点なしの段（`[+ 1]`・`[<<]`、§5 Q126）でも可変長の口でも1項。
+	const spliceable = (f) => (f.t === "apply" ? spliceable(f.head) : SPLICE7.has(show(f)));
+	const q = items(arg).map((node) => ({ node, left: LEN7.get(show(node)) || 1, shown: false }));
+	const take = (n, splice) => {
+		const out = [];
+		while (n > 0 && q.length) {
+			const e = q[0];
+			if (e.shown || (splice && e.left > 1)) {
+				if (!e.shown) out.push(e.node);
+				e.shown = true;
+				const k = Math.min(n, e.left);
+				e.left -= k;
+				n -= k;
+				if (!e.left) q.shift();
+				continue;
+			}
+			out.push(e.node);
+			q.shift();
+			n--;
+		}
+		return { out, short: n > 0 };
+	};
+	const takeAll = () => q.splice(0).filter((e) => !e.shown).map((e) => e.node);
 	const a0 = arity(fs[0]);
-	if (a0 !== null && rest.length < a0) return { t: "apply", head, arg };
-	let cur = app(fs[0], a0 === null ? rest : rest.slice(0, a0));
-	rest = a0 === null ? [] : rest.slice(a0);
+	const s0 = spliceable(fs[0]);
+	if (a0 !== null && q.reduce((n, e) => n + (s0 ? e.left : 1), 0) < a0) return { t: "apply", head, arg };
+	let cur = app(fs[0], a0 === null ? takeAll() : take(a0, s0).out);
 	let open = false;
 	for (const f of fs.slice(1)) {
 		if (open) {
@@ -2169,11 +2210,15 @@ const flowCanon = (t) => {
 			continue;
 		}
 		const b = arity(f);
-		const take = b === null ? rest : rest.slice(0, b - 1);
-		rest = rest.slice(take.length);
-		if (b !== null && 1 + take.length < b) open = true;
-		cur = app(f, [cur, ...take]);
+		if (b === null) {
+			cur = app(f, [cur, ...takeAll()]);
+			continue;
+		}
+		const r = take(b - 1, spliceable(f));
+		if (r.short) open = true;
+		cur = app(f, [cur, ...r.out]);
 	}
+	const rest = q.filter((e) => !e.shown).map((e) => e.node);
 	return rest.length ? { t: "construct", items: [cur, ...rest] } : cur;
 };
 const opened = (lines) => {
@@ -2289,6 +2334,9 @@ law("7 左からの畳み込み：カリー化・関数の並びを括る・余�
 //     取るかで割れるので、S が値だけのときだけ比べていた）。木は括りの入れ子の分だけ綴りが違うので比べない。
 // - (iv) 印と穴：P の中の `!_`（口を埋める所で読む、R43。並びの終わりの `!_` は R28）と `_`（穴の規則は並び全体を見る、R16・R34・
 //   R38）は、括りで並びが切れると読みが変わるので、語に入れない。
+// - (v) 中身の見えない物：閉じた `n` の結果（長さの見えない List、R91）が素の口の段に来て、届く決まった口が2つ以上なら、読む段は種類を未知にして
+//   後ろの段を閉じ、leftover-lambda を出さない（R142 の片で実装で決めた所。値の段が決める）。P だけでそうなる組は根でも名前でも未知を見て、P S で
+//   そうなる組は種類と門だけを比べる。並びの語（`[1 2]`・vs）は、素の口の段に来たら繋いで1要素ずつ畳む（R142、LEN10 と flowCanon の LEN7）。
 const DEFS10 = [INC, "double : x ? x * 2", "add : x y ? x + y", "f2 : x y ? x - y", "n : [~x] ? x", "hd : [x ~xs] ? x", "vs : 1 , 2 , 3"];
 // 語の口の形：v は値、one は口が1つ、two は口が2つ、var は可変長の口、pf1 は点なしの単項、pfv は畳む点なし（可変長の口）。
 const SHAPE10 = new Map([
@@ -2297,6 +2345,9 @@ const SHAPE10 = new Map([
 	["[+ 1]", "pf1"], ["[+]", "pfv"],
 ]);
 const WORDS10 = [...SHAPE10.keys()];
+// 値の語の要素の数（R142：素の口に来た並びは繋いで前から1要素ずつ取り、余りは後ろに積む。U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）。
+// ほかの値の語は1要素。
+const LEN10 = new Map([["[1 2]", 2], ["vs", 3]]);
 // P を試験の側で畳む（R40・R41・R47）。返す物：{ stack, openVar, rootUnit }。stack は積み上げの項の種類の並び（"v" か "f"）、openVar は
 // 終わりに可変長の口が1つ以上受けて開いている、rootUnit は根なら `!_` になる（上が口の開いた関数）。2026-10-23 までは、値の後ろの関数が
 // 値を逆適用で取り（口が2つなら主語の口が決まらず、後ろに値が来れば G8 の { gate }）、ここでもそう畳んでいた。
@@ -2307,25 +2358,43 @@ const fold10 = (ws) => {
 		const sh = SHAPE10.get(w);
 		const top = stack[stack.length - 1];
 		if (sh === "v") {
-			if (!top || top.t === "v") stack.push({ t: "v" });
-			else feed10(stack, top);
+			// 並びの語は、最初の閉じていない段が素の口（one・two）なら、繋いで1要素ずつ書いたのと同じに畳む（R142。途中で関数が閉じたら、残りの
+			// 要素は値の後ろに積む、R35）。可変長の口（var・pfv）と区間（pf1、§5 Q126）は1項で受ける。値の上（積み上げの上が値か空）は1項。
+			const cur = top && top.t === "f" ? top.stages.find((s) => !s.done) : null;
+			const k = cur && (cur.sh === "one" || cur.sh === "two") ? LEN10.get(w) || 1 : 1;
+			for (let j = 0; j < k; j++) {
+				const t = stack[stack.length - 1];
+				if (!t || t.t === "v") stack.push({ t: "v" });
+				else feed10(stack, t);
+			}
 			return;
 		}
 		// いちばん上が空か値なら積む（R47）。関数なら合成：後ろに段を足す。
 		if (!top || top.t === "v") {
-			stack.push({ t: "f", stages: [{ sh, recv: 0 }] });
+			stack.push({ t: "f", stages: [{ sh, w, recv: 0 }] });
 			topStart = at;
-		} else top.stages.push({ sh, recv: 0 });
+		} else top.stages.push({ sh, w, recv: 0 });
 	});
 	const top = stack[stack.length - 1];
 	const cur = top && top.t === "f" ? top.stages.find((s) => !s.done) : null;
 	const openVar = !!cur && (cur.sh === "var" || cur.sh === "pfv") && cur.recv > 0;
 	// 並びの終わり（R41）：可変長の口で1つ以上受けた段は閉じ、結果は次の段に入る（次も可変長なら、それも閉じる）。閉じきらない段が
 	// 残る（固定の口が足りない）なら、上は口の開いた関数のままで、根なら `!_`（R42）。
+	// opaque：閉じた `n` の結果（長さの見えない List、R91）が素の口の段（one・two）に来て、届く決まった口（その段の残りと、後ろの段の口の数 − 1。可変長の段で
+	// 止まる）が2つ以上。中身の見えない物で、読む段は種類を未知にして後ろの段を閉じ、leftover-lambda を出さない（R142 の片で実装で決めた所。値の段が決める）。
 	let rootUnit = false;
+	let opaque = false;
 	if (top && top.t === "f") {
 		const need = { one: 1, pf1: 1, two: 2 };
 		const st = top.stages.map((s) => ({ ...s }));
+		const reach = (j) => {
+			let n = need[st[j].sh] - st[j].recv;
+			for (const u of st.slice(j + 1)) {
+				if (need[u.sh] === undefined) break;
+				n += need[u.sh] - 1;
+			}
+			return n;
+		};
 		let i = st.findIndex((s) => !s.done);
 		while (i >= 0 && i < st.length) {
 			const s = st[i];
@@ -2333,13 +2402,17 @@ const fold10 = (ws) => {
 			if (fixed !== undefined ? s.recv < fixed : s.recv === 0) break;
 			s.done = true;
 			i++;
+			if (i < st.length && s.w === "n" && (st[i].sh === "one" || st[i].sh === "two") && reach(i) >= 2) {
+				opaque = true;
+				break;
+			}
 			if (i < st.length) st[i].recv++;
 		}
-		rootUnit = st.some((s) => !s.done);
+		rootUnit = !opaque && st.some((s) => !s.done);
 	}
 	// いちばん上が値の上に積まれた関数なら、それを積んだ語の位置（R52 で、その語から P の終わりまでが括りの中で消える）。
 	const stackedAt = stack.length >= 2 && !!top && top.t === "f" ? topStart : -1;
-	return { stack: stack.map((e) => e.t), openVar, rootUnit, stackedAt };
+	return { stack: stack.map((e) => e.t), openVar, rootUnit, opaque, stackedAt };
 };
 // 関数の項の、いちばん最初の閉じていない段に1つ入れる。固定の口が埋まった段は閉じ、結果が次の段に入る。全部閉じたら値になる。
 const feed10 = (stack, e) => {
@@ -2361,6 +2434,8 @@ law("10 前を括っても同じ（左結合）：P S と (P) S と v : P ⏎ v 
 		通る: 0,
 		"(i) 可変長の口が括りの終わりで閉じる（比べの外）": 0,
 		"(ii) P が根で !_（括りと名前の中は L のまま）": 0,
+		"(v) P の n の結果が素の口2つ以上に来る（中身の見えない物で、根でも名前でも未知）": 0,
+		"(v) P S の n の結果が素の口2つ以上に来る（中身の見えない物。後ろの段を閉じるので種類だけ比べる）": 0,
 		"(iii) 値だけの積み上げ（種類だけ比べる）": 0,
 		"(iii) 値だけの積み上げに関数が来る（種類だけ比べる、R47）": 0,
 		"(iii) 積み上げの上が値の上に積まれて何も受けない関数（R52 で消える。(P) S と (Pv) S の種類を比べる）": 0,
@@ -2403,6 +2478,14 @@ law("10 前を括っても同じ（左結合）：P S と (P) S と v : P ⏎ v 
 			if (!alone.refused && !alone.crash && !(alone.unit && alone.inner === "L")) problems.push(`${P.join(" ")}：根で \`!_\`（包みの中が L）のはず: ${v10(alone, true)}`);
 			if (!named.refused && !named.crash && !(named.unit && named.inner === "L")) problems.push(`v : ${P.join(" ")} ⏎ v：右辺が丸ごと関数なら名前も L のまま（R52 は値の上に積まれた関数だけ）で、根で使えば同じく \`!_\` のはず: ${v10(named, true)}`);
 		}
+		// (v) P の終わりで閉じた n の結果（長さの見えない List）が素の口2つ以上に来る（fold10 の opaque）：中身の見えない物で、根でも名前でも種類は未知、`!_` にしない。
+		if (fp.opaque && fp.stack.length === 1) {
+			count["(v) P の n の結果が素の口2つ以上に来る（中身の見えない物で、根でも名前でも未知）"]++;
+			const alone = solve([P.join(" ")]);
+			const named = solve([`v : ${P.join(" ")}`, "v"]);
+			if (!alone.refused && !alone.crash && !(alone.kind === "未知" && !alone.unit)) problems.push(`${P.join(" ")}：中身の見えない物で未知（\`!_\` でない）のはず: ${v10(alone, true)}`);
+			if (!named.refused && !named.crash && !(named.kind === "未知" && !named.unit)) problems.push(`v : ${P.join(" ")} ⏎ v：中身の見えない物で未知のはず: ${v10(named, true)}`);
+		}
 		for (const S of suffixes) {
 			const br = solve([`(${P.join(" ")}) ${S.join(" ")}`]);
 			// 名前の側：どの枝でも、括った `(P) S` と種類と門が同じ（閉じた1つの項。上の注）。
@@ -2426,8 +2509,12 @@ law("10 前を括っても同じ（左結合）：P S と (P) S と v : P ⏎ v 
 				// 名前の側は、上で `(P) S` と比べた（§5 Q50 の答えの前は、ここで G7 を見ていた）。
 				continue;
 			}
-			const onlyKind = fp.stack.length >= 2;
-			if (onlyKind) {
+			// (v) P S の終わりで n の結果が素の口2つ以上に来る：読む段は後ろの段を閉じて木を書いた葉の入れ子にする（括った側を開いた flowCanon は閉じた段を
+			// 知らない）ので、種類と門だけを比べる。
+			const opaqueFlow = fold10([...P, ...S]).opaque;
+			if (opaqueFlow) count["(v) P S の n の結果が素の口2つ以上に来る（中身の見えない物。後ろの段を閉じるので種類だけ比べる）"]++;
+			const onlyKind = fp.stack.length >= 2 || opaqueFlow;
+			if (fp.stack.length >= 2) {
 				if (S.every((w) => SHAPE10.get(w) === "v")) count["(iii) 値だけの積み上げ（種類だけ比べる）"]++;
 				else count["(iii) 値だけの積み上げに関数が来る（種類だけ比べる、R47）"]++;
 			}
@@ -4303,9 +4390,11 @@ const DEFS23 = [
 const UNITS23 = toUnits(DEFS23);
 const PATTERN_NAMES23 = ["fp", "fh", "fl", "fab", "hs", "mp", "hv", "p3"];
 // [頭, 前の仮引数に当てる実引数]
+// 前の括りの仮引数 `[b ~bs]` に器を1要素として当てるのは `~[2 3]`（問5）。書いた `[2 3]` は最後でない括りの口で繋いで前から取る（R142、U〔答え〕
+// [2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、3 が最後の括りの残りに入って、比べる4つの綴りの List が揃わない。
 const HEADS23 = [
-	["fp", ""], ["fh", ""], ["fl", ""], ["fab", ""], ["hs", ""], ["mp", "$inc"], ["hv", "1"], ["p3", "1 [2 3]"],
-	["(p3 1 [2 3])", ""], ["pm", ""], ["fa", ""], ["pp3", "[2 3]"], ["[[x ~xs] ? x]", ""],
+	["fp", ""], ["fh", ""], ["fl", ""], ["fab", ""], ["hs", ""], ["mp", "$inc"], ["hv", "1"], ["p3", "1 ~[2 3]"],
+	["(p3 1 ~[2 3])", ""], ["pm", ""], ["fa", ""], ["pp3", "~[2 3]"], ["[[x ~xs] ? x]", ""],
 ];
 // `["w", "w"]` の w は `!_` と分かる名前（R115、DEFS23 の `w : p ' zz`）で、R138 の片2 で未定義の名前 zz の組 `["zz", "zz"]` から替えた（w の組の読みは下の注）。
 const ESETS23 = [

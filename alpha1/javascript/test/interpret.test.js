@@ -1264,10 +1264,11 @@ stops("R138 断りの順 !_ ⏎ [:] は2行目の行の文法が先", ["!_", "[:
 		check(`誤5 JS のスタックを半分にしても生の RangeError が出ない（${name}）`, ok, `status ${p.status}: ${out} ${(p.stderr || "").trim().slice(0, 200)}`);
 	}
 	// 1000 項の和・800 項の `&`・括り 300 段は、半分のスタックでは読む段が先に resolve-stack-limit で止まり、値の段を見ない。読む段が通り、載せ替える前の値の段なら
-	// 溢れる 640 項の和で値の段の答えを見る（R。この機械の Node 24 で、前の値の段は約 550 項から RangeError、読む段は約 750 項から resolve-stack-limit）。
-	const p = spawnSync(process.execPath, ["--stack-size=492", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, SIGN_SRC: Array(640).fill("1").join(" + ") } });
+	// 溢れる 600 項の和で値の段の答えを見る（R。この機械の Node 24 で、前の値の段は約 550 項から RangeError、読む段は 620〜660 項のあたりから resolve-stack-limit で、
+	// その間は回すごとに揺れる。600 項は 30 回とも通る）。
+	const p = spawnSync(process.execPath, ["--stack-size=492", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, SIGN_SRC: Array(600).fill("1").join(" + ") } });
 	const out = (p.stdout || "").trim();
-	check("誤5 JS のスタックを半分にしても値の段が答える（640 項の和）", p.status === 0 && out === "ok 640", `status ${p.status}: ${out}`);
+	check("誤5 JS のスタックを半分にしても値の段が答える（600 項の和）", p.status === 0 && out === "ok 600", `status ${p.status}: ${out}`);
 }
 {
 	// 読む段：V8 は正規表現の中のスタック溢れを SyntaxError で出す（1620 項の `&` の鎖で、8 回中 3 回が内部の例外のまま漏れた）。溢れる所は揺れるので、

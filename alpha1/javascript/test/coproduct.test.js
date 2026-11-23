@@ -171,8 +171,10 @@ const passes = [
 	["(f2 10) g 3", std("(f2 10) g 3"), "(apply (compose [f2 10] g) 3)", "A"],
 	// 2026-11-09 の R138：手で書いた `!_` は値の口でも断る（void-written）ので、前の `add !_ 10`（R105 で `add 10`、その前は R16 の穴）は下の refused の代表へ移した。
 	// 穴は今の綴りの `_` で書く（R16）。
-	// §5 Q31 の答え（R34）：余った xs が穴に入る。前は G13（下の refused にあった）。
-	["go _ xs（前は G13）", std(["go : ys ? ys", "xs : 1 , 2", "go _ xs"]), "(apply go xs)", "A"],
+	// §5 Q31 の答え（R34）：余りが穴に入る。並びを運ぶ名前 xs は素の口で繋いで前から取る（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、
+	// `go _ xs` は `go _ 1 2` と同じ：余りの 1 が穴に入り、2 は後ろに積む（R35）。木は穴を跨いで割るので要素の木。器を1要素で穴に入れるのは前置 `~` の `go _ ~xs`（問5）。
+	["go _ xs（繋いで go _ 1 2 と同じ。R142・R34）", std(["go : ys ? ys", "xs : 1 , 2", "go _ xs"]), "(construct (apply go 1) 2)", "A"],
+	["go _ ~xs（前置 ~ の器は1要素で穴に入る、問5）", std(["go : ys ? ys", "xs : 1 , 2", "go _ ~xs"]), "(apply go ~xs)", "A"],
 	["f4 _ 2 _ 3（穴2つ、R16。根なので `!_`、R42。前は手で書いた `!_` の `f4 !_ 2 !_ 3` で、R105 の `f4 2 3`）", std("f4 _ 2 _ 3"), "(unit (? [$p0 $p1] (apply f4 (construct $p0 2 $p1 3))))", "A"],
 	["[add _ 10] 5（前は `[add !_ 10] 5`）", std("[add _ 10] 5"), "(apply [add _ 10] 5)", "A"],
 	// 手で書いた `!_` の行（`!_ \a`・`!_ !_`・`inc !_`・`([+ 1] !_) 5`・`[!_] !_`・`1 !_ 2`・`\a !_`・`!_ inc 5`・`add 1 !_`・`inc 1 !_`）は断る（void-written、R138。
@@ -1390,9 +1392,10 @@ const answerPasses = [
 	// 文字列の字面は List（String ≅ List(Char)）なので、同じ再帰で分解できる。形は [1 2 3] と同じ。
 	["R24 f `abc`（文字列を List として分解する再帰）", src([REC, "f `abc`"]), "(apply f `abc`)", "A"],
 	["R24 f `abc` の実体は [1 2 3] と同じ形", src([REC, "f `abc`"]), "(: f (? [[x ~xs]] (inst [N…] (construct [f xs] x))))", null, { at: 0 }],
-	// R24 の例3：括りは1つで1と数える（function_guide.md「参照の取り方」）。
-	["R24 pair [1 2 3] [10 20]", src(["pair : [a ~as] [b ~bs] ? a + b", "pair [1 2 3] [10 20]"]), "(apply pair (construct [1 2 3] [10 20]))", "A"],
-	["R24 pair の実体（形は仮引数ごとに並べる）", src(["pair : [a ~as] [b ~bs] ? a + b", "pair [1 2 3] [10 20]"]), "(: pair (? [[a ~as] [b ~bs]] (inst [N…] [N…] (+ a b))))", null, { at: 0 }],
+	// R24 の例3：括りの口へ器を1要素として渡すのは前置 `~`（問5：解けない1段の持ち上げ）。書いた `[1 2 3]` は最後でない括りの口で繋いで前から取る（R142、
+	// U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、`pair [1 2 3] [10 20]` は a が 1 で [b ~bs] が `2 3 [10 20]`（下の R142 の節）。
+	["R24 pair ~[1 2 3] [10 20]", src(["pair : [a ~as] [b ~bs] ? a + b", "pair ~[1 2 3] [10 20]"]), "(apply pair (construct ~[1 2 3] [10 20]))", "A"],
+	["R24 pair の実体（形は仮引数ごとに並べる）", src(["pair : [a ~as] [b ~bs] ? a + b", "pair ~[1 2 3] [10 20]"]), "(: pair (? [[a ~as] [b ~bs]] (inst [N…] [N…] (+ a b))))", null, { at: 0 }],
 	// 最後の仮引数が括りの関数は、k > n なら前の仮引数に1つずつ当てて、残りの並び全体を最後の括りが受ける（R24、利用者
 	// 2026-10-19「最後の仮引数が括りの関数は、前の仮引数に1つずつ当てて、残りの並び全体を最後の括りが受ける。」）。
 	["R24 pair [1] [2] [3]（a は [1]、[b ~bs] は [2] [3]）", src(["pair : [a ~as] [b ~bs] ? a + b", "pair [1] [2] [3]"]), "(: pair (? [[a ~as] [b ~bs]] (inst N [N…] (+ a b))))", null, { at: 0 }],
@@ -1402,9 +1405,10 @@ const answerPasses = [
 	// 最後の括りが受けている間に来た inc は合成の後ろ（R41）。木は入れ子の適用（2026-10-24 の R47 で `·rev` の綴りが無くなった。前は
 	// `(apply inc (apply h (construct 1 2 3)) ·rev)`。下の `pair [1] [2] inc`・`f 1 2 3 inc` も同じ）。
 	["R24 h 1 2 3 inc（残りを受けた節は隣と結べる）", src(["inc : x ? x + 1", "h : v [x ~xs] ? v 1", "h 1 2 3 inc"]), "(apply inc (apply h (construct 1 2 3)))", "A"],
-	// 前の仮引数が2つ以上でも、左から1つずつ当てる（[a] は 1、[b ~bs] は [2 3]、[c ~cs] は 4 5）。残りを括った
-	// `p3 1 [2 3] [4 5]` と同じ実体で、実体は1つ。前の当て方を逆にしたり、前に1つしか当てないと形が変わる。
-	["R24 p3 1 [2 3] 4 5 は p3 1 [2 3] [4 5] と同じ実体（前の仮引数に左から1つずつ）", src(["p3 : [a] [b ~bs] [c ~cs] ? a + c", "p3 1 [2 3] 4 5", "p3 1 [2 3] [4 5]"]), "(: p3 (? [[a] [b ~bs] [c ~cs]] (inst N [N…] [N…] (+ a c))))", null, { at: 0 }],
+	// 前の仮引数が2つ以上でも、左から1つずつ当てる（[a] は 1、[b ~bs] は `~[2 3]` の [2 3]、[c ~cs] は 4 5）。残りを括った
+	// `p3 1 ~[2 3] [4 5]` と同じ実体で、実体は1つ。前の当て方を逆にしたり、前に1つしか当てないと形が変わる。器を前の括りの口へ1要素で渡すのは前置 `~`（問5）で、
+	// 書いた `[2 3]` は R142 で繋いで b が 2 になる（U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）。
+	["R24 p3 1 ~[2 3] 4 5 は p3 1 ~[2 3] [4 5] と同じ実体（前の仮引数に左から1つずつ）", src(["p3 : [a] [b ~bs] [c ~cs] ? a + c", "p3 1 ~[2 3] 4 5", "p3 1 ~[2 3] [4 5]"]), "(: p3 (? [[a] [b ~bs] [c ~cs]] (inst N [N…] [N…] (+ a c))))", null, { at: 0 }],
 	["R24 p3 1 [2 3] 4 5", src(["p3 : [a] [b ~bs] [c ~cs] ? a + c", "p3 1 [2 3] 4 5"]), "(apply p3 (construct 1 [2 3] 4 5))", "A"],
 	// k < n は、素の関数と同じく部分適用（残り n − k の L）。残りが来た所で、当てた物と合わせて実体を作る（R24、利用者
 	// 2026-10-19「括りの関数に実引数が足りないときも、素の関数と同じく部分適用（残りの仮引数を待つ関数）にする。」）。
@@ -1432,10 +1436,11 @@ const answerPasses = [
 	// pair の実体は1つになる。部分適用の確かめ 2026-10-19 の TG1）。
 	["R24 当てた物の違う部分適用を欄で渡す（m1 が先）", src([...PAIR_FIELDS, "call m1", "call m2"]), PAIR_FIELDS_INST, null, { at: 1 }],
 	["R24 当てた物の違う部分適用を欄で渡す（m2 が先）", src([...PAIR_FIELDS, "call m2", "call m1"]), PAIR_FIELDS_INST, null, { at: 1 }],
-	// 裸の仮引数に当てた物は形に数えない（R24「裸の仮引数の位置は、形に数えない」）。`t2 1` と `t2 [1 2]` は同じ関数なので、
-	// h の実体は1つ。括りの仮引数に当てた物は数えるので、`[u]` なら別の関数で2つ（部分適用の確かめ 2026-10-19 の F2）。
-	["R24 裸の仮引数に当てた物の違う部分適用は同じ関数", src(["t2 : u [v] ? v", "h : [f] ? f [2]", "h [f : t2 1]", "h [f : t2 [1 2]]"]), "(: h (? [[f]] (inst {f:L} (apply f [2]))))", null, { at: 1 }],
-	["R24 括りの仮引数に当てた物の違う部分適用は別の関数", src(["t2 : [u] [v] ? v", "h : [f] ? f [2]", "h [f : t2 1]", "h [f : t2 [1 2]]"]), "(: h (? [[f]] (inst {f:L} (apply f [2])) (inst {f:L} (apply f [2]))))", null, { at: 1 }],
+	// 裸の仮引数に当てた物は形に数えない（R24「裸の仮引数の位置は、形に数えない」）。`t2 1` と `t2 ~[1 2]` は同じ関数なので、
+	// h の実体は1つ。括りの仮引数に当てた物は数えるので、`[u]` なら別の関数で2つ（部分適用の確かめ 2026-10-19 の F2）。器を1要素で当てるのは前置 `~`（問5）で、
+	// 書いた `[1 2]` は R142 で繋いで口を2つ埋める（`t2 [1 2]` は飽和して欄は値。U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）。
+	["R24 裸の仮引数に当てた物の違う部分適用は同じ関数", src(["t2 : u [v] ? v", "h : [f] ? f [2]", "h [f : t2 1]", "h [f : t2 ~[1 2]]"]), "(: h (? [[f]] (inst {f:L} (apply f [2]))))", null, { at: 1 }],
+	["R24 括りの仮引数に当てた物の違う部分適用は別の関数", src(["t2 : [u] [v] ? v", "h : [f] ? f [2]", "h [f : t2 1]", "h [f : t2 ~[1 2]]"]), "(: h (? [[f]] (inst {f:L} (apply f [2])) (inst {f:L} (apply f [2]))))", null, { at: 1 }],
 	// 裸の仮引数に自分の欄を当て直す再帰は、同じ形で自分を呼ぶので有限（部分適用の鍵で裸の位置を A にしないと、鍵が1段ずつ
 	// 深くなって G7）。
 	["R24 裸の仮引数に部分適用を当て直す再帰", src(["inc : x ? x + 1", "t2 : u [v] ? v", "g : [f] ? g [f : t2 [f : f]]", "g [f : inc]"]), "(apply g [f : inc])", "A"],
@@ -1447,11 +1452,12 @@ const answerPasses = [
 	["R24 (tl 1) 2 3 の実体", src(["tl : [x ~xs] y ? x + y", "(tl 1) 2 3"]), "(: tl (? [[x ~xs] y] (inst N A (+ x y))))", null, { at: 0 }],
 	["R24 [tl 1 2 3]（余りの節も括りの中の根なら通る）", src(["tl : [x ~xs] y ? x + y", "[tl 1 2 3]"]), "[tl 1 2 3]", "A"],
 	// 当てるのは前から n 個（余りの確かめ 2026-10-19 の TG1・TG2・TG4）。実引数が全部数だと、どこから当てても鍵が `N A` に
-	// 揃うので、形の違う実引数で見る。後ろから当てても1つずらしても、`tl [1 2] 3 4` の実体は `N A`、`h 1 [2 3] 4 5` の
-	// 実体は `A N A` になる。部分適用は、当てた物（bound）を前に置いて元の関数の実体を作る。
-	["R24 tl [1 2] 3 4 の実体（前から n 個）", src(["tl : [x ~xs] y ? x + y", "tl [1 2] 3 4"]), "(: tl (? [[x ~xs] y] (inst [N…] A (+ x y))))", null, { at: 0 }],
-	["R24 h 1 [2 3] 4 5 の実体（前から n 個）", src(["h : u [x] v ? u + x + v", "h 1 [2 3] 4 5"]), "(: h (? [u [x] v] (inst A [N…] A (+ (+ u x) v))))", null, { at: 0 }],
-	["R24 (tl [1 2]) 3 4 の実体（当てた物が前）", src(["tl : [x ~xs] y ? x + y", "(tl [1 2]) 3 4"]), "(: tl (? [[x ~xs] y] (inst [N…] A (+ x y))))", null, { at: 0 }],
+	// 揃うので、形の違う実引数で見る。後ろから当てても1つずらしても、`tl ~[1 2] 3 4` の実体は `N A`、`h 1 ~[2 3] 4 5` の
+	// 実体は `A N A` になる。部分適用は、当てた物（bound）を前に置いて元の関数の実体を作る。形の違う実引数は前置 `~` で1要素にした List（問5）で、
+	// 書いた `[1 2]` は R142 で繋いで数になる（U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」。`tl [1 2] 3 4` は `tl 1 2 3 4`）。
+	["R24 tl ~[1 2] 3 4 の実体（前から n 個）", src(["tl : [x ~xs] y ? x + y", "tl ~[1 2] 3 4"]), "(: tl (? [[x ~xs] y] (inst [N…] A (+ x y))))", null, { at: 0 }],
+	["R24 h 1 ~[2 3] 4 5 の実体（前から n 個）", src(["h : u [x] v ? u + x + v", "h 1 ~[2 3] 4 5"]), "(: h (? [u [x] v] (inst A [N…] A (+ (+ u x) v))))", null, { at: 0 }],
+	["R24 (tl ~[1 2]) 3 4 の実体（当てた物が前）", src(["tl : [x ~xs] y ? x + y", "(tl ~[1 2]) 3 4"]), "(: tl (? [[x ~xs] y] (inst [N…] A (+ x y))))", null, { at: 0 }],
 	// k > n なら k の大きさに依らず同じ読み（素の関数の d 1 2 と同じ）。
 	["R24 tl 1 2 3 4（k = n + 2 も余り）", src(["tl : [x ~xs] y ? x + y", "tl 1 2 3 4"]), "(construct (apply tl (construct 1 2)) 3 4)", "A", { leftover: true }],
 	// k = n の括りの関数の節は余りではない（TG5。excess は k > n だけ）。最後の括りが受けている間に来た inc は合成の後ろ（R41）。
@@ -1579,8 +1585,10 @@ const answerPasses = [
 	["Q24 head inc [5 6 7] と head [5 6 7] は同じ実体", src(["inc : x ? x + 1", "head : [x ~xs] ? x", "head inc [5 6 7]", "head [5 6 7]"]), "(: head (? [[x ~xs]] (inst [N…] x)))", null, { at: 1 }],
 	["Q24 head inc [5 6 7] double（合成の適用の節は隣と結べる）", src(["inc : x ? x + 1", "double : x ? x * 2", "head : [x ~xs] ? x", "head inc [5 6 7] double"]), "(apply double (apply inc (apply head [5 6 7])))", "A"],
 	["Q24 [pair [1]] inc [2]（合成の頭の部分適用）", src(["inc : x ? x + 1", "pair : [a ~as] [b ~bs] ? a + b", "(pair [1]) inc [2]"]), "(: pair (? [[a ~as] [b ~bs]] (inst N N (+ a b))))", null, { at: 1 }],
-	["Q24 inc head [5 6 7]（後ろの括りの関数は前の結果を受ける）", src(["inc : x ? x + 1", "head : [x ~xs] ? x", "inc head [5 6 7]"]), "(: head (? [[x ~xs]] (inst A x)))", null, { at: 1 }],
-	["Q24 inc head [5 6 7] の根は未知（head の本体の根が未知）", src(["inc : x ? x + 1", "head : [x ~xs] ? x", "inc head [5 6 7]"]), "(apply (compose inc head) [5 6 7])", "未知"],
+	// inc に器を1要素で渡すのは前置 `~`（問5）。書いた `[5 6 7]` は inc の素の口で繋ぐ（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、
+	// `inc head [5 6 7]` は head が `6 6 7` を受けて A（下の R142 の節）。
+	["Q24 inc head ~[5 6 7]（後ろの括りの関数は前の結果を受ける）", src(["inc : x ? x + 1", "head : [x ~xs] ? x", "inc head ~[5 6 7]"]), "(: head (? [[x ~xs]] (inst A x)))", null, { at: 1 }],
+	["Q24 inc head ~[5 6 7] の根は未知（head の本体の根が未知）", src(["inc : x ? x + 1", "head : [x ~xs] ? x", "inc head ~[5 6 7]"]), "(apply (compose inc head) ~[5 6 7])", "未知"],
 	// 合成の後ろの部分適用（§5 Q26 の案1、利用者 2026-10-19「合成の後ろの素の関数の部分適用も、残り1つで本体の根が A なら
 	// A に数える。」）。括りの関数の部分適用と同じ読みにする。
 	["Q26 inc (pr 1) 5（素の部分適用が合成の後ろ）", src(["inc : x ? x + 1", "pr : x y ? y", "inc (pr 1) 5"]), "(apply (compose inc [pr 1]) 5)", "A"],
@@ -1729,7 +1737,8 @@ const answerPasses = [
 	["R26 ([' 0] fs) 5（片イの R123 で fs の要素は番地。前は L の見える List から引いた物は未知）（前は G7）", std("([' 0] fs) 5"), "(construct [[' 0] fs] 5)", "A"],
 	["R24 関数の行のある字下げのブロック（前は G7）", src(["inc : x ? x + 1", "sh : [h ~hs] ? h 1", "w :", "\tinc", "\t2", "", "sh w"]), "(apply sh w)", "未知"],
 	["Q24 tg inc 1 2 3（本体の根が未知で k > n。G12(b) → G2(a)、R40）（前は G2(a)）", src(["inc : x ? x + 1", "tg : [x ~xs] y ? [,] y", "tg inc 1 2 3"]), "(construct (apply (compose tg inc) (construct 1 2)) 3)", "未知"],
-	["Q24 inc h2 [5 6 7]（後ろの括りの関数の名前は未知）（前は G7）", src(["inc : x ? x + 1", "h2 : [x ~xs] ? x 1", "inc h2 [5 6 7]"]), "(apply (compose inc h2) [5 6 7])", "未知"],
+	// inc に器を1要素で渡すのは前置 `~`（問5）。書いた `[5 6 7]` は R142 で繋ぎ、h2 は数の並びを受けて A。
+	["Q24 inc h2 ~[5 6 7]（後ろの括りの関数の名前は未知）（前は G7）", src(["inc : x ? x + 1", "h2 : [x ~xs] ? x 1", "inc h2 ~[5 6 7]"]), "(apply (compose inc h2) ~[5 6 7])", "未知"],
 	["Q26 inc (pq 1) 5 inc（本体の根が未知の部分適用）（前は G2(a)）", src(["inc : x ? x + 1", "pq : x y ? [,] y", "inc (pq 1) 5 inc"]), "(construct (apply (compose inc [pq 1]) 5) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
 	["Q26 inc (pr 1) (pq 1) 5 inc（前は G2(a)）", src(["inc : x ? x + 1", "pr : x y ? y", "pq : x y ? [,] y", "inc (pr 1) (pq 1) 5 inc"]), "(construct (apply (compose inc [pr 1] [pq 1]) 5) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
 	["Q26 仮置きが外れる再帰 r2 1 2 inc（行の根が未知）（前は G2(a)）", src(["inc : x ? x + 1", "r2 : x y ?", "\tinc (r2 1) y", "\t[,] y", "", "r2 1 2 inc"]), "(construct (apply r2 (construct 1 2)) (unit inc))", "未知", { leftoverDiag: ["inc"] }],
@@ -2055,10 +2064,12 @@ law("最後の仮引数が括りの関数に、残りを並びで渡しても括
 		[["s : [h ~hs] ? (h ' 0) 1"], ""],
 		[["map : f [x ~y] ? x"], "$inc"],
 		[["h : v [x ~xs] ? v 1"], "1"],
-		[["pair : [a ~as] [b ~bs] ? a + b"], "[1 2]"],
+		// 最後でない括りの口へ器を1要素で渡すのは前置 `~`（問5）。書いた `[1 2]` は最後でない括りの口で繋ぐ（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、
+		// 余りが最後の括りへ流れて、この法則の見る「前の実引数を同じにして残りを渡す」形でなくなる。
+		[["pair : [a ~as] [b ~bs] ? a + b"], "~[1 2]"],
 		[["pf : [say] [x ~xs] ? say x"], "m"],
-		[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "1 [2 3]"],
-		[["pm : [say] [b ~bs] [c ~cs] ? say b"], "m [2 3]"],
+		[["p3 : [a] [b ~bs] [c ~cs] ? a + c"], "1 ~[2 3]"],
+		[["pm : [say] [b ~bs] [c ~cs] ? say b"], "m ~[2 3]"],
 	];
 	const ARGS = ["1 2", "1 2 3 4", "`ab` `cd`", "\\a \\b", "[1 2] [3 4]", "1 [2 3]", "1 $inc", "$inc $inc", "m m", "pt pt", "zz zz", "(inc 1) 2"];
 	const look = (s) => {
@@ -2675,7 +2686,8 @@ const foldPasses = [
 	["形を運ぶ head ([' 0] [' 0] [[1 2] [3 4]]) は A", src(["head : [x ~xs] ? x", "head ([' 0] [' 0] [[1 2] [3 4]])"]), "(apply head [[' 0] [' 0] [[1 2] [3 4]]])", "A"],
 	["形を運ぶ v : [' 0] [' 0] [[1 2] [3 4]] を名前で渡す head v の head は数を受ける", src(["head : [x ~xs] ? x", "v : [' 0] [' 0] [[1 2] [3 4]]", "head v"]), "(: head (? [[x ~xs]] (inst N x)))", null, { at: 0 }],
 	["形を運ぶ v : [' 0] [' 0] [[1 2] [3 4]] の後の head v は A", src(["head : [x ~xs] ? x", "v : [' 0] [' 0] [[1 2] [3 4]]", "head v"]), "(apply head v)", "A"],
-	["守り inc head [5 6 7]（前が素の関数なら中身の見えない A を受ける）", src([INC, "head : [x ~xs] ? x", "inc head [5 6 7]"]), "(: head (? [[x ~xs]] (inst A x)))", null, { at: 1 }],
+	// inc に器を1要素で渡すのは前置 `~`（問5。書いた `[5 6 7]` は R142 で繋ぐ）。
+	["守り inc head ~[5 6 7]（前が素の関数なら中身の見えない A を受ける）", src([INC, "head : [x ~xs] ? x", "inc head ~[5 6 7]"]), "(: head (? [[x ~xs]] (inst A x)))", null, { at: 1 }],
 ];
 const foldRefused = [
 	["形を受ける [' 0] bad [[1 2] [3 4]] は形 [N…] で名指し（前は U）", src([BAD, "[' 0] bad [[1 2] [3 4]]"]), "G5", [["bad", "[N…]"]]],
@@ -5934,7 +5946,9 @@ const r64Passes = [
 	["R64 fp ws（数えられるファイルの値の名前も同じ）", r64("fp ws"), "(apply fp ws)", "A", { severities: ["information/bracket-excess"] }],
 	["R64 fp [1 2 3 4]~（数えられる撒いた流れも同じ）", r64("fp [1 2 3 4]~"), "(apply fp [1 2 3 4]~)", "A", { severities: ["information/bracket-excess"] }],
 	["R64 fabc 1 2 3 4（`~rest` のある括りは知らせない）", r64("fabc 1 2 3 4"), "(apply fabc (construct 1 2 3 4))", "A", { diagCount: 0 }],
-	["R64 pb2 [1 2 3] [4]（最後でない括りも、字面の List が名前より多ければ知らせる）", r64("pb2 [1 2 3] [4]"), "(apply pb2 (construct [1 2 3] [4]))", "A", { severities: ["information/bracket-excess"] }],
+	// 最後でない括りの口へ List を1要素で渡すのは前置 `~`（問5）。書いた `[1 2 3]` は繋いで前から取る（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、
+	// `pb2 [1 2 3] [4]` は a が 1 で、知らせは残りの `2 3 [4]` を受けた最後の括り [b] の物になる（下の R142 の節の bracket-excess の名指し）。
+	["R64 pb2 ~[1 2 3] [4]（最後でない括りも、1要素で渡した List が名前より多ければ知らせる）", r64("pb2 ~[1 2 3] [4]"), "(apply pb2 (construct ~[1 2 3] [4]))", "A", { severities: ["information/bracket-excess"] }],
 	["R64 io1 m（構造体は欄の名前で受けるので数えない）", std([IO1, ...M, "io1 m"], { omit: ["adder"] }), "(apply io1 m)", "A", { diagCount: 0 }],
 	["R64 fp vs（数えられて名前と同じ数なら知らせない）", r64("fp vs"), "(apply fp vs)", "A", { diagCount: 0 }],
 	// 足りない方：後ろの名前が `!_`（値の段）。木は今のまま
@@ -5985,8 +5999,9 @@ const r64Passes = [
 	["R64 fp `abc`（ちょうどなら知らせない）", r64("fp `abc`"), "(apply fp `abc`)", "A", { diagCount: 0 }],
 	["R64 st : `abcd` ⏎ fp st（文字列を指す名前も同じ）", r64(["st : `abcd`", "fp st"]), "(apply fp st)", "A", { severities: ["information/bracket-excess"] }],
 	["R64 inc fp 1 2 3 4（合成の段の後ろの括りの関数も数える）", r64("inc fp 1 2 3 4"), "(apply fp (construct (apply inc 1) 2 3 4))", "A", { severities: ["information/bracket-excess"] }],
-	["R64 (pb2 [1 2 3]) [4]（部分適用で当てた括りも、当てた所で知らせる）", r64("(pb2 [1 2 3]) [4]"), "(apply [pb2 [1 2 3]] [4])", "A", { severities: ["information/bracket-excess"] }],
-	["R64 pa : pb2 [1 2 3] ⏎ pa [4] ⏎ pa [5]（名前を通しても、書いた所ごとに1回）", r64(["pa : pb2 [1 2 3]", "pa [4]", "pa [5]"]), "(apply pa [5])", "A", { severities: ["information/bracket-excess"] }],
+	// 部分適用の2行も、前の括りに List を1要素で当てる `~[1 2 3]`（問5）。書いた `(pb2 [1 2 3])` は R142 で繋いで括りの中で飽和する（`[4]` は後ろに積む）。
+	["R64 (pb2 ~[1 2 3]) [4]（部分適用で当てた括りも、当てた所で知らせる）", r64("(pb2 ~[1 2 3]) [4]"), "(apply [pb2 ~[1 2 3]] [4])", "A", { severities: ["information/bracket-excess"] }],
+	["R64 pa : pb2 ~[1 2 3] ⏎ pa [4] ⏎ pa [5]（名前を通しても、書いた所ごとに1回）", r64(["pa : pb2 ~[1 2 3]", "pa [4]", "pa [5]"]), "(apply pa [5])", "A", { severities: ["information/bracket-excess"] }],
 	// R68（§5 Q8）：既定値のある関数の、既定値の無い口の内側の `_`（前の綴り）はカリー化
 	// 2026-10-28 の R105 で R68 は廃止：既定値の無い口の `!_` は単位律で消える（口を使わない）。評価する所で既定値の口だけが開いていれば既定値で埋める（R107）。
 	// 下の行は R105・R107 の答えに直した（前の答えは名前の「前は」に書いた）。`(go !_ 3) 5` は `(go 3) 5` と同じ G7（既定値のある関数の部分適用の項は種類が決まらない、
@@ -6138,6 +6153,1212 @@ for (const [name, s, gateId, must, mustNot] of r64GateMessages) {
 		else fail(`言い分 ${name}`, `gate: ${e.gate}`, `無い語: ${missing.join("・")}`, `余計な語: ${extra.join("・")}`, String(e.message));
 	}
 }
+
+// ---------------------------------------------------------------------------
+// R142・R143（2026-11-22 の片 p1）：素の口と最後でない括りの口は来た並びを繋いでから前から取る・長さの見えない器は括りの口で受ける
+// ---------------------------------------------------------------------------
+//
+// R142（P1、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）：素の口（裸の仮引数）と最後でない括りの口に並び（List・String・器を運ぶ名前）が来たら、先に繋いで、
+// 口が前から1要素ずつ取る。名前を中身に置き換えても答えは変わらない（`x3 : 1 2 3` ⏎ `inc x3` は `inc 1 2 3`）。余りは後ろに積み（R35）、最後の括りの口は残りを
+// 丸ごと受ける（R64）。括りは内を解いて外す（`add [x3]` は x3 の中身を繋ぐ）。2階の器は行を要素に1段だけ繋ぎ、`!_` と分かる要素は先に消えている（R137）。
+// 器を1要素で渡すのは、前置 `~`（問5：解けない1段の持ち上げ）と、最後でない括りの口への括った積 `pair [x2 , y2]`（`,` の辺が1要素）。`add vs` は `add 1 2 3`
+// （問4、U〔答え〕[2026-11-20 20:07:12 UTC 9f9fd58f]「1」）。文字列も素の口では文字に繋ぐ（実装で決めた所：`Person `john` 18` の name は \j で、丸ごと渡すのは
+// `Person ~`john` 18`）。木は書いた葉のまま（`(apply add [1 2])`・`(apply inc x3)`）で、穴や合成を跨いで割る所だけ要素の木を出す（`add _ x2` は
+// `(apply add (construct 2 1))`）。中身の見えない物（実体の結果の残りの List と、合成の前の段から流れて来た `[* 2,]` の結果）が2つ以上の決まった口に来たら、読む段は
+// 種類を未知にして leftover-lambda を出さない（実装で決めた所。値は値の段で決める）。決まった口が1つなら、後ろに可変長の口（最後の括り・`[~xs]`）があれば頭の要素と
+// 残りに分けて受け（入れ子の `h1 (tl vs)` は合成の `tl h1 vs` と同じ、法則1）、無ければ1項で受ける。並びより前に書いた実引数の門は、口が全部埋まると分かる時に見る
+// （`f3 $inc (tl vs) 5` は G7、`add _ _ _ (tl vs)` は G13）。
+// R143（問3、U〔答え〕[2026-11-20 20:03:57 UTC 9f9fd58f]「1」。及ぶ所は U〔答え〕[2026-11-22 01:07:56 UTC 828ee417]「1」）：長さの見えない器（`[~t]` の t・`[x ~t]` の t
+// のように、R91 で長さを持たない残りの名前）の要素が2つ以上の決まった口（素の口と最後でない括りの口）に届くなら、書いた適用を後ろに書いた項ごと `!_`（木は書いた適用を
+// 包んだ `(unit …)`、種類は A）にして、warning の unsized-container を書いた所ごとに1つ出す（呼ぶ行が何本でも1つ。呼ばれない本体は読まないので出ない、R25）。数える口は、
+// その段の残りの決まった口と、合成で後ろの段に届く口（`inc add t`）と、後ろの値が埋める穴の口（`add _ t`）。届く口が1つなら書き下し（`add 1 t`・`inc t 5`）で、最後の括りの
+// 口と可変長の口（`[+] t`）は丸ごと受け、射影の名前（`[a b]` の b）は長さの見えない器ではない。書き下した結果（`inc t` は頭の要素の結果の後ろに t の残り）も長さの
+// 見えない器なので、外の口で数える（`add (inc t)` は合成の `inc add t` と同じく R143、法則1）。閉じた適用は書いた所で `!_` と分かる値なので、括らない `,`・`|`・`;` の辺と
+// 並びの項では、ほかの `!_` と分かる値（w）と同じく消え（`add t , 1` は 1）、`&` の辺と手続きの本体の行では残る。閉じた適用を括った物（`(add t)`・`[add t]`）が外の
+// 適用の頭か実引数になったら、外の適用も後ろの項ごと同じ `!_` で閉じる（`(add t) 5` は `add t 5` と同じ、`inc (add t)` は丸ごと。括った頭は
+// U〔答え〕[2026-11-22 07:51:15 UTC 828ee417]「1」）。外では t の届く口を数え直さず、境目（`,`・`|`・`;`・値の並び）から先は括らない閉じと同じ。
+const P1D = ["pair : [a ~as] [b ~bs] ? a + b", "tl : [x ~xs] y ? x + y", "pq : [a] y ? y"];
+const P1_PRE = [...STD, ...W115, ...P1D];
+// 行ごとに足す定義（最後でない括りの口だけの関数と、下書きの R24 の例の p3）。
+const PB2 = "pb2 : [a] [b] ? a";
+const P3 = "p3 : [a] [b ~bs] [c ~cs] ? a + b + c";
+const p1 = (lines) => [...P1_PRE, ...[].concat(lines)].join("\n");
+const p1At = (f) => P1_PRE.findIndex((l) => l.startsWith(`${f} : `));
+const p1Passes = [
+	// 下書きの R142 の例（x3 は 1階の 1 2 3。既定の vs も同じ値）。札の値は下書きの値。
+	["R142 add [1 2]（値 3）", p1("add [1 2]"), "(apply add [1 2])", "A", { severities: [] }],
+	["R142 inc x3（inc 1 2 3 と同じ、値 2 2 3）", p1(["x3 : 1 2 3", "inc x3"]), "(apply inc x3)", "A", { severities: [] }],
+	["R142 add x3（値 3 3）", p1(["x3 : 1 2 3", "add x3"]), "(apply add x3)", "A", { severities: [] }],
+	["R142 add vs（add 1 2 3、問4）", p1("add vs"), "(apply add vs)", "A", { severities: [] }],
+	["R142 f3 x3（値 6）", p1(["x3 : 1 2 3", "f3 x3"]), "(apply f3 x3)", "A", { severities: [] }],
+	["R142 inc add x3（合成は左から実行、R11。値 4 3）", p1(["x3 : 1 2 3", "inc add x3"]), "(apply (compose inc add) x3)", "A", { severities: [] }],
+	["R142 inc add 1 2 3（書き下し）", p1("inc add 1 2 3"), "(construct (apply add (construct (apply inc 1) 2)) 3)", "A", { severities: [] }],
+	["R142 inc f3 x3（値 7）", p1(["x3 : 1 2 3", "inc f3 x3"]), "(apply (compose inc f3) x3)", "A", { severities: [] }],
+	["R142 inc i add x3（inc add x3 と同じ、R126）", p1(["i : _", "x3 : 1 2 3", "inc i add x3"]), "(apply (compose inc add) x3)", "A", { severities: [] }],
+	["R142 [+] x3（畳む2項の点なしは繋いだ要素を畳む、R31。値 6）", p1(["x3 : 1 2 3", "[+] x3"]), "(apply [+] x3)", "A", { severities: [] }],
+	["R142 pair [x2 , y2]（`,` の辺が1要素。値 4）", p1(["x2 : 1 2", "y2 : 3 4", "pair [x2 , y2]"]), "(apply pair [x2 , y2])", "A", { severities: [] }],
+	["R142 pair [x2 , y2] の実体（a は x2 の頭 1、b は y2 の頭 3）", p1(["x2 : 1 2", "y2 : 3 4", "pair [x2 , y2]"]), "(: pair (? [[a ~as] [b ~bs]] (inst [N…] [N…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 pair x2 の実体（最後でない括りの口も繋ぐ。a は 1、b は 2）", p1(["x2 : 1 2", "pair x2"]), "(: pair (? [[a ~as] [b ~bs]] (inst N N (+ a b))))", null, { at: p1At("pair") }],
+	["R142 pair x2 y2 の実体（最後の括りの口は残りの 2 と y2 を丸ごと受ける、R64）", p1(["x2 : 1 2", "y2 : 3 4", "pair x2 y2"]), "(: pair (? [[a ~as] [b ~bs]] (inst N [A…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 add [x3]（括りは内を解いて外す。add 1 2 3）", p1(["x3 : 1 2 3", "add [x3]"]), "(apply add [x3])", "A", { severities: [] }],
+	// 前置 `~` は要素1つ（問5）。
+	["R142 add ~x3（x3 の器が1つ目の口に入り、2つ目の口が空いて余ったラムダ）", p1(["x3 : 1 2 3", "add ~x3"]), "(unit (apply add ~x3))", "A", { leftoverDiag: ["(apply add ~x3)"] }],
+	["R142 add ~x2（~x2 は要素1つ）", p1(["x2 : 1 2", "add ~x2"]), "(unit (apply add ~x2))", "A", { leftoverDiag: ["(apply add ~x2)"] }],
+	["R142 add x2（繋いで add 1 2）", p1(["x2 : 1 2", "add x2"]), "(apply add x2)", "A", { severities: [] }],
+	["R142 inc ~5（要素1つの 5）", p1("inc ~5"), "(apply inc ~5)", "A", { severities: [] }],
+	// 文字列（実装で決めた所）。
+	["R142 Person `john` 18（文字に繋ぐ。name は \\j、age は \\o で飽和し、残りの文字と 18 は後ろに積む）", p1(["Person : name age ? name", "Person `john` 18"]), "(construct (apply Person `john`) 18)", "A", { severities: [] }],
+	["R142 Person ~`john` 18（丸ごと渡すのは前置 `~`。name は `john`、age は 18）", p1(["Person : name age ? name", "Person ~`john` 18"]), "(apply Person (construct ~`john` 18))", "A", { severities: [] }],
+	// 2階の器は行を要素に1段だけ繋ぐ。
+	["R142 add m2（m2 : 1 2 , 3 4。add [1 2] [3 4]）", p1(["m2 : 1 2 , 3 4", "add m2"]), "(apply add m2)", "A", { severities: [] }],
+	["R142 f3 m2（行は2つなので3つ目の口が空いて余ったラムダ）", p1(["m2 : 1 2 , 3 4", "f3 m2"]), "(unit (apply f3 m2))", "A", { leftoverDiag: ["(apply f3 m2)"] }],
+	// R137：`!_` と分かる要素は並びの項で消えるので、繋ぐ要素も消えた後で数える。
+	["R142 add x4（x4 : 1 w 3 は 1 3。add 1 3）", p1(["x4 : 1 w 3", "add x4"]), "(apply add x4)", "A", { severities: [] }],
+	["R142 f3 x4（消えた後の要素は2つなので余ったラムダ）", p1(["x4 : 1 w 3", "f3 x4"]), "(unit (apply f3 x4))", "A", { leftoverDiag: ["(apply f3 x4)"] }],
+	["R142 add [1 w 3]（add 1 3 と同じ）", p1("add [1 w 3]"), "(apply add [1 w 3])", "A", { severities: [] }],
+	// 穴を跨いで割る所は要素の木（器の要素は穴の口にも入る、R34：`add _ 1 2` は `add 2 1`）。
+	["R142 add _ x2（add _ 1 2 と同じ add 2 1）", p1(["x2 : 1 2", "add _ x2"]), "(apply add (construct 2 1))", "A", { severities: [] }],
+	["R142 add _ 1 2", p1("add _ 1 2"), "(apply add (construct 2 1))", "A", { severities: [] }],
+	// 合成の頭の素の口も繋ぐ。R11 で inc が先に受けて inc 5 になり、その後ろに 6 7 が積まれた 6 6 7 を head が受ける。
+	["R142 inc head [5 6 7]", p1(["head : [x ~xs] ? x", "inc head [5 6 7]"]), "(apply (compose inc head) [5 6 7])", "A", { severities: [] }],
+	["R142 inc head [5 6 7] の head の実体", p1(["head : [x ~xs] ? x", "inc head [5 6 7]"]), "(: head (? [[x ~xs]] (inst [A…] x)))", null, { at: -2 }],
+	["R142 inc head 5 6 7 の head の実体（同じ実体）", p1(["head : [x ~xs] ? x", "inc head 5 6 7"]), "(: head (? [[x ~xs]] (inst [A…] x)))", null, { at: -2 }],
+	// 中身の見えない物（実装で決めた所）：2つ以上の決まった口に来たら種類は未知で、余ったラムダは出さない。決まった口が1つなら1項で受ける（後ろに可変長の口が
+	// あれば頭の要素と残りに分ける。下の pair・h1 の行）。tl は残りを返す `tl : [y ~ys] ? ys`（P1D の tl と別の定義なので std で書く）。
+	["R142 add (tl vs)（実体の結果の残りの List）", std(["tl : [y ~ys] ? ys", "add (tl vs)"]), "(apply add [tl vs])", "未知", { severities: [] }],
+	["R142 f3 (tl vs)", std(["tl : [y ~ys] ? ys", "f3 (tl vs)"]), "(apply f3 [tl vs])", "未知", { severities: [] }],
+	["R142 inc (tl vs)（決まった口が1つ）", std(["tl : [y ~ys] ? ys", "inc (tl vs)"]), "(apply inc [tl vs])", "A", { severities: [] }],
+	["R142 [* 2,] add 1 2（合成の前の段から流れて来た並び）", std("[* 2,] add 1 2"), "(apply (compose [* 2,] add) (construct 1 2))", "未知", { severities: [] }],
+	["R142 [* 2,] inc 1 2（決まった口が1つ）", std("[* 2,] inc 1 2"), "(apply (compose [* 2,] inc) (construct 1 2))", "A", { severities: [] }],
+	// 決まった口が1つの関数が中身の見えない並びを受けると、頭の要素の結果の後ろに残りが積まれるので、その結果も中身の見えない並び。括って書いても、名前で運んでも、
+	// 合成の `tl inc add vs` と同じく add の2つの口へ届く（法則「合成は左から畳む」）。恒等射はその印をそのまま渡す。
+	["R142 add (inc (tl vs))", std(["tl : [y ~ys] ? ys", "add (inc (tl vs))"]), "(apply add [inc [tl vs]])", "未知", { severities: [] }],
+	["R142 tl inc add vs（合成で書いた同じ流れ）", std(["tl : [y ~ys] ? ys", "tl inc add vs"]), "(apply (compose tl inc add) vs)", "未知", { severities: [] }],
+	["R142 y4 : inc (tl vs) ⏎ add y4", std(["tl : [y ~ys] ? ys", "y4 : inc (tl vs)", "add y4"]), "(apply add y4)", "未知", { severities: [] }],
+	["R142 add (i (tl vs))", std(["tl : [y ~ys] ? ys", "i : _", "add (i (tl vs))"]), "(apply add [i [tl vs]])", "未知", { severities: [] }],
+	["R142 inc (inc (tl vs))（決まった口が1つ）", std(["tl : [y ~ys] ? ys", "inc (inc (tl vs))"]), "(apply inc [inc [tl vs]])", "A", { severities: [] }],
+	// 頭の項が中身の見えない並びの構築（`(tl vs) 5`）も中身の見えない並びなので、2つ以上の決まった口に来れば未知（括っても、名前で運んでも、別名を重ねても同じ）。
+	["R142 add ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "add ((tl vs) 5)"]), "(apply add [[tl vs] 5])", "未知", { severities: [] }],
+	["R142 f3 ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "f3 ((tl vs) 5)"]), "(apply f3 [[tl vs] 5])", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ add cc", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "add cc"]), "(apply add cc)", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ k1 cc", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "k1 cc"]), "(apply k1 cc)", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ f3 cc", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "f3 cc"]), "(apply f3 cc)", "未知", { severities: [] }],
+	["R142 dd : cc 6 ⏎ add dd（cc : (tl vs) 5）", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "dd : cc 6", "add dd"]), "(apply add dd)", "未知", { severities: [] }],
+	// 括りの口（名前を並べた射影の fp : [a b c] ? a・最後でない括りの pc の後ろの口）でも、書いた `fp (tl vs) 5`・`pc 7 (tl vs) 5` と同じく未知。
+	["R142 cc : (tl vs) 5 ⏎ fp cc（fp : [a b c] ? a）", std(["tl : [y ~ys] ? ys", "fp : [a b c] ? a", "cc : (tl vs) 5", "fp cc"]), "(apply fp cc)", "未知", { severities: [] }],
+	["R142 fp ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "fp : [a b c] ? a", "fp ((tl vs) 5)"]), "(apply fp [[tl vs] 5])", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ pc 7 cc（pc : [a ~as] [b ~bs] ? b）", std(["tl : [y ~ys] ? ys", "pc : [a ~as] [b ~bs] ? b", "cc : (tl vs) 5", "pc 7 cc"]), "(apply pc (construct 7 cc))", "未知", { severities: [] }],
+	["R142 pc 7 ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "pc : [a ~as] [b ~bs] ? b", "pc 7 ((tl vs) 5)"]), "(apply pc (construct 7 [[tl vs] 5]))", "未知", { severities: [] }],
+	// 決まった口が1つの所に来た中身の見えない並びは、後ろに可変長の口（最後の括り・`[~xs]`）があれば頭の要素と残りに分けて受ける（実装で決めた所）。頭の要素が
+	// 決まった口に入り、残りは可変長の口が丸ごと受けるので、余ったラムダは無い（入れ子の `h1 (tl vs)`・名前で運んだ `h1 yq` と合成の `tl h1 vs` は同じ、法則1）。
+	// 括りの射影（pair の a・b）は中身の見えない並びの要素から取るので、答えの種類は未知。長さの見える `h1 x3` は繋いで a が 1、xs が 2 3。
+	["R142 pair (tl vs)（[a ~as] が頭の要素、[b ~bs] が残りを受ける）", std([P1D[0], "tl : [y ~ys] ? ys", "pair (tl vs)"]), "(apply pair [tl vs])", "未知", { severities: [] }],
+	["R142 h1 (tl vs)（h1 : a [~xs] ? a）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (tl vs)"]), "(apply h1 [tl vs])", "A", { severities: [] }],
+	["R142 h1 (tl vs) の h1 の実体（a が頭の要素、xs が残り）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (tl vs)"]), "(: h1 (? [a [~xs]] (inst A A a)))", null, { at: STD.length }],
+	["R142 tl h1 vs（合成で書いた同じ流れ）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "tl h1 vs"]), "(apply (compose tl h1) vs)", "A", { severities: [] }],
+	["R142 yq : tl vs ⏎ h1 yq（名前で運んでも同じ）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "yq : tl vs", "h1 yq"]), "(apply h1 yq)", "A", { severities: [] }],
+	["R142 inc h1 (tl vs)（合成の頭の段でも同じ）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "inc h1 (tl vs)"]), "(apply (compose inc h1) [tl vs])", "A", { severities: [] }],
+	["R142 [* 2,] h1 1 2（合成の前の段から流れて来た並びも同じ）", std(["h1 : a [~xs] ? a", "[* 2,] h1 1 2"]), "(apply (compose [* 2,] h1) (construct 1 2))", "A", { severities: [] }],
+	["R142 h1 (tl vs) 5（後ろに書いた 5 も [~xs] が受ける）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (tl vs) 5"]), "(apply h1 (construct [tl vs] 5))", "A", { severities: [] }],
+	["R142 p3 1 (tl vs)（[b ~bs] が頭の要素、[c ~cs] が残りを受ける）", std([P3, "tl : [y ~ys] ? ys", "p3 1 (tl vs)"]), "(apply p3 (construct 1 [tl vs]))", "未知", { severities: [] }],
+	["R142 pb2 (tl vs)（[a] が頭の要素、最後の括りの [b] が残りを受ける）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs)"]), "(apply pb2 [tl vs])", "未知", { severities: [] }],
+	// 残り（空かもしれない、印 lenUnknown）は 0 個以上と数えるので、後ろの 5 と合わせて [b] が受けるのは 1 つ以上で、知らせない（bracket-excess は残りの外の項だけで
+	// 名前より多い時、noteExcess。撒く項は流れの数で数える）。
+	["R142 pb2 (tl vs) 5（[b] は残りと 5。知らせは無い）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs) 5"]), "(apply pb2 (construct [tl vs] 5))", "未知", { severities: [] }],
+	["R142 pb2 (inc (tl vs)) 5", std([PB2, "tl : [y ~ys] ? ys", "pb2 (inc (tl vs)) 5"]), "(apply pb2 (construct [inc [tl vs]] 5))", "未知", { severities: [] }],
+	["R142 inc pb2 (tl vs) 5（合成で書いた同じ流れ）", std([PB2, "tl : [y ~ys] ? ys", "inc pb2 (tl vs) 5"]), "(apply pb2 (construct (apply inc [tl vs]) 5))", "未知", { severities: [] }],
+	["R142 h2 : a [b] ? a ⏎ h2 (tl vs) 5", std(["h2 : a [b] ? a", "tl : [y ~ys] ? ys", "h2 (tl vs) 5"]), "(apply h2 (construct [tl vs] 5))", "A", { severities: [] }],
+	["R142 pb2 (tl vs) 5 6（残りの外の 5 6 だけで名前より多いので知らせる）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs) 5 6"]), "(apply pb2 (construct [tl vs] 5 6))", "未知", { severities: ["information/bracket-excess"] }],
+	["R142 pb2 (tl vs) vs~（[b] は残りと撒いた流れ。流れの 3 つだけで名前より多いので知らせる）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs) vs~"]), "(apply pb2 (construct [tl vs] vs~))", "未知", { severities: ["information/bracket-excess"] }],
+	["R142 pb2 (tl vs) 5 vs~（5 と流れの 3 つで 4 つ以上）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs) 5 vs~"]), "(apply pb2 (construct [tl vs] 5 vs~))", "未知", { severities: ["information/bracket-excess"] }],
+	["R142 pb2 (k1 (tl vs)) 5 6（種類の未知な並びは分けずに未知で閉じ、5 6 は後ろに積む）", std([PB2, "tl : [y ~ys] ? ys", "pb2 (k1 (tl vs)) 5 6"]), "(construct (apply pb2 [k1 [tl vs]]) 5 6)", "未知", { severities: [] }],
+	// 最後の括りが受ける残りの並びの頭が中身の見えない並びなら、頭の要素も長さも見えないので、名前は未知（1項で受けた時と同じ、bindParams の seqIn。書いても、
+	// 名前で運んでも、括っても同じ。頭の項が中身の見えない並びの構築も中身の見えない並び）。p2b は `[a ~as] [b ~bs] ? b`。
+	["R142 p2b (tl vs) (tl vs)", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "p2b (tl vs) (tl vs)"]), "(apply p2b (construct [tl vs] [tl vs]))", "未知", { severities: [] }],
+	["R142 cc : (tl vs) (tl vs) ⏎ p2b cc", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "cc : (tl vs) (tl vs)", "p2b cc"]), "(apply p2b cc)", "未知", { severities: [] }],
+	["R142 p2b [(tl vs) (tl vs)]", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "p2b [(tl vs) (tl vs)]"]), "(apply p2b [[tl vs] [tl vs]])", "未知", { severities: [] }],
+	["R142 p2b (tl vs) (tl vs) の p2b の実体", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "p2b (tl vs) (tl vs)"]), "(: p2b (? [[a ~as] [b ~bs]] (inst A A b)))", null, { at: STD.length }],
+	// 並びが先頭の `hd (tl vs) 5`・`p2b (tl vs) 5` は、繋いでから前から取る（P1）ので名前が並びの要素かもしれず、3つの綴りとも未知。hd は `[a ~as] ? a`。
+	["R142 hd (tl vs) 5", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd (tl vs) 5"]), "(apply hd (construct [tl vs] 5))", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ hd cc（名前で運んでも同じ）", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "cc : (tl vs) 5", "hd cc"]), "(apply hd cc)", "未知", { severities: [] }],
+	["R142 hd [(tl vs) 5]（括っても同じ）", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd [(tl vs) 5]"]), "(apply hd [[tl vs] 5])", "未知", { severities: [] }],
+	["R142 p2b (tl vs) 5", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "p2b (tl vs) 5"]), "(apply p2b (construct [tl vs] 5))", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ p2b cc", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "cc : (tl vs) 5", "p2b cc"]), "(apply p2b cc)", "未知", { severities: [] }],
+	["R142 p2b [(tl vs) 5]", std(["p2b : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "p2b [(tl vs) 5]"]), "(apply p2b [[tl vs] 5])", "未知", { severities: [] }],
+	// 頭より後ろだけに中身の見えない並びがあれば（`hd 5 (tl vs)`）、残りの並びは括って書いた `[5 (tl vs)]` と同じ List の形で、名前は前から当たる（名前で運んでも、
+	// 括っても同じ）。pc は `[a ~as] [b ~bs] ? b`。
+	["R142 hd 5 (tl vs)（a は 5）", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd 5 (tl vs)"]), "(apply hd (construct 5 [tl vs]))", "A", { severities: [] }],
+	["R142 hd 5 (tl vs) の hd の実体（hd [5 (tl vs)] と同じ）", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd 5 (tl vs)"]), "(: hd (? [[a ~as]] (inst [A…] a)))", null, { at: STD.length }],
+	["R142 cc : 5 (tl vs) ⏎ hd cc", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "cc : 5 (tl vs)", "hd cc"]), "(apply hd cc)", "A", { severities: [] }],
+	["R142 hd [5 (tl vs)]", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd [5 (tl vs)]"]), "(apply hd [5 [tl vs]])", "A", { severities: [] }],
+	["R142 pc 5 6 (tl vs)（[a ~as] が 5、b は 6）", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "pc 5 6 (tl vs)"]), "(apply pc (construct 5 6 [tl vs]))", "A", { severities: [] }],
+	["R142 pc 5 6 (tl vs) の pc の実体（pc 5 [6 (tl vs)] と同じ）", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "pc 5 6 (tl vs)"]), "(: pc (? [[a ~as] [b ~bs]] (inst N [A…] b)))", null, { at: STD.length }],
+	["R142 pc 5 [6 (tl vs)]", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "pc 5 [6 (tl vs)]"]), "(apply pc (construct 5 [6 [tl vs]]))", "A", { severities: [] }],
+	["R142 cc : 5 6 (tl vs) ⏎ pc cc（pc 5 6 (tl vs) と同じ）", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "cc : 5 6 (tl vs)", "pc cc"]), "(apply pc cc)", "A", { severities: [] }],
+	["R142 cc : 5 6 (tl vs) ⏎ pc cc の pc の実体", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "cc : 5 6 (tl vs)", "pc cc"]), "(: pc (? [[a ~as] [b ~bs]] (inst N [A…] b)))", null, { at: STD.length }],
+	["R142 pc [5 6 (tl vs)]", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "pc [5 6 (tl vs)]"]), "(apply pc [5 6 [tl vs]])", "A", { severities: [] }],
+	["R142 pc [5 6 (tl vs)] の pc の実体", std(["pc : [a ~as] [b ~bs] ? b", "tl : [y ~ys] ? ys", "pc [5 6 (tl vs)]"]), "(: pc (? [[a ~as] [b ~bs]] (inst N [A…] b)))", null, { at: STD.length }],
+	["R142 hd (5 (tl vs))（hd 5 (tl vs) と同じ）", std(["hd : [a ~as] ? a", "tl : [y ~ys] ? ys", "hd (5 (tl vs))"]), "(apply hd [5 [tl vs]])", "A", { severities: [] }],
+	["R142 h1 x3（長さの見える器は繋ぐ）", p1(["h1 : a [~xs] ? a", "x3 : 1 2 3", "h1 x3"]), "(apply h1 x3)", "A", { severities: [] }],
+	// 種類の未知な中身の見えない並び（届く口が2つ以上の所で閉じた項・その実体の結果。関数でありうる）は、届く口が1つで後ろに可変長の口がある段でも頭と残りに分けず、
+	// 後ろを未知で閉じる（opaqueInto。leftover-lambda も saturated も付けない）。合成で書いた同じ流れも未知（法則1）。
+	["R142 h1 (add (tl vs))", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (add (tl vs))"]), "(apply h1 [add [tl vs]])", "未知", { severities: [] }],
+	["R142 tl add h1 vs（合成で書いた同じ流れ）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "tl add h1 vs"]), "(apply (compose tl add h1) vs)", "未知", { severities: [] }],
+	["R142 add h1 (tl vs)（合成）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "add h1 (tl vs)"]), "(apply (compose add h1) [tl vs])", "未知", { severities: [] }],
+	["R142 h1 (add _ (tl vs))", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (add _ (tl vs))"]), "(apply h1 [add _ [tl vs]])", "未知", { severities: [] }],
+	["R142 yq : add _ (tl vs) ⏎ h1 yq（名前で運んでも同じ）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "yq : add _ (tl vs)", "h1 yq"]), "(apply h1 yq)", "未知", { severities: [] }],
+	["R142 h1 (k1 (tl vs) 5)", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "h1 (k1 (tl vs) 5)"]), "(apply h1 [k1 [tl vs] 5])", "未知", { severities: [] }],
+	["R142 gg : [x] ? add (tl vs) ⏎ h1 (gg 1)（実体の結果）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "h1 (gg 1)"]), "(apply h1 [gg 1])", "未知", { severities: [] }],
+	["R142 gg h1 1（合成）", std(["h1 : a [~xs] ? a", "tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "gg h1 1"]), "(apply (compose gg h1) 1)", "未知", { severities: [] }],
+	["R142 pair (add (tl vs))（最後の括りも可変長の口）", std([P1D[0], "tl : [y ~ys] ? ys", "pair (add (tl vs))"]), "(apply pair [add [tl vs]])", "未知", { severities: [] }],
+	["R142 add pair (tl vs)（合成）", std([P1D[0], "tl : [y ~ys] ? ys", "add pair (tl vs)"]), "(apply (compose add pair) [tl vs])", "未知", { severities: [] }],
+	// 穴の並び（R16・R34）に来た中身の見えない並びも、届く口（頭の口のうち並びより前に書いたほかの値が埋めない口。穴の口も入る）が2つ以上なら未知で、leftover-lambda を
+	// 出さない。並びより後ろの値は、並びが短い時だけ口（穴も）を埋めるので、届く口を減らさない（`add _ (tl vs) 5` の並びは穴と2つ目の口に届く）。
+	["R142 add _ (tl vs)（穴の口と2つ目の口）", std(["tl : [y ~ys] ? ys", "add _ (tl vs)"]), "(apply add (construct _ [tl vs]))", "未知", { severities: [] }],
+	["R142 f3 _ 5 (tl vs)", std(["tl : [y ~ys] ? ys", "f3 _ 5 (tl vs)"]), "(apply f3 (construct _ 5 [tl vs]))", "未知", { severities: [] }],
+	["R142 add 5 _ (tl vs)（届く口が1つなら今のまま1項）", std(["tl : [y ~ys] ? ys", "add 5 _ (tl vs)"]), "(apply add (construct 5 [tl vs]))", "A", { severities: [] }],
+	["R142 add _ 5 (tl vs)（前に書いた 5 が2つ目の口を埋め、並びは穴だけに届く）", std(["tl : [y ~ys] ? ys", "add _ 5 (tl vs)"]), "(apply add (construct [tl vs] 5))", "A", { severities: [] }],
+	["R142 add _ (tl vs) 5（後ろの 5 は並びが短い時だけ穴を埋める）", std(["tl : [y ~ys] ? ys", "add _ (tl vs) 5"]), "(apply add (construct _ [tl vs] 5))", "未知", { severities: [] }],
+	["R142 add (tl vs) _ 5", std(["tl : [y ~ys] ? ys", "add (tl vs) _ 5"]), "(apply add (construct [tl vs] _ 5))", "未知", { severities: [] }],
+	["R142 add _ _ (tl vs) 5 6", std(["tl : [y ~ys] ? ys", "add _ _ (tl vs) 5 6"]), "(apply add (construct _ _ [tl vs] 5 6))", "未知", { severities: [] }],
+	// `!_` と分かる項（`!_` と分かる名前 w・未定義の名前・余ったラムダの消えた括り）は並びの項で消えるので、口を埋めない（R137。`f3 _ w w (tl vs)` は `f3 _ (tl vs)`）。
+	["R142 f3 _ w w (tl vs)（f3 _ (tl vs) と同じ）", std([...W115, "tl : [y ~ys] ? ys", "f3 _ w w (tl vs)"]), "(apply f3 (construct _ [tl vs]))", "未知", { severities: [] }],
+	["R142 f3 _ zz (tl vs)（未定義の名前 zz、R21）", std(["tl : [y ~ys] ? ys", "f3 _ zz (tl vs)"]), "(apply f3 (construct _ [tl vs]))", "未知", { severities: ["warning/name-undefined"] }],
+	["R142 f3 _ (1 & inc) (tl vs)（余ったラムダの消えた括り）", std(["tl : [y ~ys] ? ys", "f3 _ (1 & inc) (tl vs)"]), "(apply f3 (construct _ [tl vs]))", "未知", { severities: ["warning/leftover-lambda"] }],
+	// 並びより前に書いた実引数の門は、口が全部埋まると分かる時だけ見る（下の断りの行）。並びより後ろの実引数は、並びの長さで席が変わるので見ず、口が埋まると
+	// 分からない `f3 $inc (tl vs)` も見ない（要素が1つなら部分適用で、呼ばれない）。
+	["R142 add (tl vs) $inc（後ろの $inc の席は並びの長さで決まる）", std(["tl : [y ~ys] ? ys", "add (tl vs) $inc"]), "(construct (apply add [tl vs]) $inc)", "未知", { severities: [] }],
+	["R142 f3 _ (tl vs) $inc", std(["tl : [y ~ys] ? ys", "f3 _ (tl vs) $inc"]), "(apply f3 (construct _ [tl vs] $inc))", "未知", { severities: [] }],
+	["R142 add _ (tl vs) $inc（$inc が穴を埋めるかは並びの長さで決まる）", std(["tl : [y ~ys] ? ys", "add _ (tl vs) $inc"]), "(apply add (construct _ [tl vs] $inc))", "未知", { severities: [] }],
+	["R142 f3 $inc (tl vs)（口が全部埋まるとは分からない）", std(["tl : [y ~ys] ? ys", "f3 $inc (tl vs)"]), "(apply f3 (construct $inc [tl vs]))", "未知", { severities: [] }],
+	["R142 cc : (tl vs) ⏎ f3 $inc cc（名前で運んでも同じ）", std(["tl : [y ~ys] ? ys", "cc : (tl vs)", "f3 $inc cc"]), "(apply f3 (construct $inc cc))", "未知", { severities: [] }],
+	["R142 inc (f3 $inc) (tl vs)（合成の後ろの段も、口が全部埋まるとは分からない）", std(["tl : [y ~ys] ? ys", "inc (f3 $inc) (tl vs)"]), "(apply (compose inc [f3 $inc]) [tl vs])", "未知", { severities: [] }],
+	// 可変長の口（R41）は1つ以上受けて閉じるので、並びを要素1つと見て空になりうる `h4 $inc (tl vs) 5` は、呼ばれるとは分からず門を見ない（5 6 なら下の断り）。
+	["R142 h4 $inc (tl vs) 5（h4 : a b c [~xs] ? a + b）", std(["tl : [y ~ys] ? ys", "h4 : a b c [~xs] ? a + b", "h4 $inc (tl vs) 5"]), "(construct (apply h4 (construct $inc [tl vs])) 5)", "未知", { severities: [] }],
+	["R142 cc : (tl vs) 5 ⏎ h4 $inc cc（名前で運んでも、要素の下限は 2 で同じ）", std(["tl : [y ~ys] ? ys", "h4 : a b c [~xs] ? a + b", "cc : (tl vs) 5", "h4 $inc cc"]), "(apply h4 (construct $inc cc))", "未知", { severities: [] }],
+	// 門の確かめで作った実体は、門に当たらなければ呼んだとは数えない（定義の行は呼ばれない本体のまま）。
+	["R142 use2 $inc (tl vs) 5（use2 : f [b] c ? @f c。門に当たらない）", std(["tl : [y ~ys] ? ys", "use2 : f [b] c ? @f c", "use2 $inc (tl vs) 5"]), "(construct (apply use2 (construct $inc [tl vs])) 5)", "未知", { severities: [] }],
+	["R142 その use2 の定義の行", std(["tl : [y ~ys] ? ys", "use2 : f [b] c ? @f c", "use2 $inc (tl vs) 5"]), "(: use2 (? [f [b] c] (defer {@f c})))", null, { at: STD.length + 1 }],
+	// 届く口が2つ以上の所で中身の見えない並びを受けて閉じた項は、後ろの項を受けたか積んだかが値の段で決まるので、外の口でも中身の見えない並び（名前で運んでも同じ）。
+	// 実体の本体の根が中身の見えない並びなら、実体の結果も中身の見えない並び（`add (kk 1)` は β の `add (inc (tl vs))` と同じ）。
+	["R142 add (k1 (tl vs) 5)", std(["tl : [y ~ys] ? ys", "add (k1 (tl vs) 5)"]), "(apply add [k1 [tl vs] 5])", "未知", { severities: [] }],
+	["R142 y9 : k1 (tl vs) 5 ⏎ add y9", std(["tl : [y ~ys] ? ys", "y9 : k1 (tl vs) 5", "add y9"]), "(apply add y9)", "未知", { severities: [] }],
+	["R142 add (add (tl vs) 5)", std(["tl : [y ~ys] ? ys", "add (add (tl vs) 5)"]), "(apply add [add [tl vs] 5])", "未知", { severities: [] }],
+	["R142 (add (tl vs)) 5（括った閉じの頭。5 を受けたか積んだかも値の段で決まる）", std(["tl : [y ~ys] ? ys", "(add (tl vs)) 5"]), "(construct [add [tl vs]] 5)", "未知", { severities: [] }],
+	["R142 kk : [x] ? inc (tl vs) ⏎ add (kk 1)", std(["tl : [y ~ys] ? ys", "kk : [x] ? inc (tl vs)", "add (kk 1)"]), "(apply add [kk 1])", "未知", { severities: [] }],
+	// 穴の並びで中身の見えない並びを受けて閉じた項（`add _ (tl vs)`）も、呼び終えたかが値の段で決まるので、外の口でも中身の見えない並び（名前で運んでも同じ）。
+	["R142 add (add _ (tl vs))", std(["tl : [y ~ys] ? ys", "add (add _ (tl vs))"]), "(apply add [add _ [tl vs]])", "未知", { severities: [] }],
+	["R142 add (f3 _ (tl vs) 5)", std(["tl : [y ~ys] ? ys", "add (f3 _ (tl vs) 5)"]), "(apply add [f3 _ [tl vs] 5])", "未知", { severities: [] }],
+	["R142 add (f3 _ (tl vs) 5) 7（7 の席も値の段で決まる）", std(["tl : [y ~ys] ? ys", "add (f3 _ (tl vs) 5) 7"]), "(construct (apply add [f3 _ [tl vs] 5]) 7)", "未知", { severities: [] }],
+	["R142 yq : add _ (tl vs) ⏎ add yq", std(["tl : [y ~ys] ? ys", "yq : add _ (tl vs)", "add yq"]), "(apply add yq)", "未知", { severities: [] }],
+	// 届く口が1つの外の適用でも、受けた物が関数かもしれない（並びの長さが1なら `add _ x` は穴の関数）なら、外の適用ごと未知（下の「関数かもしれない未知の物」）。
+	// どの長さでも中の口が埋まる `add _ (tl vs) 5` は値なので、届く口が1つの外の適用は今のまま1項で受ける。
+	["R142 inc (add _ (tl vs))（長さ1では穴の関数を受けるので未知）", std(["tl : [y ~ys] ? ys", "inc (add _ (tl vs))"]), "(apply inc [add _ [tl vs]])", "未知", { severities: [] }],
+	["R142 inc (add _ (tl vs) 5)（届く口が1つで、どの長さでも値）", std(["tl : [y ~ys] ? ys", "inc (add _ (tl vs) 5)"]), "(apply inc [add _ [tl vs] 5])", "A", { severities: [] }],
+	// 恒等射に当てても受けた物そのもの（R29・R126 の単位律：`i X` ≅ X）なので、種類の未知な中身の見えない並びのまま外の口に届く（括っても名前で運んでも同じ）。
+	["R142 add (i (add _ (tl vs)))（add (add _ (tl vs)) と同じ）", std(["tl : [y ~ys] ? ys", "i : _", "add (i (add _ (tl vs)))"]), "(apply add [i [add _ [tl vs]]])", "未知", { severities: [] }],
+	["R142 add (i (add (tl vs)))", std(["tl : [y ~ys] ? ys", "i : _", "add (i (add (tl vs)))"]), "(apply add [i [add [tl vs]]])", "未知", { severities: [] }],
+	["R142 add (i (k1 (tl vs) 5))", std(["tl : [y ~ys] ? ys", "i : _", "add (i (k1 (tl vs) 5))"]), "(apply add [i [k1 [tl vs] 5]])", "未知", { severities: [] }],
+	["R142 add (i (f3 _ (tl vs) 5))", std(["tl : [y ~ys] ? ys", "i : _", "add (i (f3 _ (tl vs) 5))"]), "(apply add [i [f3 _ [tl vs] 5]])", "未知", { severities: [] }],
+	["R142 yq : add _ (tl vs) ⏎ add (i yq)", std(["tl : [y ~ys] ? ys", "i : _", "yq : add _ (tl vs)", "add (i yq)"]), "(apply add [i yq])", "未知", { severities: [] }],
+	["R142 yq : i (add _ (tl vs)) ⏎ add yq", std(["tl : [y ~ys] ? ys", "i : _", "yq : i (add _ (tl vs))", "add yq"]), "(apply add yq)", "未知", { severities: [] }],
+	["R142 gg : [x] ? add (tl vs) ⏎ add (i (gg 1))", std(["tl : [y ~ys] ? ys", "i : _", "gg : [x] ? add (tl vs)", "add (i (gg 1))"]), "(apply add [i [gg 1]])", "未知", { severities: [] }],
+	["R142 inc (i (add _ (tl vs)))（inc (add _ (tl vs)) と同じく未知）", std(["tl : [y ~ys] ? ys", "i : _", "inc (i (add _ (tl vs)))"]), "(apply inc [i [add _ [tl vs]]])", "未知", { severities: [] }],
+	// 恒等射の合成（`i i` は単位律で i）も受けた物そのものなので、恒等射から恒等射へ渡す時も受けた物の印（種類の未知な中身の見えない並び）を渡す（括っても名前で
+	// 運んでも同じ）。
+	["R142 add (i i (add _ (tl vs)))（add (i (add _ (tl vs))) と同じ）", std(["tl : [y ~ys] ? ys", "i : _", "add (i i (add _ (tl vs)))"]), "(apply add [i i [add _ [tl vs]]])", "未知", { severities: [] }],
+	["R142 add ((i i) (add _ (tl vs)))", std(["tl : [y ~ys] ? ys", "i : _", "add ((i i) (add _ (tl vs)))"]), "(apply add [[i i] [add _ [tl vs]]])", "未知", { severities: [] }],
+	["R142 ii2 : i i ⏎ add (ii2 (add _ (tl vs)))", std(["tl : [y ~ys] ? ys", "i : _", "ii2 : i i", "add (ii2 (add _ (tl vs)))"]), "(apply add [ii2 [add _ [tl vs]]])", "未知", { severities: [] }],
+	["R142 add (i i (add (tl vs)))", std(["tl : [y ~ys] ? ys", "i : _", "add (i i (add (tl vs)))"]), "(apply add [i i [add [tl vs]]])", "未知", { severities: [] }],
+	["R142 add (i (i (add _ (tl vs))))", std(["tl : [y ~ys] ? ys", "i : _", "add (i (i (add _ (tl vs))))"]), "(apply add [i [i [add _ [tl vs]]]])", "未知", { severities: [] }],
+	["R142 add (i i (tl vs))", std(["tl : [y ~ys] ? ys", "i : _", "add (i i (tl vs))"]), "(apply add [i i [tl vs]])", "未知", { severities: [] }],
+	// 関数かもしれない未知の物：中身の見えない並びを受けて、いちばん短い長さ（並びは頭の要素を1つ以上持つので、下限 lowerOf）で中の口が埋まらない物（`add (tl vs)`・
+	// `f3 1 (tl vs)`・`add _ (tl vs)`・`k1 (tl vs)`・`[add (tl vs)]`、名前で運んだ `cc : add (tl vs)`）は、並びの長さが1なら関数、2以上なら値。これを外の適用が
+	// 受けたら答えが長さで変わるので、そこから後ろの項ごと種類を未知にして、知らせは出さない（R142 の実装で決めた所を外の適用まで運ぶ。括りで止めない）。
+	// `inc (add (tl vs)) 5` は、長さ1なら法則1 で `add x (inc 5)` の値1つ、2なら `(inc (x + y)) 5` の値2つ。外の外へも合成の段へも同じく及び、木は書いた葉のまま。
+	["R142 inc (add (tl vs)) 5（関数かもしれない未知の物を外の適用が受ける）", std(["tl : [y ~ys] ? ys", "inc (add (tl vs)) 5"]), "(construct (apply inc [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 inc (add (tl vs))", std(["tl : [y ~ys] ? ys", "inc (add (tl vs))"]), "(apply inc [add [tl vs]])", "未知", { severities: [] }],
+	["R142 inc (f3 1 (tl vs)) 5", std(["tl : [y ~ys] ? ys", "inc (f3 1 (tl vs)) 5"]), "(construct (apply inc [f3 1 [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 add 1 (add (tl vs))（外の最後の口）", std(["tl : [y ~ys] ? ys", "add 1 (add (tl vs))"]), "(apply add (construct 1 [add [tl vs]]))", "未知", { severities: [] }],
+	["R142 inc (add _ (tl vs)) 5", std(["tl : [y ~ys] ? ys", "inc (add _ (tl vs)) 5"]), "(construct (apply inc [add _ [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 inc [add (tl vs)] 5（括りで止めない）", std(["tl : [y ~ys] ? ys", "inc [add (tl vs)] 5"]), "(construct (apply inc [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 cc : add (tl vs) ⏎ inc cc 5（名前で運んでも同じ）", std(["tl : [y ~ys] ? ys", "cc : add (tl vs)", "inc cc 5"]), "(construct (apply inc cc) 5)", "未知", { severities: [] }],
+	["R142 inc (k1 (tl vs)) 5", std(["tl : [y ~ys] ? ys", "inc (k1 (tl vs)) 5"]), "(construct (apply inc [k1 [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 double inc (add (tl vs)) 5（合成の段でも同じ）", std(["tl : [y ~ys] ? ys", "double inc (add (tl vs)) 5"]), "(construct (apply (compose double inc) [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 inc (inc (add (tl vs)))（外の外へも及ぶ）", std(["tl : [y ~ys] ? ys", "inc (inc (add (tl vs)))"]), "(apply inc [inc [add [tl vs]]])", "未知", { severities: [] }],
+	["R142 cc : add (tl vs) ⏎ inc (inc cc)", std(["tl : [y ~ys] ? ys", "cc : add (tl vs)", "inc (inc cc)"]), "(apply inc [inc cc])", "未知", { severities: [] }],
+	["R142 inc (f3 $inc (tl vs))（長さ1なら余ったラムダ、2以上なら G7 なので未知）", std(["tl : [y ~ys] ? ys", "inc (f3 $inc (tl vs))"]), "(apply inc [f3 $inc [tl vs]])", "未知", { severities: [] }],
+	// 恒等射は受けた物そのもの（単位律）なので、何段重ねても関数かもしれない未知の物のまま外の適用に届く（段の数で打ち切らない）。合成の後ろの恒等射（`inc i` は
+	// 単位律で inc）でも同じ。
+	["R142 inc (i (i … (add (tl vs)))) 5（恒等射 64 段）", std(["tl : [y ~ys] ? ys", "i : _", "inc " + "(i ".repeat(64) + "(add (tl vs))" + ")".repeat(64) + " 5"]), "(construct (apply inc " + "[i ".repeat(64) + "[add [tl vs]]" + "]".repeat(64) + ") 5)", "未知", { severities: [] }],
+	["R142 inc i (add (tl2 vs)) 5（inc (add (tl2 vs)) 5 と同じ）", std(["tl2 : [y ~ys] ? ys", "i : _", "inc i (add (tl2 vs)) 5"]), "(construct (apply (compose inc i) [add [tl2 vs]]) 5)", "未知", { severities: [] }],
+	// 境目（括らない `,`・`|`・`;` と値の並び）で止まり、そこから先は今の答え（`(add (tl vs)) | 5`・`5 (add (tl vs))` は今も未知。`,` は下の行）。
+	["R142 inc (add (tl vs)) | 5（(add (tl vs)) | 5 と同じく未知）", std(["tl : [y ~ys] ? ys", "inc (add (tl vs)) | 5"]), "(| (apply inc [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 5 (inc (add (tl vs)))（5 (add (tl vs)) と同じく未知）", std(["tl : [y ~ys] ? ys", "5 (inc (add (tl vs)))"]), "(construct 5 [inc [add [tl vs]]])", "未知", { severities: [] }],
+	// どの長さでも中の口が埋まる物は値なので、外の適用は今の読みのまま（下限の長さで中の口が全部埋まるかで分ける）。
+	["R142 inc (add (tl vs) 5)（どの長さでも値）", std(["tl : [y ~ys] ? ys", "inc (add (tl vs) 5)"]), "(apply inc [add [tl vs] 5])", "A", { severities: [] }],
+	["R142 inc (tl vs) 5", std(["tl : [y ~ys] ? ys", "inc (tl vs) 5"]), "(construct (apply inc [tl vs]) 5)", "A", { severities: [] }],
+	["R142 inc (inc (tl vs)) 5", std(["tl : [y ~ys] ? ys", "inc (inc (tl vs)) 5"]), "(construct (apply inc [inc [tl vs]]) 5)", "A", { severities: [] }],
+	["R142 cc : tl vs ⏎ inc cc 5", std(["tl : [y ~ys] ? ys", "cc : tl vs", "inc cc 5"]), "(construct (apply inc cc) 5)", "A", { severities: [] }],
+	["R142 h1 (tl2 vs)（h1 : a [~xs] ? a）", std(["h1 : a [~xs] ? a", "tl2 : [y ~ys] ? ys", "h1 (tl2 vs)"]), "(apply h1 [tl2 vs])", "A", { severities: [] }],
+	// 口が残る外の適用（`(add (tl vs)) 5` と同じ作り）は今も未知。
+	["R142 k1 (add (tl vs)) 5", std(["tl : [y ~ys] ? ys", "k1 (add (tl vs)) 5"]), "(construct (apply k1 [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 use (add (tl vs)) 5", std(["tl : [y ~ys] ? ys", "use (add (tl vs)) 5"]), "(construct (apply use [add [tl vs]]) 5)", "未知", { severities: [] }],
+	["R142 cc : add (tl vs) ⏎ k1 cc 5", std(["tl : [y ~ys] ? ys", "cc : add (tl vs)", "k1 cc 5"]), "(construct (apply k1 cc) 5)", "未知", { severities: [] }],
+	// 実体の本体の根が、届く口が2つ以上の所で閉じた項（種類は未知で、中身の見えない並びでありうる物）でも、実体の結果は中身の見えない並び（`add (gg 1)` は β の
+	// `add (add (tl vs))` と同じ）。長さの見えない器を書き下した本体の根（`gt : [~t] ? inc t`）も、実体の外から長さが見えないので同じ。
+	["R142 gg : [x] ? add (tl vs) ⏎ add (gg 1)", std(["tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "add (gg 1)"]), "(apply add [gg 1])", "未知", { severities: [] }],
+	["R142 add (add (tl vs))（その β）", std(["tl : [y ~ys] ? ys", "add (add (tl vs))"]), "(apply add [add [tl vs]])", "未知", { severities: [] }],
+	["R142 gt : [~t] ? inc t ⏎ add (gt 1 2)", std(["gt : [~t] ? inc t", "add (gt 1 2)"]), "(apply add [gt 1 2])", "未知", { severities: [] }],
+	// 実体の結果は関数にならない（R125：返す所の裸の関数は `!_`）ので、`gg 1` は長さで `!_` か値の並びになるだけ。届く口が1つの外の適用はどの長さでも値を受けて A
+	// （長さの見えない値の並びを返す `gq : [x] ? tl vs` の `inc (gq 1) 5` と同じ）。口の残らない根の `(gg 1) 5` は、`!_` か値かが長さで変わるので未知のまま。
+	["R142 gg : [x] ? add (tl vs) ⏎ inc (gg 1) 5", std(["tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "inc (gg 1) 5"]), "(construct (apply inc [gg 1]) 5)", "A", { severities: [] }],
+	["R142 gg : [x] ? add (tl vs) ⏎ inc (gg 5) 6", std(["tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "inc (gg 5) 6"]), "(construct (apply inc [gg 5]) 6)", "A", { severities: [] }],
+	["R142 gg : [x] ? add (tl vs) ⏎ inc (gg 1)", std(["tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "inc (gg 1)"]), "(apply inc [gg 1])", "A", { severities: [] }],
+	["R142 gg : [x] ? add (tl vs) ⏎ (gg 1) 5", std(["tl : [y ~ys] ? ys", "gg : [x] ? add (tl vs)", "(gg 1) 5"]), "(construct [gg 1] 5)", "未知", { severities: [] }],
+	// 長さ1では本体の根が余ったラムダ（R125 で `!_`）、2以上では実体の門なので、外では答えが長さで変わり、断らない（R142 の未知）。
+	["R142 gg : [x] ? f3 $inc (tl vs) ⏎ inc (gg 1) 5", std(["tl : [y ~ys] ? ys", "gg : [x] ? f3 $inc (tl vs)", "inc (gg 1) 5"]), "(construct (apply inc [gg 1]) 5)", "A", { severities: [] }],
+	["R142 gg : [x] ? f3 $inc (tl vs) ⏎ (gg 1) 5", std(["tl : [y ~ys] ? ys", "gg : [x] ? f3 $inc (tl vs)", "(gg 1) 5"]), "(construct [gg 1] 5)", "未知", { severities: [] }],
+	// 中身の見えない並びを括りの口（届く口が1つの最後の括り・`[~xs]`）で受けた実体は、括りが受ける List をその並びと読む（[x] ≅ x）ので、残りの名前も中身の見えない
+	// 並びで、それを返す実体の結果も中身の見えない並び（段を重ねても同じ。`add (tl (tl x4))` は、`add (tl x4)` と同じく未知）。要素の中身は見えないので、裸の名前は
+	// 未知で、畳んでも撒いても並びに直に当てた時と同じ（β。`hh : [~h] ? [+] h` ⏎ `hh (tl vs)` は `[+] (tl vs)` と同じく未知、R31 の1項）。形の綴りは中身の見えない
+	// A と同じ `A` で、実体は中身の見えない A を受けた物と分ける（`hv (inc 5)` は今のまま余ったラムダ）。
+	["R142 hv : [~xs] ? xs ⏎ add (hv (tl vs))", std(["tl : [y ~ys] ? ys", "hv : [~xs] ? xs", "add (hv (tl vs))"]), "(apply add [hv [tl vs]])", "未知", { severities: [] }],
+	["R142 add (tl (tl vs))", std(["tl : [y ~ys] ? ys", "add (tl (tl vs))"]), "(apply add [tl [tl vs]])", "未知", { severities: [] }],
+	["R142 add (tl (tl vs)) の tl の実体（外の tl は中身の見えない並びを受けた `A`）", std(["tl : [y ~ys] ? ys", "add (tl (tl vs))"]), "(: tl (? [[y ~ys]] (inst A ys) (inst [N…] ys)))", null, { at: STD.length }],
+	["R142 y5 : hv (inc 5) ⏎ add (hv (tl vs))（中身の見えない A を受けた実体とは分ける）", std(["tl : [y ~ys] ? ys", "hv : [~xs] ? xs", "y5 : hv (inc 5)", "add (hv (tl vs))"]), "(apply add [hv [tl vs]])", "未知", { severities: [] }],
+	["R142 その hv の実体（綴りは同じ `A` の実体が2つ）", std(["tl : [y ~ys] ? ys", "hv : [~xs] ? xs", "y5 : hv (inc 5)", "add (hv (tl vs))"]), "(: hv (? [[~xs]] (inst A xs) (inst A xs)))", null, { at: STD.length + 1 }],
+	["R142 add (hv (inc 5))（中身の見えない A は1項）", std(["tl : [y ~ys] ? ys", "hv : [~xs] ? xs", "add (hv (inc 5))"]), "(unit (apply add [hv [inc 5]]))", "A", { leftoverDiag: ["(apply add [hv [inc 5]])"] }],
+	["R142 hh : [~h] ? [+] h ⏎ hh (tl vs)（[+] (tl vs) と同じ）", std(["tl : [y ~ys] ? ys", "hh : [~h] ? [+] h", "hh (tl vs)"]), "(apply hh [tl vs])", "未知", { severities: [] }],
+	["R142 [+] (tl vs)", std(["tl : [y ~ys] ? ys", "[+] (tl vs)"]), "(apply [+] [tl vs])", "未知", { severities: [] }],
+	["R142 fh : [x ~xs] ? x ⏎ fh (tl vs)（裸の名前は未知）", std(["tl : [y ~ys] ? ys", "fh : [x ~xs] ? x", "fh (tl vs)"]), "(apply fh [tl vs])", "未知", { severities: [] }],
+	["R142 hq : a [~xs] ? xs ⏎ add (hq (tl vs))", std(["tl : [y ~ys] ? ys", "hq : a [~xs] ? xs", "add (hq (tl vs))"]), "(apply add [hq [tl vs]])", "未知", { severities: [] }],
+	["R142 h1 (hv (tl vs))（h1 (tl vs) と同じ）", std(["tl : [y ~ys] ? ys", "hv : [~xs] ? xs", "h1 : a [~xs] ? a", "h1 (hv (tl vs))"]), "(apply h1 [hv [tl vs]])", "A", { severities: [] }],
+	["R142 x4 : 1 2 3 4 ⏎ add (tl (tl x4))", std(["tl : [y ~ys] ? ys", "x4 : 1 2 3 4", "add (tl (tl x4))"]), "(apply add [tl [tl x4]])", "未知", { severities: [] }],
+	["R142 ln : [~ys] ? ys ⏎ add (ln (tl x4))", std(["tl : [y ~ys] ? ys", "x4 : 1 2 3 4", "ln : [~ys] ? ys", "add (ln (tl x4))"]), "(apply add [ln [tl x4]])", "未知", { severities: [] }],
+	["R142 add (tl ([* 2,] 1 2 3))", std(["tl : [y ~ys] ? ys", "add (tl ([* 2,] 1 2 3))"]), "(apply add [tl [[* 2,] 1 2 3]])", "未知", { severities: [] }],
+	["R142 h1 (tl (tl x4))", std(["tl : [y ~ys] ? ys", "x4 : 1 2 3 4", "h1 : a [~xs] ? a", "h1 (tl (tl x4))"]), "(apply h1 [tl [tl x4]])", "A", { severities: [] }],
+	// 素の関数の結果と List になる演算の結果は、中身の見えない物（実体の結果と合成の流れ、実装で決めた所）に入れず、今のまま1項で受ける（余ったラムダ）。括りの関数の
+	// 実体の結果は中身の見えない並び。
+	["R142 dup : x ? x , x ⏎ add (dup 5)（素の関数の結果は今のまま1項）", p1(["dup : x ? x , x", "add (dup 5)"]), "(unit (apply add [dup 5]))", "A", { leftoverDiag: ["(apply add [dup 5])"] }],
+	["R142 x2 : 1 2 ⏎ add (x2 + 1)（演算の結果も今のまま1項）", p1(["x2 : 1 2", "add (x2 + 1)"]), "(unit (apply add [x2 + 1]))", "A", { leftoverDiag: ["(apply add [x2 + 1])"] }],
+	["R142 dup : [x] ? x , x ⏎ add (dup 5)（括りの関数の実体の結果）", p1(["dup : [x] ? x , x", "add (dup 5)"]), "(apply add [dup 5])", "未知", { severities: [] }],
+	// 前置 `~` の持ち上げ（問5：要素1つ）と開いた参照 `@q` は、括っても名前で運んでも書いた所と同じ1項（[r] ≅ r、名前を中身に置き換えても答えは変わらない）。
+	// 最後でない括りの口の知らせ（R64 の bracket-excess）も同じ数えで出る。
+	["R142 add [~[1 2]] 3（add ~[1 2] 3 と同じ）", p1("add [~[1 2]] 3"), "(apply add (construct [~[1 2]] 3))", "A", { severities: [] }],
+	["R142 add (~[1 2]) 3", p1("add (~[1 2]) 3"), "(apply add (construct [~[1 2]] 3))", "A", { severities: [] }],
+	["R142 yy : ~[1 2] ⏎ add yy 3", p1(["yy : ~[1 2]", "add yy 3"]), "(apply add (construct yy 3))", "A", { severities: [] }],
+	["R142 add [~[1 2]]（要素1つなので2つ目の口が空いて余ったラムダ。add ~[1 2] と同じ）", p1("add [~[1 2]]"), "(unit (apply add [~[1 2]]))", "A", { leftoverDiag: ["(apply add [~[1 2]])"] }],
+	["R142 yy : ~[1 2] ⏎ add yy", p1(["yy : ~[1 2]", "add yy"]), "(unit (apply add yy))", "A", { leftoverDiag: ["(apply add yy)"] }],
+	["R142 yy : ~[1 2] ⏎ inc add yy 3（inc add ~[1 2] 3 と同じ）", p1(["yy : ~[1 2]", "inc add yy 3"]), "(apply add (construct (apply inc yy) 3))", "A", { severities: [] }],
+	["R142 f3 [~x2] 5 6（x2 : 1 2）", p1(["x2 : 1 2", "f3 [~x2] 5 6"]), "(apply f3 (construct [~x2] 5 6))", "A", { severities: [] }],
+	["R142 add (@q) 5（q : $x2。add @q 5 と同じ1項）", p1(["x2 : 1 2", "q : $x2", "add (@q) 5"]), "(apply add (construct [@q] 5))", "A", { severities: ["warning/dollar-non-function"] }],
+	["R142 pb2 [~[1 2 3]] [4]（[a] に3要素の List。pb2 ~[1 2 3] [4] と同じ）", p1([PB2, "pb2 [~[1 2 3]] [4]"]), "(apply pb2 (construct [~[1 2 3]] [4]))", "A", { severities: ["information/bracket-excess"] }],
+	["R142 yy : ~[1 2 3] ⏎ pb2 yy [4]", p1([PB2, "yy : ~[1 2 3]", "pb2 yy [4]"]), "(apply pb2 (construct yy [4]))", "A", { severities: ["information/bracket-excess"] }],
+	["R142 pb2 [~x3] [4]（x3 : 1 2 3）", p1([PB2, "x3 : 1 2 3", "pb2 [~x3] [4]"]), "(apply pb2 (construct [~x3] [4]))", "A", { severities: ["information/bracket-excess"] }],
+	// 恒等射に当てた適用は受けた物そのもの（R29・R126 の単位律：`i X` ≅ X、`i 5 6` ≅ `5 6`）なので、繋ぐ数えも X で見る。
+	["R142 add (i 5 6)（add (5 6) と同じ）", p1(["i : _", "add (i 5 6)"]), "(apply add [i 5 6])", "A", { severities: [] }],
+	["R142 f3 (i 5 6) 7", p1(["i : _", "f3 (i 5 6) 7"]), "(apply f3 (construct [i 5 6] 7))", "A", { severities: [] }],
+	["R142 yq : i 5 6 ⏎ add yq", p1(["i : _", "yq : i 5 6", "add yq"]), "(apply add yq)", "A", { severities: [] }],
+	["R142 add (i [5 6])", p1(["i : _", "add (i [5 6])"]), "(apply add [i [5 6]])", "A", { severities: [] }],
+	["R142 add (i x3)（add x3 と同じ）", p1(["i : _", "x3 : 1 2 3", "add (i x3)"]), "(apply add [i x3])", "A", { severities: [] }],
+	["R142 pair (i x3)", p1(["i : _", "x3 : 1 2 3", "pair (i x3)"]), "(apply pair [i x3])", "A", { severities: [] }],
+	["R142 pair (i x3) の pair の実体（pair x3 と同じ）", p1(["i : _", "x3 : 1 2 3", "pair (i x3)"]), "(: pair (? [[a ~as] [b ~bs]] (inst N [N…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 add _ (i x3)（add _ x3 と同じ add 2 1 で、3 は後ろに積む）", p1(["i : _", "x3 : 1 2 3", "add _ (i x3)"]), "(construct (apply add (construct 2 1)) 3)", "A", { severities: [] }],
+	// 合成の後ろの恒等射（`inc i` は単位律で inc）が、前の段の結果と余りを受けたら、受けた並びのまま閉じる（idTail）ので、長さの見える並び（add (inc x3) と同じ）。
+	["R142 add (inc i x3)（add (inc x3) と同じ）", p1(["i : _", "x3 : 1 2 3", "add (inc i x3)"]), "(apply add [inc i x3])", "A", { severities: [] }],
+	["R142 add (inc i 1 2 3)（その書き下し）", p1(["i : _", "add (inc i 1 2 3)"]), "(apply add [inc i 1 2 3])", "A", { severities: [] }],
+	["R142 yy : inc i x3 ⏎ add yy", p1(["i : _", "x3 : 1 2 3", "yy : inc i x3", "add yy"]), "(apply add yy)", "A", { severities: [] }],
+	["R142 add (i i x3)", p1(["i : _", "x3 : 1 2 3", "add (i i x3)"]), "(apply add [i i x3])", "A", { severities: [] }],
+	["R142 add ((inc i) x3)（括った合成でも同じ）", p1(["i : _", "x3 : 1 2 3", "add ((inc i) x3)"]), "(apply add [[inc i] x3])", "A", { severities: [] }],
+	["R142 add ((inc i) 1 2)", p1(["i : _", "add ((inc i) 1 2)"]), "(apply add [[inc i] 1 2])", "A", { severities: [] }],
+	// 恒等射が2項以上を受けた結果は受けた並びそのもの（形も同じ）なので、行を要素に繋ぐ2階の器もそのまま（`pair (i 1 2 , 3 4)` は `pair (1 2 , 3 4)`、`,` は適用の外、R121）。
+	["R142 pair (i 1 2 , 3 4)（pair (1 2 , 3 4) と同じ）", p1(["i : _", "pair (i 1 2 , 3 4)"]), "(apply pair [i 1 2 , 3 4])", "A", { severities: [] }],
+	["R142 pair (i 1 2 , 3 4) の pair の実体（[a ~as] が行 1 2、[b ~bs] が行 3 4 を受ける）", p1(["i : _", "pair (i 1 2 , 3 4)"]), "(: pair (? [[a ~as] [b ~bs]] (inst [N…] [N…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 m4 : i 1 2 , 3 4 ⏎ pair m4 の pair の実体（名前で運んでも同じ）", p1(["i : _", "m4 : i 1 2 , 3 4", "pair m4"]), "(: pair (? [[a ~as] [b ~bs]] (inst [N…] [N…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 pq (i 1 2 , 3 4)（[a] が行 1 2 を受けて知らせる。pq (1 2 , 3 4) と同じ）", p1(["i : _", "pq (i 1 2 , 3 4)"]), "(apply pq [i 1 2 , 3 4])", "A", { severities: ["information/bracket-excess"] }],
+	["R142 pq (i 1 2 , 3 4) の pq の実体", p1(["i : _", "pq (i 1 2 , 3 4)"]), "(: pq (? [[a] y] (inst [N…] A y)))", null, { at: p1At("pq") }],
+	// `,` の辺で括った恒等射と、名前の右辺の恒等射も、知らせの数えでは外して見る（excessCount は受けた物の出どころまで辿る）。
+	["R142 pq ((i 1 2) , 3 4)（pq ((1 2) , 3 4) と同じく知らせる）", p1(["i : _", "pq ((i 1 2) , 3 4)"]), "(apply pq [[i 1 2] , 3 4])", "A", { severities: ["information/bracket-excess"] }],
+	["R142 yy : i 1 2 ⏎ pq (yy , 3 4)", p1(["i : _", "yy : i 1 2", "pq (yy , 3 4)"]), "(apply pq [yy , 3 4])", "A", { severities: ["information/bracket-excess"] }],
+	["R142 pq ((i [1 2]) , 3 4)（pq ([1 2] , 3 4) と同じ）", p1(["i : _", "pq ((i [1 2]) , 3 4)"]), "(apply pq [[i [1 2]] , 3 4])", "A", { severities: ["information/bracket-excess"] }],
+	["R142 pair ((i 1 2) , 3 4)（pair ((1 2) , 3 4) と同じ）", p1(["i : _", "pair ((i 1 2) , 3 4)"]), "(apply pair [[i 1 2] , 3 4])", "A", { severities: [] }],
+	["R142 head (i 5 6) の head の実体（head (5 6) と同じ）", p1(["i : _", "head : [x ~xs] ? x", "head (i 5 6)"]), "(: head (? [[x ~xs]] (inst [N…] x)))", null, { at: -2 }],
+	// 射影の名前も器を運ぶ名前：括りの関数の実体の List の形の物は、実体を長さで分けない（R91）ので中身の見えない並び。
+	["R142 gt : [a b] ? add b ⏎ gt [1 2 , 3 4]（b は 3 4 を運び、届く口が2つなので未知）", p1(["gt : [a b] ? add b", "gt [1 2 , 3 4]"]), "(apply gt [1 2 , 3 4])", "未知", { severities: [] }],
+	["R142 その gt の実体（本体の根は未知で、bare-function-return を出さない）", p1(["gt : [a b] ? add b", "gt [1 2 , 3 4]"]), "(: gt (? [[a b]] (inst [[N…]…] (apply add b))))", null, { at: -2 }],
+	["R142 gt : [a b] ? inc b ⏎ gt [1 2 , 3 4]（届く口が1つなら今のまま1項）", p1(["gt : [a b] ? inc b", "gt [1 2 , 3 4]"]), "(apply gt [1 2 , 3 4])", "A", { severities: [] }],
+	// 名前を名前で運ぶ別名（`c2 : cc`・`c2 : [cc]`）も、定義の根まで辿って要素の木で数える。
+	["R142 c2 : cc ⏎ use c2（cc : $inc 1。use cc と同じ）", p1(["cc : $inc 1", "c2 : cc", "use c2"]), "(apply use c2)", "A", { severities: [] }],
+	["R142 c2 : x3 ⏎ add c2", p1(["x3 : 1 2 3", "c2 : x3", "add c2"]), "(apply add c2)", "A", { severities: [] }],
+	["R142 c2 : [x3] ⏎ f3 c2", p1(["x3 : 1 2 3", "c2 : [x3]", "f3 c2"]), "(apply f3 c2)", "A", { severities: [] }],
+	["R142 c2 : cc ⏎ pair c2 の pair の実体（cc : 1 [2 3]。pair cc と同じ）", p1(["cc : 1 [2 3]", "c2 : cc", "pair c2"]), "(: pair (? [[a ~as] [b ~bs]] (inst N [N…] (+ a b))))", null, { at: p1At("pair") }],
+	// 穴を跨いで割る文字列の要素は文字の葉（`\a` の綴り。名前で運んでも、別名でも同じ）。
+	["R142 add _ `ab`（add _ \\a \\b と同じ add \\b \\a）", p1("add _ `ab`"), "(apply add (construct \\b \\a))", "A", { severities: [] }],
+	["R142 st : `ab` ⏎ s2 : st ⏎ add _ s2", p1(["st : `ab`", "s2 : st", "add _ s2"]), "(apply add (construct \\b \\a))", "A", { severities: [] }],
+	// 穴の関数の括りに繋いだ並び（R16）：`(f3 _ x2) 5` は `(f3 _ 1 2) 5` と同じく 5 が穴を埋める。
+	["R142 (f3 _ x2) 5（x2 : 1 2）", p1(["x2 : 1 2", "(f3 _ x2) 5"]), "(apply [f3 _ x2] 5)", "A", { severities: [] }],
+	// R24・R64 の実体と知らせ：書いた List は最後でない括りの口でも繋いで前から取り、`,` の辺は1要素（下書きの R24 の例 `p3 [1 , 2 3 , 4 5]`）。
+	["R142 p3 [1 , 2 3 , 4 5]", p1([P3, "p3 [1 , 2 3 , 4 5]"]), "(apply p3 [1 , 2 3 , 4 5])", "A", { severities: [] }],
+	["R142 その p3 の実体（a が 1、[b ~bs] が 2 3、[c ~cs] が 4 5）", p1([P3, "p3 [1 , 2 3 , 4 5]"]), "(: p3 (? [[a] [b ~bs] [c ~cs]] (inst N [N…] [N…] (+ (+ a b) c))))", null, { at: -2 }],
+	["R142 tl [1 2] 3 4（x が 1、y が 2、3 4 は後ろに積む）", p1("tl [1 2] 3 4"), "(construct (apply tl [1 2]) 3 4)", "A", { severities: [] }],
+	["R142 その tl の実体", p1("tl [1 2] 3 4"), "(: tl (? [[x ~xs] y] (inst N A (+ x y))))", null, { at: p1At("tl") }],
+	["R142 h 1 [2 3] 4 5（h : u [x] v ? u + x + v。[x] が 2、v が 3 で、知らせは無い）", p1(["h : u [x] v ? u + x + v", "h 1 [2 3] 4 5"]), "(construct (apply h (construct 1 [2 3])) 4 5)", "A", { severities: [] }],
+	["R142 pair [1 2 3] [10 20]（a が 1、[b ~bs] が 2 3 [10 20]、R24 の例3）", p1("pair [1 2 3] [10 20]"), "(apply pair (construct [1 2 3] [10 20]))", "A", { severities: [] }],
+	["R142 その pair の実体", p1("pair [1 2 3] [10 20]"), "(: pair (? [[a ~as] [b ~bs]] (inst N [A…] (+ a b))))", null, { at: p1At("pair") }],
+	["R142 pb2 x3（x3 : 1 2 3。a が 1 で、[b] が 2 3 を受けて知らせる）", p1([PB2, "x3 : 1 2 3", "pb2 x3"]), "(apply pb2 x3)", "A", { severities: ["information/bracket-excess"] }],
+	["R142 その pb2 の実体", p1([PB2, "x3 : 1 2 3", "pb2 x3"]), "(: pb2 (? [[a] [b]] (inst N [N…] a)))", null, { at: P1_PRE.length }],
+	["R142 mx [1 2] 3（mx : [a] y ? a。a が 1、y が 2、3 は後ろに積む）", p1(["mx : [a] y ? a", "mx [1 2] 3"]), "(construct (apply mx [1 2]) 3)", "A", { severities: [] }],
+	// 部分適用と別名の口にも繋ぐ（R142 の素の口）。名前で運んだ繋いだ結果（spliceElems）も長さの見える並び。
+	["R142 (f3 1) [2 3]", p1("(f3 1) [2 3]"), "(apply [f3 1] [2 3])", "A", { severities: [] }],
+	["R142 p : f3 1 ⏎ p [2 3]", p1(["p : f3 1", "p [2 3]"]), "(apply p [2 3])", "A", { severities: [] }],
+	["R142 (add) [1 2]", p1("(add) [1 2]"), "(apply [add] [1 2])", "A", { severities: [] }],
+	["R142 yq : inc x3 ⏎ add yq（x3 : 1 2 3。yq は 2 2 3）", p1(["x3 : 1 2 3", "yq : inc x3", "add yq"]), "(apply add yq)", "A", { severities: [] }],
+	["R142 add (inc x3)", p1(["x3 : 1 2 3", "add (inc x3)"]), "(apply add [inc x3])", "A", { severities: [] }],
+	// 長さの見える書き下しの後ろに値の項を積んだ構築も、頭を繋いだ要素の数で数えて平らにする（`inc x3 5` は `inc 1 2 3 5` と同じ 2 2 3 5。中身に置き換えた
+	// `f3 (inc 1 2 3 5)`・合成の `inc f3 x3 5` と同じ、P1・法則1）。
+	["R142 f3 (inc x3 5)（f3 が 2 2 3 を受けて、5 は後ろに積む）", p1(["x3 : 1 2 3", "f3 (inc x3 5)"]), "(apply f3 [inc x3 5])", "A", { severities: [] }],
+	["R142 f4 (inc x3 5)（f4 が 2 2 3 5 を受ける）", p1(["x3 : 1 2 3", "f4 (inc x3 5)"]), "(apply f4 [inc x3 5])", "A", { severities: [] }],
+	["R142 f4 (inc x2 5 6)（x2 : 1 2。f4 が 2 2 5 6 を受ける）", p1(["x2 : 1 2", "f4 (inc x2 5 6)"]), "(apply f4 [inc x2 5 6])", "A", { severities: [] }],
+	["R142 yy : inc x2 5 6 ⏎ f4 yy（名前で運んでも同じ）", p1(["x2 : 1 2", "yy : inc x2 5 6", "f4 yy"]), "(apply f4 yy)", "A", { severities: [] }],
+	// 後ろの項が名前で運んだ長さの見える並び（数の葉だけの並置 `x2 : 1 2`）なら、中身に置き換えた綴りと同じ数で数える（`f4 (inc x2 x2)` は `f4 (inc 1 2 1 2)` と同じ、P1）。
+	// 括った `[5 6]` は繋ぐのが1段だけなので1項（書いた `f4 (inc 1 2 [5 6])` と同じ）、前置 `~` の `~x2` は要素1つ（問5）で、どちらも余ったラムダのまま。
+	["R142 f4 (inc x2 x2)（f4 (inc 1 2 1 2) と同じ）", p1(["x2 : 1 2", "f4 (inc x2 x2)"]), "(apply f4 [inc x2 x2])", "A", { severities: [] }],
+	["R142 yy : inc x2 x2 ⏎ f4 yy（名前で運んでも同じ）", p1(["x2 : 1 2", "yy : inc x2 x2", "f4 yy"]), "(apply f4 yy)", "A", { severities: [] }],
+	["R142 f3 (inc x2 x2)（f3 が 2 2 1 を受けて、2 は後ろに積む）", p1(["x2 : 1 2", "f3 (inc x2 x2)"]), "(apply f3 [inc x2 x2])", "A", { severities: [] }],
+	["R142 f4 (inc x3 x3)", p1(["x3 : 1 2 3", "f4 (inc x3 x3)"]), "(apply f4 [inc x3 x3])", "A", { severities: [] }],
+	["R142 f4 (inc x2 [5 6])（[5 6] は1項。f4 (inc 1 2 [5 6]) と同じ）", p1(["x2 : 1 2", "f4 (inc x2 [5 6])"]), "(unit (apply f4 [inc x2 [5 6]]))", "A", { leftoverDiag: ["(apply f4 [inc x2 [5 6]])"] }],
+	["R142 f4 (inc x2 ~x2)（~x2 は要素1つ）", p1(["x2 : 1 2", "f4 (inc x2 ~x2)"]), "(unit (apply f4 [inc x2 ~x2]))", "A", { leftoverDiag: ["(apply f4 [inc x2 ~x2])"] }],
+	// 頭の書き下しが名前をちょうど使い切る形（`add x2` は add 1 2 で値1つ）・頭に字面の値を書いた形でも、後ろの名前は中身の数で数える（`f3 (add x2 x2)` は
+	// `f3 (add 1 2 1 2)` と同じ 3 1 2）。
+	["R142 f3 (add x2 x2)（f3 (add 1 2 1 2) と同じ）", p1(["x2 : 1 2", "f3 (add x2 x2)"]), "(apply f3 [add x2 x2])", "A", { severities: [] }],
+	["R142 f4 (add x2 5 x2)", p1(["x2 : 1 2", "f4 (add x2 5 x2)"]), "(apply f4 [add x2 5 x2])", "A", { severities: [] }],
+	["R142 yy : add x2 x2 ⏎ f3 yy（名前で運んでも同じ）", p1(["x2 : 1 2", "yy : add x2 x2", "f3 yy"]), "(apply f3 yy)", "A", { severities: [] }],
+	["R142 f3 (add 1 2 x2)", p1(["x2 : 1 2", "f3 (add 1 2 x2)"]), "(apply f3 [add 1 2 x2])", "A", { severities: [] }],
+	["R142 f3 (add x2 x2) 7（f3 が 3 1 2 を受けて、7 は後ろに積む）", p1(["x2 : 1 2", "f3 (add x2 x2) 7"]), "(construct (apply f3 [add x2 x2]) 7)", "A", { severities: [] }],
+	// 穴を跨いで割る所は要素の木で、繋いだ x2 の要素は `·`（書いた `f3 _ (add 1 2 1 2)` と同じく、穴に 2、b に 3、c に 1）。
+	["R142 f3 _ (add x2 x2)", p1(["x2 : 1 2", "f3 _ (add x2 x2)"]), "(apply f3 (construct · (apply add x2) ·))", "A", { severities: [] }],
+	// 合成の後ろの恒等射を挟んだ頭も同じ（単位律で `inc i x2 x2` は `inc x2 x2`）。
+	["R142 f4 (inc i x2 x2)（f4 (inc x2 x2) と同じ）", p1(["x2 : 1 2", "i : _", "f4 (inc i x2 x2)"]), "(apply f4 [inc i x2 x2])", "A", { severities: [] }],
+	["R142 yy : inc i x2 x2 ⏎ f4 yy", p1(["x2 : 1 2", "i : _", "yy : inc i x2 x2", "f4 yy"]), "(apply f4 yy)", "A", { severities: [] }],
+	["R142 f4 (inc i i x2 x2)", p1(["x2 : 1 2", "i : _", "f4 (inc i i x2 x2)"]), "(apply f4 [inc i i x2 x2])", "A", { severities: [] }],
+	// 穴を跨いで割る所と、後ろに積む項も、書いた綴りと同じ形（繋いだ x2 の要素は `·`）：`f3 _ (inc i x2 x2)` は書いた `f3 _ (inc i 1 2 1 2)` と、
+	// `f4 (inc i x2 x2) 9` は書いた `f4 (inc i 1 2 1 2) 9` と同じ（P1）。
+	["R142 f3 _ (inc i x2 x2)", p1(["x2 : 1 2", "i : _", "f3 _ (inc i x2 x2)"]), "(construct (apply f3 (construct · · ·)) ·)", "A", { severities: [] }],
+	["R142 f3 _ (inc i 1 2 1 2)（書いた綴り）", p1(["i : _", "f3 _ (inc i 1 2 1 2)"]), "(construct (apply f3 (construct 1 · 2)) 2)", "A", { severities: [] }],
+	["R142 f4 (inc i x2 x2) 9（9 は後ろに積む）", p1(["x2 : 1 2", "i : _", "f4 (inc i x2 x2) 9"]), "(construct (apply f4 [inc i x2 x2]) 9)", "A", { severities: [] }],
+	["R142 f4 (inc i 1 2 1 2) 9（書いた綴り）", p1(["i : _", "f4 (inc i 1 2 1 2) 9"]), "(construct (apply f4 [inc i 1 2 1 2]) 9)", "A", { severities: [] }],
+	// 番地の字面の葉だけを並置した名前も、中身の数で数える（`f4 (inc xa xa)` は `f4 (inc 0x10 0x20 0x10 0x20)` と同じ）。
+	["R142 f4 (inc x2 xh)（xh : 0x10 0x20）", p1(["x2 : 1 2", "xh : 0x10 0x20", "f4 (inc x2 xh)"]), "(apply f4 [inc x2 xh])", "A", { severities: [] }],
+	["R142 f4 (inc xa xa)（xa : 0x10 0x20）", p1(["xa : 0x10 0x20", "f4 (inc xa xa)"]), "(apply f4 [inc xa xa])", "A", { severities: [] }],
+	["R142 yy : inc xa xa ⏎ f4 yy", p1(["xa : 0x10 0x20", "yy : inc xa xa", "f4 yy"]), "(apply f4 yy)", "A", { severities: [] }],
+	// 文字列の葉を含む並置を指す名前（`xm : 1 `ab``）は、後ろに積んだ所で名前のまま1項で数える（文字列の並びの割り方は決まっていない、11-21・§5）ので、余ったラムダ。
+	["R142 f4 (inc 1 2 xm)（xm : 1 `ab`。文字列を含む並びは1項）", p1(["xm : 1 `ab`", "f4 (inc 1 2 xm)"]), "(unit (apply f4 [inc 1 2 xm]))", "A", { leftoverDiag: ["(apply f4 [inc 1 2 xm])"] }],
+	// 素の口に来た、文字列を含む並置を書いた括りと、それを運ぶ名前（`[`ab` `cd`]`・`` xs : `ab` `cd` ``）も、繋がずに1項で渡す（並置の中の文字列が文字に繋がるかは
+	// 決まっていない、11-21・§5）。文字列1つは文字に繋ぎ（`add _ `ab``）、`,` の積の辺は1要素で繋ぐ（R140）。
+	["R142 add [`ab` `cd`]（文字列を含む並置は1項）", p1("add [`ab` `cd`]"), "(unit (apply add [`ab` `cd`]))", "A", { leftoverDiag: ["(apply add [`ab` `cd`])"] }],
+	["R142 xs : `ab` `cd` ⏎ add xs", p1(["xs : `ab` `cd`", "add xs"]), "(unit (apply add xs))", "A", { leftoverDiag: ["(apply add xs)"] }],
+	["R142 xs : `ab` `cd` ⏎ k1 _ (inc xs xs)", p1(["xs : `ab` `cd`", "k1 _ (inc xs xs)"]), "(unit (? [$p0] (apply k1 (construct $p0 [inc xs xs]))))", "A", { leftoverDiag: ["(? [$p0] (apply k1 (construct $p0 [inc xs xs])))"] }],
+	["R142 p3 [`a` , `bc` `d` , `e`]（`,` の辺は1要素で繋ぐ）", p1([P3, "p3 [`a` , `bc` `d` , `e`]"]), "(apply p3 [`a` , `bc` `d` , `e`])", "A", { severities: [] }],
+	// 合成の後ろの恒等射を挟んでも同じ（単位律で `inc i x3 5` は `inc x3 5`。最後の恒等射が受けた並びのまま閉じるので、受けた要素の数で数える、idTail）。
+	["R142 f3 (inc i x3 5)（f3 (inc x3 5) と同じ）", p1(["x3 : 1 2 3", "i : _", "f3 (inc i x3 5)"]), "(apply f3 [inc i x3 5])", "A", { severities: [] }],
+	["R142 f4 (inc i x3 5)", p1(["x3 : 1 2 3", "i : _", "f4 (inc i x3 5)"]), "(apply f4 [inc i x3 5])", "A", { severities: [] }],
+	["R142 f4 (inc i i x3 5)", p1(["x3 : 1 2 3", "i : _", "f4 (inc i i x3 5)"]), "(apply f4 [inc i i x3 5])", "A", { severities: [] }],
+	["R142 yy : inc i x3 5 ⏎ f4 yy", p1(["x3 : 1 2 3", "i : _", "yy : inc i x3 5", "f4 yy"]), "(apply f4 yy)", "A", { severities: [] }],
+	// 穴を跨いで割る所は要素の木で、書いた綴りの無い要素（inc の結果と繋いだ x3 の要素）は `·`（add _ 2 2 3 5 と同じ add 2 2 で、3 5 は後ろに積む）。
+	["R142 add _ (inc x3 5)", p1(["x3 : 1 2 3", "add _ (inc x3 5)"]), "(construct (apply add (construct · ·)) · 5)", "A", { severities: [] }],
+	// 関数の番地を値に並べた器（§5 Q20 の外：`$` の番地は値なので繋ぐ）。`fs` の要素の `$inc` を数の口に渡せば G7（R53 の外）。
+	["R142 gs : $inc , $double ⏎ k1 gs", std(["gs : $inc , $double", "k1 gs"]), "(apply k1 gs)", "A", { severities: [] }],
+];
+for (const [name, s, want, kind, extra] of p1Passes) checkPass(name, s, want, kind, extra);
+// 関数かもしれない未知の物の及ぶ所は、括らない `,` の境目で止まる：`inc (add (tl vs)) , 5` は左の辺が未知になるだけで、`,` の根は `(add (tl vs)) , 5` と同じ A。
+{
+	const name = "R142 inc (add (tl vs)) , 5（左の辺だけ未知）";
+	total++;
+	try {
+		const r = resolve(std(["tl : [y ~ys] ? ys", "inc (add (tl vs)) , 5"]));
+		const t = r.trees[r.trees.length - 1];
+		const problems = [];
+		if (show(t) !== "(, (apply inc [add [tl vs]]) 5)") problems.push(`木 got: ${show(t)}  want: (, (apply inc [add [tl vs]]) 5)`);
+		if (kindOf(t) !== "A") problems.push(`根の種類 got: ${kindOf(t)}  want: A`);
+		if (!t.left || kindOf(t.left) !== "未知") problems.push(`左の辺の種類 got: ${t.left ? kindOf(t.left) : "無い"}  want: 未知`);
+		if (r.diagnostics.length) problems.push(`知らせ got: ${JSON.stringify(r.diagnostics.map((d) => `${d.severity}/${d.reason}`))}  want: []`);
+		if (problems.length) fail(name, ...problems);
+		else ok(name);
+	} catch (e) {
+		fail(name, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+	}
+}
+// 繋いだ要素で数える断り：穴の数（G13、`f3 _ 1 2 _` と同じ）と、関数の番地を数の口に渡す形（G7）。別名で運んでも同じ。
+for (const [name, s, gateId] of [
+	["R142 f3 _ x2 _（x2 : 1 2。f3 _ 1 2 _ と同じ）", p1(["x2 : 1 2", "f3 _ x2 _"]), "G13"],
+	["R142 inc fs（fs : $inc , $double , 3）", std("inc fs"), "G7"],
+	["R142 add fs", std("add fs"), "G7"],
+	["R142 use fs", std("use fs"), "G7"],
+	["R142 inc cc（cc : $inc 5）", p1(["cc : $inc 5", "inc cc"]), "G7"],
+	["R142 c2 : cc ⏎ inc c2（inc cc と同じ）", p1(["cc : $inc 5", "c2 : cc", "inc c2"]), "G7"],
+	// 中身の見えない並びより前に書いた実引数（穴も）は、席が並びの長さに依らない。並びは頭の要素を1つ以上持つので、後ろの値と合わせて口が全部埋まると分かれば、
+	// 並びを1項で受けた時と同じ門で断る（言い分の名指しも同じ、下の法則）。
+	["R142 f3 $inc (tl vs) 5", std(["tl : [y ~ys] ? ys", "f3 $inc (tl vs) 5"]), "G7"],
+	// 関数かもしれない未知の物を外の適用が受けても、どの長さでも断るなら先に断る（長さ1なら法則1 で `f3 $inc x (inc 5)`、2以上なら中で G7。名前で運んでも同じ）。
+	["R142 inc (f3 $inc (tl vs)) 5", std(["tl : [y ~ys] ? ys", "inc (f3 $inc (tl vs)) 5"]), "G7"],
+	["R142 (f3 $inc (tl vs)) 5", std(["tl : [y ~ys] ? ys", "(f3 $inc (tl vs)) 5"]), "G7"],
+	["R142 add 1 (f3 $inc (tl vs)) 5", std(["tl : [y ~ys] ? ys", "add 1 (f3 $inc (tl vs)) 5"]), "G7"],
+	["R142 cc : f3 $inc (tl vs) ⏎ inc cc 5", std(["tl : [y ~ys] ? ys", "cc : f3 $inc (tl vs)", "inc cc 5"]), "G7"],
+	// 並びより後ろに書いた穴が、並びを1要素と数えても前から n 個の外に来れば、どの長さでも断るので先に断る。並びより前にも穴があれば、どの長さでも G13
+	// （`add _ (add 1 2 3) _` と同じ）。並びが全部の穴より前なら、G13 は長さ1の時で、長さ2以上は R46 の G7（書いた `add 1 2 _ _`）。
+	["R142 add _ (tl2 vs) _ 5（tl2 : [y ~ys] ? ys）", std(["tl2 : [y ~ys] ? ys", "add _ (tl2 vs) _ 5"]), "G13"],
+	["R142 add _ (tl2 vs) _", std(["tl2 : [y ~ys] ? ys", "add _ (tl2 vs) _"]), "G13"],
+	["R142 f3 _ $inc (tl vs)", std(["tl : [y ~ys] ? ys", "f3 _ $inc (tl vs)"]), "G7"],
+	["R142 f3 $inc _ (tl vs)", std(["tl : [y ~ys] ? ys", "f3 $inc _ (tl vs)"]), "G7"],
+	["R142 q : $inc ⏎ f3 _ q (tl vs)（名前で運んでも同じ）", std(["tl : [y ~ys] ? ys", "q : $inc", "f3 _ q (tl vs)"]), "G7"],
+	["R142 f3 _ ($inc) (tl vs)（括っても同じ）", std(["tl : [y ~ys] ? ys", "f3 _ ($inc) (tl vs)"]), "G7"],
+	["R142 add _ _ _ (tl vs)（前から 2 個の外の穴）", std(["tl : [y ~ys] ? ys", "add _ _ _ (tl vs)"]), "G13"],
+	// 括りの関数・穴の関数も、前に書いた席は並びの長さに依らない（残りの席を印の無い A にした実体で見る）。
+	["R142 bf $inc (tl vs) 5（bf : a [b] c ? a + c）", std(["tl : [y ~ys] ? ys", "bf : a [b] c ? a + c", "bf $inc (tl vs) 5"]), "G7"],
+	["R142 bf $vs (tl vs) 5（番地の算術、R62）", std(["tl : [y ~ys] ? ys", "bf : a [b] c ? a + c", "bf $vs (tl vs) 5"]), "G21"],
+	["R142 bn $inc 1 (tl vs) 5（bn : a b [c] d ? a + d）", std(["tl : [y ~ys] ? ys", "bn : a b [c] d ? a + d", "bn $inc 1 (tl vs) 5"]), "G7"],
+	["R142 bf3 $inc (tl vs)（bf3 : a [b] [c] ? a + c。最後の括りが残りを受ける）", std(["tl : [y ~ys] ? ys", "bf3 : a [b] [c] ? a + c", "bf3 $inc (tl vs)"]), "G7"],
+	["R142 p3f $inc (tl vs) 5（p3f : a [b] c ? a + b + c）", std(["tl : [y ~ys] ? ys", "p3f : a [b] c ? a + b + c", "p3f $inc (tl vs) 5"]), "G7"],
+	["R142 h4 $inc (tl vs) 5 6（h4 : a b c [~xs] ? a + b。可変長の口も1つ以上受ける）", std(["tl : [y ~ys] ? ys", "h4 : a b c [~xs] ? a + b", "h4 $inc (tl vs) 5 6"]), "G7"],
+	["R142 hk2 $inc (tl vs) 5（hk2 : f4 _ _ _ 3）", std(["tl : [y ~ys] ? ys", "hk2 : f4 _ _ _ 3", "hk2 $inc (tl vs) 5"]), "G7"],
+	["R142 hk4 $inc (tl vs) 5（hk4 : f4 _ 2 _ _）", std(["tl : [y ~ys] ? ys", "hk4 : f4 _ 2 _ _", "hk4 $inc (tl vs) 5"]), "G7"],
+	["R142 (f4 _ _ _ 3) $inc (tl vs) 5", std(["tl : [y ~ys] ? ys", "(f4 _ _ _ 3) $inc (tl vs) 5"]), "G7"],
+	// 合成で後ろの段（部分適用で当てた印のある実引数）も、前の段の結果1つと後ろの値で口が全部埋まるなら見る。入れ子で書いた同じ形と同じ門（法則1）。
+	["R142 inc pf (tl vs) 5（pf : f3 $inc）", std(["tl : [y ~ys] ? ys", "pf : f3 $inc", "inc pf (tl vs) 5"]), "G7"],
+	["R142 pf (inc (tl vs)) 5（その入れ子）", std(["tl : [y ~ys] ? ys", "pf : f3 $inc", "pf (inc (tl vs)) 5"]), "G7"],
+	["R142 tq pf ~[1 2 3] 9 5（tq : [y ~ys] z ? ys。前の段の結果が中身の見えない並び）", std(["tq : [y ~ys] z ? ys", "pf : f3 $inc", "tq pf ~[1 2 3] 9 5"]), "G7"],
+	["R142 inc (f3 $inc) (tl vs) 5", std(["tl : [y ~ys] ? ys", "inc (f3 $inc) (tl vs) 5"]), "G7"],
+	["R142 (f3 $inc) (inc (tl vs)) 5（その入れ子）", std(["tl : [y ~ys] ? ys", "(f3 $inc) (inc (tl vs)) 5"]), "G7"],
+	["R142 k1 (add $inc) (tl vs) 5", std(["tl : [y ~ys] ? ys", "k1 (add $inc) (tl vs) 5"]), "G7"],
+	["R142 inc i (f3 $inc) (tl vs) 5（恒等射の段は数えずに通す）", std(["tl : [y ~ys] ? ys", "i : _", "inc i (f3 $inc) (tl vs) 5"]), "G7"],
+	["R142 pv : f3 $vs ⏎ inc pv (tl vs) 5", std(["tl : [y ~ys] ? ys", "pv : f3 $vs", "inc pv (tl vs) 5"]), "G21"],
+	// 後ろの撒く項は流れの数で口を埋める（R51）。
+	["R142 f3 $inc (tl vs) vs~", std(["tl : [y ~ys] ? ys", "f3 $inc (tl vs) vs~"]), "G7"],
+	// 頭が中身の見えない並びの構築（`(tl vs) 5`）は、頭の並びの要素1つ以上と後ろの値で要素の下限を数える（lowerOf）。括っても、名前で運んでも、別名を重ねても、
+	// 書き下した `f3 $inc (tl vs) 5` と同じ門（置き換えの法則）。
+	["R142 f3 $inc ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "f3 $inc ((tl vs) 5)"]), "G7"],
+	["R142 f3 $inc [(tl vs) 5]", std(["tl : [y ~ys] ? ys", "f3 $inc [(tl vs) 5]"]), "G7"],
+	["R142 cc : (tl vs) 5 ⏎ f3 $inc cc", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "f3 $inc cc"]), "G7"],
+	["R142 cc : (tl vs) 5 ⏎ f3 $inc [cc]", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "f3 $inc [cc]"]), "G7"],
+	["R142 c2 : cc ⏎ f3 $inc c2（cc : (tl vs) 5）", std(["tl : [y ~ys] ? ys", "cc : (tl vs) 5", "c2 : cc", "f3 $inc c2"]), "G7"],
+	["R142 f3 $inc ((tl vs) (tl vs))", std(["tl : [y ~ys] ? ys", "f3 $inc ((tl vs) (tl vs))"]), "G7"],
+	["R142 f3 $inc (i (tl vs) 5)（恒等射は受けた物そのもの）", std(["tl : [y ~ys] ? ys", "i : _", "f3 $inc (i (tl vs) 5)"]), "G7"],
+	["R142 cc : (tl vs) 5 ⏎ bf $inc cc（bf : a [b] c ? a + c）", std(["tl : [y ~ys] ? ys", "bf : a [b] c ? a + c", "cc : (tl vs) 5", "bf $inc cc"]), "G7"],
+	["R142 cc : (tl vs) 5 ⏎ bf $vs cc（番地の算術、R62）", std(["tl : [y ~ys] ? ys", "bf : a [b] c ? a + c", "cc : (tl vs) 5", "bf $vs cc"]), "G21"],
+	["R142 cc : (tl vs) 5 6 ⏎ h4 $inc cc（h4 : a b c [~xs] ? a + b）", std(["tl : [y ~ys] ? ys", "h4 : a b c [~xs] ? a + b", "cc : (tl vs) 5 6", "h4 $inc cc"]), "G7"],
+	["R142 pf ((tl vs) 5)（pf : f3 $inc）", std(["tl : [y ~ys] ? ys", "pf : f3 $inc", "pf ((tl vs) 5)"]), "G7"],
+	["R142 inc pf ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "pf : f3 $inc", "inc pf ((tl vs) 5)"]), "G7"],
+	["R142 k1 (add $inc) ((tl vs) 5)", std(["tl : [y ~ys] ? ys", "k1 (add $inc) ((tl vs) 5)"]), "G7"],
+	// 長さの見える書き下しなら、後ろに書いた印のある実引数の席も決まる（`inc x3 $inc` は 2 2 3 $inc、f4 の4つ目の口）。
+	["R142 f4 (inc x3 $inc)（x3 : 1 2 3）", p1(["x3 : 1 2 3", "f4 (inc x3 $inc)"]), "G7"],
+]) {
+	checkRefused(name, s, gateId);
+}
+// 並びより前に書いた実引数の門の言い分は、並びを1項で受けた時と同じ形の実体を名指す（並びの要素の席は印の無い A）。
+for (const [line, shape, defs = []] of [
+	["f3 $inc (tl vs) 5", "`f3` を形 $L A A で呼んだ実体"],
+	["f3 _ $inc (tl vs)", "`f3` を形 A $L A で呼んだ実体"],
+	["f3 $inc _ (tl vs)", "`f3` を形 $L A A で呼んだ実体"],
+	["bf $inc (tl vs) 5", "括りの関数 `bf` を形 $L A A で呼んだ実体", ["bf : a [b] c ? a + c"]],
+	["bf3 $inc (tl vs)", "括りの関数 `bf3` を形 $L A A で呼んだ実体", ["bf3 : a [b] [c] ? a + c"]],
+	["inc pf (tl vs) 5", "`f3` を形 $L A A で呼んだ実体", ["pf : f3 $inc"]],
+]) {
+	law(`R142 ${line} の言い分は ${shape} を名指す`, () => {
+		try {
+			resolve(std(["tl : [y ~ys] ? ys", ...defs, line]));
+			return ["断らなかった"];
+		} catch (e) {
+			return String(e.message).includes(shape) ? [] : [String(e.message)];
+		}
+	});
+}
+// 穴の数の断り（G13）の言い分の実引数の数は、書いた並び（並びを1つと数える）で言う。
+for (const [line, n] of [
+	["add _ _ _ (tl vs)", 4],
+	["add _ _ _ (tl vs) 5", 5],
+]) {
+	law(`R142 ${line} の G13 の言い分は実引数の数を ${n} と言う`, () => {
+		try {
+			resolve(std(["tl : [y ~ys] ? ys", line]));
+			return ["断らなかった"];
+		} catch (e) {
+			return e.gate === "G13" && String(e.message).includes(`実引数の数（${n}。`) ? [] : [String(e.message)];
+		}
+	});
+}
+// R64 の知らせは、要素を受けた括りを名指す：書いた `[1 2 3]` は繋いで a が 1 なので `[b]`、持ち上げた `~[1 2 3]` は要素1つで `[a]`（括っても名前で運んでも同じ）。
+for (const [line, br] of [
+	["pb2 [1 2 3] [4]", "[b]"],
+	["pb2 ~[1 2 3] [4]", "[a]"],
+	["pb2 [~[1 2 3]] [4]", "[a]"],
+]) {
+	law(`R142 ${line} の bracket-excess は ${br} を名指す`, () => {
+		const r = resolve(p1([PB2, line]));
+		const ds = r.diagnostics.filter((d) => d.reason === "bracket-excess");
+		return ds.length === 1 && ds[0].message.includes(`括り \`${br}\` は名前が 1 つ`) ? [] : [JSON.stringify(r.diagnostics)];
+	});
+}
+// 長さの見えない残り（opaqueSplit の lenUnknown）を受けた括りの知らせは、残りの外の項の数を下限として「以上」で言う。
+law("R142 pb2 (tl vs) 5 6 の bracket-excess は [b] が 2 つ以上を受けたと言う", () => {
+	const r = resolve(std([PB2, "tl : [y ~ys] ? ys", "pb2 (tl vs) 5 6"]));
+	const ds = r.diagnostics.filter((d) => d.reason === "bracket-excess");
+	return ds.length === 1 && ds[0].message.includes("括り `[b]` は名前が 1 つで、受けた List の要素は 2 つ以上です。") ? [] : [JSON.stringify(r.diagnostics)];
+});
+// その残りと並ぶ撒く項は流れの数（R51）を下限に足す。
+for (const [line, n] of [
+	["pb2 (tl vs) vs~", 3],
+	["pb2 (tl vs) 5 vs~", 4],
+]) {
+	law(`R142 ${line} の bracket-excess は [b] が ${n} つ以上を受けたと言う`, () => {
+		const r = resolve(std([PB2, "tl : [y ~ys] ? ys", line]));
+		const ds = r.diagnostics.filter((d) => d.reason === "bracket-excess");
+		return ds.length === 1 && ds[0].message.includes(`括り \`[b]\` は名前が 1 つで、受けた List の要素は ${n} つ以上です。`) ? [] : [JSON.stringify(r.diagnostics)];
+	});
+}
+// 頭が中身の見えない並びの構築（`(tl vs) 5 6`）を括って書いても、名前で運んでも、別名を重ねても、書き下した `pb2 (tl vs) 5 6` と同じく、残りの下限（頭の並びの要素
+// 1つ以上と後ろの項から、頭の要素を引いた数）で言う（置き換えの法則）。恒等射に当てても（単位律）、合成の前の段の書き下し（`pb2 (inc (tl vs) 5 6)` は合成の
+// `inc pb2 (tl vs) 5 6` と同じ、法則1）でも、長さの見えない器の書き下し（`pb2 (inc t 5 6)` は合成の `inc pb2 t 5 6` と同じ）でも同じ。h2 は `a [b] ? a`。
+for (const [lines, f, n] of [
+	[[PB2, "pb2 ((tl vs) 5 6)"], "pb2", 2],
+	[[PB2, "pb2 [(tl vs) 5 6]"], "pb2", 2],
+	[[PB2, "cc : (tl vs) 5 6", "pb2 cc"], "pb2", 2],
+	[[PB2, "cc : (tl vs) 5 6", "c2 : cc", "pb2 c2"], "pb2", 2],
+	[[PB2, "i : _", "pb2 (i (tl vs) 5 6)"], "pb2", 2],
+	[[PB2, "pb2 (inc (tl vs) 5 6)"], "pb2", 2],
+	[[PB2, "inc pb2 (tl vs) 5 6"], "pb2", 2],
+	[[PB2, "pb2 ((tl vs) vs~)"], "pb2", 3],
+	[["h2 : a [b] ? a", "h2 (tl vs) 5 6"], "h2", 2],
+	[["h2 : a [b] ? a", "h2 [(tl vs) 5 6]"], "h2", 2],
+	[["h2 : a [b] ? a", "cc : (tl vs) 5 6", "h2 cc"], "h2", 2],
+	[[PB2, "gt : [~t] ? pb2 (inc t 5 6)", "gt 1 2"], "pb2", 2],
+	[[PB2, "gt : [~t] ? inc pb2 t 5 6", "gt 1 2"], "pb2", 2],
+]) {
+	law(`R142 ${lines.slice(1).join(" ⏎ ")} の bracket-excess は ${f} の [b] が ${n} つ以上を受けたと言う`, () => {
+		const r = resolve(std(["tl : [y ~ys] ? ys", ...lines]));
+		const ds = r.diagnostics.filter((d) => d.reason === "bracket-excess");
+		return ds.length === 1 && ds[0].message.includes(`括りの関数 \`${f}\` の括り \`[b]\` は名前が 1 つで、受けた List の要素は ${n} つ以上です。`) ? [] : [JSON.stringify(r.diagnostics)];
+	});
+}
+// 残りの外の項が名前の数を超えなければ知らせない（`pb2 (tl vs) 5` と同じ。名前で運んでも、長さの見えない器の書き下しでも）。
+for (const lines of [
+	[PB2, "cc : (tl vs) 5", "pb2 cc"],
+	[PB2, "pb2 ((tl vs) 5)"],
+	[PB2, "gt : [~t] ? pb2 (inc t 5)", "gt 1 2"],
+]) {
+	law(`R142 ${lines.slice(1).join(" ⏎ ")} は bracket-excess を出さない`, () => {
+		const r = resolve(std(["tl : [y ~ys] ? ys", ...lines]));
+		return r.diagnostics.some((d) => d.reason === "bracket-excess") ? [JSON.stringify(r.diagnostics)] : [];
+	});
+}
+// 最後の括りの口に来た前置 `~` の1項も、持ち上げた中身の要素で数える（`fa ~[1 2]` は書いた `fa [1 2]` と同じく [a] が2要素を受ける。括っても名前で運んでも同じ）。
+// 最後でない括りの口と同じ数え（[r] ≅ r、置き換えの法則）。
+for (const [lines, brs] of [
+	[[PB2, "pb2 ~[1 2] ~[3 4]"], ["[a]", "[b]"]],
+	[[PB2, "pb2 1 ~[3 4]"], ["[b]"]],
+	[["fa : [a] ? a", "fa ~[1 2]"], ["[a]"]],
+	[["fa : [a] ? a", "fa [~[1 2]]"], ["[a]"]],
+	[["fa : [a] ? a", "yy : ~[1 2]", "fa yy"], ["[a]"]],
+	[["fa : [a] ? a", "fa [1 2]"], ["[a]"]],
+	[["n2 : [a b] ? b", "n2 ~[1 2 3]"], ["[a b]"]],
+]) {
+	law(`R142 ${lines[lines.length - 1]}（${lines.slice(0, -1).join(" ⏎ ")}）の bracket-excess は ${brs.join("・")} を名指す`, () => {
+		const r = resolve(p1(lines));
+		const ds = r.diagnostics.filter((d) => d.reason === "bracket-excess");
+		return ds.length === brs.length && brs.every((br, k) => ds[k].message.includes(`括り \`${br}\` は名前が`)) ? [] : [JSON.stringify(r.diagnostics)];
+	});
+}
+
+// 置き換えの法則（R142）：F が素の口と括りの口の関数、C が並びの時、`cc : C` ⏎ `F cc` と `F [C]` と `F C`（書き下し）は、根の種類・知らせ（重さ・理由・行）・F の定義の
+// 行の木（括りの関数なら実体）が同じ。どの綴りも `cc : C` の行を残して行を揃える。木は書いた葉のままなので比べない。書き下しは、文字列なら文字（`\a \b`）、`1 , 2` なら
+// `1 2`、2階の器なら行を前置 `~` で1要素にした `~[1 2] ~[3 4]`。
+const P1_CS = [["1 2", "1 2"], ["1 2 3", "1 2 3"], ["`ab`", "\\a \\b"], ["1 , 2", "1 2"], ["1 2 , 3 4", "~[1 2] ~[3 4]"]];
+const p1Read = (s, at) => {
+	const r = resolve(s);
+	return JSON.stringify({ kind: kindOf(r.trees[r.trees.length - 1]), diags: r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`), def: show(r.trees[at]) });
+};
+// 括りの口だけの pb2 は行ごとに PB2 を足して見る（2階の器の書き下し `pb2 ~[1 2] ~[3 4]` は、最後の括りの [b] も持ち上げた中身の要素で数える）。
+for (const f of ["inc", "add", "f3", "k1", "pair", "tl", "pq", "pb2"]) {
+	const pre = f === "pb2" ? [PB2] : [];
+	const at = f === "pb2" ? P1_PRE.length : p1At(f);
+	for (const [c, wr] of P1_CS) {
+		law(`R142 置き換え（cc : ${c}）${f} cc・${f} [${c}]・${f} ${wr}`, () => {
+			const got = [`${f} cc`, `${f} [${c}]`, `${f} ${wr}`].map((line) => p1Read(p1([...pre, `cc : ${c}`, line]), at));
+			return got[0] === got[1] && got[1] === got[2] ? [] : got;
+		});
+	}
+}
+// 穴（R16・R34）も繋いだ後の要素で数えるので、名前で運んだ器と書き下しは同じ。文字列の書き下しは文字。
+for (const [p, q, f] of [
+	["f3 _ x2", "f3 _ 1 2", "f3"],
+	["add _ x2", "add _ 1 2", "add"],
+	["pq [1 2] _", "pq 1 2 _", "pq"],
+	["Person `john` 18", "Person \\j \\o \\h \\n 18", "Person"],
+]) {
+	law(`R142 ${p} と ${q}（x2 : 1 2）`, () => {
+		const pre = ["Person : name age ? name", "x2 : 1 2"];
+		const at = f === "Person" ? P1_PRE.length : p1At(f);
+		const got = [p, q].map((line) => p1Read(p1([...pre, line]), at));
+		return got[0] === got[1] ? [] : got;
+	});
+}
+
+// R143 の行：gt の本体に長さの見えない器を置いて、gt 1 2 で呼ぶ。[名前, gt の仮引数, gt の本体, 呼ぶ行, gt の定義の行の木, unsized-container の名指し
+// （書いた所ごと、出る順）, ほかの知らせの「重さ/reason」（並べ替えた並び）]。知らせの行は gt の定義の行。
+// 部分適用・穴の関数・別名を名前で運ぶ定義（pf・hk・qa・ha）と恒等射 i も置く（届く口はその名前の残りの口で数える）。
+const R143D = ["hf : [~xs] ? xs", "fp : [a b c] ? a", "h : a [~xs] ? a", "i : _", "pf : f3 1", "hk : f3 _ _ 3", "qa : add", "ha : add _ 10"];
+const R143_AT = P1_PRE.length + R143D.length;
+const gtInst = (inst, params = "[~t]") => `(: gt (? [${params}] (inst [N…] ${inst})))`;
+const r143Rows = [
+	// 入る形：書いた適用を後ろに書いた項ごと `!_`。
+	["add t", "[~t]", "add t", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t"], []],
+	["add t 5（後ろに書いた 5 ごと）", "[~t]", "add t 5", ["gt 1 2"], gtInst("(unit (apply add (construct t 5)))"), ["t"], []],
+	["f3 t（下書きの例。値 `!_`）", "[~t]", "f3 t", ["gt 1 2"], gtInst("(unit (apply f3 t))"), ["t"], []],
+	["f3 t 5", "[~t]", "f3 t 5", ["gt 1 2"], gtInst("(unit (apply f3 (construct t 5)))"), ["t"], []],
+	["f3 1 t（残りの口が2つ）", "[~t]", "f3 1 t", ["gt 1 2"], gtInst("(unit (apply f3 (construct 1 t)))"), ["t"], []],
+	["inc add t（合成で後ろの段の口にも届く）", "[~t]", "inc add t", ["gt 1 2"], gtInst("(unit (apply (compose inc add) t))"), ["t"], []],
+	["pq t（最後でない括りの口と素の口）", "[~t]", "pq t", ["gt 1 2"], gtInst("(unit (apply pq t))"), ["t"], []],
+	["add t ~t", "[~t]", "add t ~t", ["gt 1 2"], gtInst("(unit (apply add (construct t ~t)))"), ["t"], []],
+	["add _ t（後ろの値が埋める穴の口も数える）", "[~t]", "add _ t", ["gt 1 2"], gtInst("(unit (apply add (construct _ t)))"), ["t"], []],
+	["$[add t]（unsized-container の1つだけで、dollar-non-function を重ねない）", "[~t]", "$[add t]", ["gt 1 2"], gtInst("$[add t]"), ["t"], []],
+	["[add t]", "[~t]", "[add t]", ["gt 1 2"], gtInst("[add t]"), ["t"], []],
+	["add [t]（括りは内を解いて外す。名指しは残りの名前 t）", "[~t]", "add [t]", ["gt 1 2"], gtInst("(unit (apply add [t]))"), ["t"], []],
+	// 恒等射に当てても受けた物そのもの（R29・R126）なので長さの見えない器のまま。名指しは t。
+	["add (i t)", "[~t]", "add (i t)", ["gt 1 2"], gtInst("(unit (apply add [i t]))"), ["t"], []],
+	["add [i t]", "[~t]", "add [i t]", ["gt 1 2"], gtInst("(unit (apply add [i t]))"), ["t"], []],
+	["f3 (i t)", "[~t]", "f3 (i t)", ["gt 1 2"], gtInst("(unit (apply f3 [i t]))"), ["t"], []],
+	// 届く口は、部分適用・穴の関数の残りの口と、名前で運んだ物の口で数える（括りでも名前でも同じ）。
+	["(f3 1) t（部分適用の残りの口が2つ）", "[~t]", "(f3 1) t", ["gt 1 2"], gtInst("(unit (apply [f3 1] t))"), ["t"], []],
+	["pf t（pf : f3 1）", "[~t]", "pf t", ["gt 1 2"], gtInst("(unit (apply pf t))"), ["t"], []],
+	["[f3 _ _ 3] t（穴の関数の口が2つ）", "[~t]", "[f3 _ _ 3] t", ["gt 1 2"], gtInst("(unit (apply [f3 _ _ 3] t))"), ["t"], []],
+	["hk t（hk : f3 _ _ 3）", "[~t]", "hk t", ["gt 1 2"], gtInst("(unit (apply hk t))"), ["t"], []],
+	["qa t（qa : add）", "[~t]", "qa t", ["gt 1 2"], gtInst("(unit (apply qa t))"), ["t"], []],
+	["(add) t", "[~t]", "(add) t", ["gt 1 2"], gtInst("(unit (apply [add] t))"), ["t"], []],
+	["tl t（P1D の tl : [x ~xs] y ? x + y。最後でない括りの口と素の口）", "[~t]", "tl t", ["gt 1 2"], gtInst("(unit (apply tl t))"), ["t"], []],
+	["f3 _ t（穴の口と残りの口）", "[~t]", "f3 _ t", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t)))"), ["t"], []],
+	["add t _", "[~t]", "add t _", ["gt 1 2"], gtInst("(unit (apply add (construct t _)))"), ["t"], []],
+	// 器より後ろに書いた値は、器が短い時だけ口（穴も）を埋めるので、届く口を減らさない（`add _ t 5` の t は穴と2つ目の口に届く。前に書いた値は減らす：下の
+	// `add _ 5 t`）。後ろの印のある実引数の席も t の長さで決まるので、門は見ない。
+	["add _ t 5（後ろの 5 は t が短い時だけ穴を埋める）", "[~t]", "add _ t 5", ["gt 1 2"], gtInst("(unit (apply add (construct _ t 5)))"), ["t"], []],
+	["add t _ 5", "[~t]", "add t _ 5", ["gt 1 2"], gtInst("(unit (apply add (construct t _ 5)))"), ["t"], []],
+	["f3 1 _ t 5", "[~t]", "f3 1 _ t 5", ["gt 1 2"], gtInst("(unit (apply f3 (construct 1 _ t 5)))"), ["t"], []],
+	["f3 _ t 5 6", "[~t]", "f3 _ t 5 6", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t 5 6)))"), ["t"], []],
+	["add _ t $inc（$inc が穴を埋めるかは t の長さで決まる）", "[~t]", "add _ t $inc", ["gt 1 2"], gtInst("(unit (apply add (construct _ t $inc)))"), ["t"], []],
+	["add t _ $inc", "[~t]", "add t _ $inc", ["gt 1 2"], gtInst("(unit (apply add (construct t _ $inc)))"), ["t"], []],
+	// 器より後ろの穴が、長さ1なら口の中、2なら外に出る並び（`f3 _ t _`）は、長さで答えが変わるので G13 にせず R143 のまま（G13 は下の断りの行）。
+	["f3 _ t _（後ろの穴は t の長さで口の中か外か決まる）", "[~t]", "f3 _ t _", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t _)))"), ["t"], []],
+	// 穴の並びの中・可変長の口の段の括った閉じでも、片方の長さで通るなら R143 のまま（書いた `add 5 _ (f3 $inc 1)`・`pq (f3 $inc 1) 5`・`h (f3 $inc 1) 5` は余ったラムダ）。
+	["add 5 _ (f3 $inc t)（中の口が埋まらない長さ1では関数の項にならない）", "[~t]", "add 5 _ (f3 $inc t)", ["gt 1 2"], gtInst("(unit (apply add (construct 5 _ [f3 $inc t])))"), ["t"], []],
+	["pq (f3 $inc t) 5（pq : [a] y ? y）", "[~t]", "pq (f3 $inc t) 5", ["gt 1 2"], gtInst("(unit (apply pq (construct [f3 $inc t] 5)))"), ["t"], []],
+	["h (f3 $inc t) 5（h : a [~xs] ? a。5 だけでは [~xs] が閉じない）", "[~t]", "h (f3 $inc t) 5", ["gt 1 2"], gtInst("(unit (apply h (construct [f3 $inc t] 5)))"), ["t"], []],
+	// 括りの関数の段で括った閉じの後ろに書いた穴は、書いた長さ1〜3 がどれも断るなら先に断る（下の断りの行の `n (f3 $inc t) _`・`n (add t) _`）。決まった口の段で、
+	// 穴が残りの決まった口に入る並び（書いた `pq (add 1 2 3) _` は通る）は R143 のまま。
+	["pq (add t) _（pq : [a] y ? y。穴は y の口に入る）", "[~t]", "pq (add t) _", ["gt 1 2"], gtInst("(unit (apply pq (construct [add t] _)))"), ["t"], []],
+	// 括った閉じの後ろに書いた印のある実引数の席も、閉じの長さで変わる（書いた `add _ (add 1 2 3) $inc` は通る）ので R143 のまま。
+	["add _ (add t) $inc", "[~t]", "add _ (add t) $inc", ["gt 1 2"], gtInst("(unit (apply add (construct _ [add t] $inc)))"), ["t"], []],
+	["f3 _ (add t) $inc 5", "[~t]", "f3 _ (add t) $inc 5", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ [add t] $inc 5)))"), ["t"], []],
+	// 穴の並びで閉じと一緒に書いた t も、閉じに依らず2つ以上の決まった口に届くなら（穴は t の残りで埋まる）、その t の知らせを出す（Q104 の芯：書いた所ごとに1つ）。
+	["add _ t (add t)（知らせは書いた t ごとに1つ）", "[~t]", "add _ t (add t)", ["gt 1 2"], gtInst("(unit (apply add (construct _ t [add t])))"), ["t", "t"], []],
+	["add t _ (add t)", "[~t]", "add t _ (add t)", ["gt 1 2"], gtInst("(unit (apply add (construct t _ [add t])))"), ["t", "t"], []],
+	["f3 _ t (add t)", "[~t]", "f3 _ t (add t)", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t [add t])))"), ["t", "t"], []],
+	["f3 1 _ t (add t)", "[~t]", "f3 1 _ t (add t)", ["gt 1 2"], gtInst("(unit (apply f3 (construct 1 _ t [add t])))"), ["t", "t"], []],
+	["add _ t [add t]", "[~t]", "add _ t [add t]", ["gt 1 2"], gtInst("(unit (apply add (construct _ t [add t])))"), ["t", "t"], []],
+	["add _ t 5 (add t)", "[~t]", "add _ t 5 (add t)", ["gt 1 2"], gtInst("(unit (apply add (construct _ t 5 [add t])))"), ["t", "t"], []],
+	["add t (add t)（穴の無い並びも書いた t ごと）", "[~t]", "add t (add t)", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t", "t"], []],
+	["f3 t (add t)", "[~t]", "f3 t (add t)", ["gt 1 2"], gtInst("(unit (apply f3 t))"), ["t", "t"], []],
+	// 括らない `_` の恒等射に当てても受けた物そのもの（`add (i t)` と同じ）。
+	["add (_ t)", "[~t]", "add (_ t)", ["gt 1 2"], gtInst("(unit (apply add [_ t]))"), ["t"], []],
+	// 閉じが1つ以上の席を取るので、後ろの t が決まった口に1つしか届かなければ、知らせは閉じの中の t の1つ。
+	["add (add t) t（後ろの t は残りの口1つだけに届く）", "[~t]", "add (add t) t", ["gt 1 2"], gtInst("(unit (apply add (construct [add t] t)))"), ["t"], []],
+	["add _ (add t) t", "[~t]", "add _ (add t) t", ["gt 1 2"], gtInst("(unit (apply add (construct _ [add t] t)))"), ["t"], []],
+	// `!_` と分かる w は並びの項で消えるので、穴の口を埋めない（R137。`f3 _ w t` は `f3 _ t`）。
+	["f3 _ w t（f3 _ t と同じ）", "[~t]", "f3 _ w t", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t)))"), ["t"], []],
+	["f3 _ w w t", "[~t]", "f3 _ w w t", ["gt 1 2"], gtInst("(unit (apply f3 (construct _ t)))"), ["t"], []],
+	// 値の口だけの段（素の関数）が受ける後ろの項でも、`!_` と分かる w は消える（R112・R137。前に書いた `add w t` と同じ木）。
+	["add t w（add w t と同じ木）", "[~t]", "add t w", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t"], []],
+	["add w t", "[~t]", "add w t", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t"], []],
+	["add t w 5", "[~t]", "add t w 5", ["gt 1 2"], gtInst("(unit (apply add (construct t 5)))"), ["t"], []],
+	["inc add t w（合成の後ろの段も値の口）", "[~t]", "inc add t w", ["gt 1 2"], gtInst("(unit (apply (compose inc add) t))"), ["t"], []],
+	// 書き下した結果（`inc t` は頭の要素の結果の後ろに t の残り）も長さの見えない器なので、外の口で数える（法則1：`add (inc t)` は合成の `inc add t` と同じ）。
+	// 名指しは残りの名前 t（書いた所は外の適用で1つ）。
+	["add (inc t)（合成の inc add t と同じ）", "[~t]", "add (inc t)", ["gt 1 2"], gtInst("(unit (apply add [inc t]))"), ["t"], []],
+	["add [inc t]", "[~t]", "add [inc t]", ["gt 1 2"], gtInst("(unit (apply add [inc t]))"), ["t"], []],
+	["add (double (inc t))（書き下しが2段でも）", "[~t]", "add (double (inc t))", ["gt 1 2"], gtInst("(unit (apply add [double [inc t]]))"), ["t"], []],
+	["add (i (inc t))（恒等射は受けた物そのもの）", "[~t]", "add (i (inc t))", ["gt 1 2"], gtInst("(unit (apply add [i [inc t]]))"), ["t"], []],
+	// 合成の後ろの恒等射（`inc i` は単位律で inc）が書き下しの残りを受けても、受けた並びのまま閉じるので、書き下した並びの印をそのまま運ぶ（idTail。`add (inc t)` と同じ）。
+	["add (inc i t)（add (inc t) と同じ）", "[~t]", "add (inc i t)", ["gt 1 2"], gtInst("(unit (apply add [inc i t]))"), ["t"], []],
+	["add (inc i i t)", "[~t]", "add (inc i i t)", ["gt 1 2"], gtInst("(unit (apply add [inc i i t]))"), ["t"], []],
+	["add ((inc i) t)（括った合成でも同じ）", "[~t]", "add ((inc i) t)", ["gt 1 2"], gtInst("(unit (apply add [[inc i] t]))"), ["t"], []],
+	["add [inc i t]", "[~t]", "add [inc i t]", ["gt 1 2"], gtInst("(unit (apply add [inc i t]))"), ["t"], []],
+	["add (inc i t) 5", "[~t]", "add (inc i t) 5", ["gt 1 2"], gtInst("(unit (apply add (construct [inc i t] 5)))"), ["t"], []],
+	["f3 (inc i t) 5", "[~t]", "f3 (inc i t) 5", ["gt 1 2"], gtInst("(unit (apply f3 (construct [inc i t] 5)))"), ["t"], []],
+	["add (i inc t)（頭の恒等射も単位律で消える）", "[~t]", "add (i inc t)", ["gt 1 2"], gtInst("(unit (apply add [i inc t]))"), ["t"], []],
+	["inc i add t（合成で書いた同じ流れ）", "[~t]", "inc i add t", ["gt 1 2"], gtInst("(unit (apply (compose inc i add) t))"), ["t"], []],
+	["add (inc t) 5（後ろに書いた 5 ごと）", "[~t]", "add (inc t) 5", ["gt 1 2"], gtInst("(unit (apply add (construct [inc t] 5)))"), ["t"], []],
+	// 書き下しの残りの後ろに値の項を積んでも、積んだ並びは長さの見えない器の書き下し（P1・R35：add が受けるのは inc の結果・t の残り・5 で、`add (inc t) 5` と同じ並べ方）。
+	["add (inc t 5)（合成の inc add t 5 と同じ）", "[~t]", "add (inc t 5)", ["gt 1 2"], gtInst("(unit (apply add [inc t 5]))"), ["t"], []],
+	["inc add t 5（合成）", "[~t]", "inc add t 5", ["gt 1 2"], gtInst("(unit (apply (compose inc add) (construct t 5)))"), ["t"], []],
+	["f3 (inc t 5)", "[~t]", "f3 (inc t 5)", ["gt 1 2"], gtInst("(unit (apply f3 [inc t 5]))"), ["t"], []],
+	["add (inc t 5) 7", "[~t]", "add (inc t 5) 7", ["gt 1 2"], gtInst("(unit (apply add (construct [inc t 5] 7)))"), ["t"], []],
+	// 恒等射を挟んだ書き下しの後ろに値を書いても同じ（単位律で `inc i t 5` は `inc t 5`。合成の最後の恒等射が書き下しの残りと 5 を受けて閉じた適用は、書き下した
+	// 並びの印を持つので外の口で数える。throughOf はその恒等射の適用を外さない）。
+	["add (inc i t 5)（add (inc t 5) と同じ）", "[~t]", "add (inc i t 5)", ["gt 1 2"], gtInst("(unit (apply add [inc i t 5]))"), ["t"], []],
+	["add (inc i i t 5)", "[~t]", "add (inc i i t 5)", ["gt 1 2"], gtInst("(unit (apply add [inc i i t 5]))"), ["t"], []],
+	["add (double inc i t 5)（書き下しの前に段を重ねても）", "[~t]", "add (double inc i t 5)", ["gt 1 2"], gtInst("(unit (apply add [double inc i t 5]))"), ["t"], []],
+	["f3 (inc i t 5)", "[~t]", "f3 (inc i t 5)", ["gt 1 2"], gtInst("(unit (apply f3 [inc i t 5]))"), ["t"], []],
+	["inc add (inc i t 5)（合成の後ろの段の口にも届く）", "[~t]", "inc add (inc i t 5)", ["gt 1 2"], gtInst("(unit (apply (compose inc add) [inc i t 5]))"), ["t"], []],
+	["add (inc i t 5) , 1（`,` の辺で消えて 1）", "[~t]", "add (inc i t 5) , 1", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["f3 (inc t) 5", "[~t]", "f3 (inc t) 5", ["gt 1 2"], gtInst("(unit (apply f3 (construct [inc t] 5)))"), ["t"], []],
+	["add _ (inc t)（穴の口も数える）", "[~t]", "add _ (inc t)", ["gt 1 2"], gtInst("(unit (apply add (construct _ [inc t])))"), ["t"], []],
+	["add (qa 1 t)（qa : add。別名の口で書き下しても）", "[~t]", "add (qa 1 t)", ["gt 1 2"], gtInst("(unit (apply add [qa 1 t]))"), ["t"], []],
+	["gt : f [~t] ? add (@f t)（開いた参照の口で書き下しても）", "f [~t]", "add (@f t)", ["gt $inc 1 2"], "(: gt (? [f [~t]] (inst $L [N…] (unit (apply add [@f t])))))", ["t"], []],
+	// 器より前に書いた実引数の門は、口が全部埋まると分かる時だけ見る（下の断りの行）。`f3 $inc t` は t の要素が1つなら部分適用で呼ばれないので見ない。
+	["f3 $inc t（口が全部埋まるとは分からない）", "[~t]", "f3 $inc t", ["gt 1 2"], gtInst("(unit (apply f3 (construct $inc t)))"), ["t"], []],
+	["f3 $inc (add t)（括った閉じの前の席も、口が全部埋まるとは分からない）", "[~t]", "f3 $inc (add t)", ["gt 1 2"], gtInst("(unit (apply f3 (construct $inc [add t])))"), ["t"], []],
+	// 括った閉じの中の門も、外から流れ込む値で口が全部埋まると分かる時だけ見る（下の断りの行）。外の段は合成と同じく閉じの前に入る（法則1：`k1 (f3 $inc t) 5` は
+	// `(f3 $inc t) (k1 5)`）ので、外の段の口が埋まらなければ閉じに流れ込まない。`,` の辺は適用の外（R121）。
+	["(f3 $inc t)（流れ込む値が無い）", "[~t]", "(f3 $inc t)", ["gt 1 2"], gtInst("[f3 $inc t]"), ["t"], []],
+	["inc (f3 $inc t)", "[~t]", "inc (f3 $inc t)", ["gt 1 2"], gtInst("(unit (apply inc [f3 $inc t]))"), ["t"], []],
+	["k1 (f3 $inc t) 5（k1 5 は口が埋まらない）", "[~t]", "k1 (f3 $inc t) 5", ["gt 1 2"], gtInst("(unit (apply k1 (construct [f3 $inc t] 5)))"), ["t"], []],
+	["(k1 (f3 $inc t)) 5", "[~t]", "(k1 (f3 $inc t)) 5", ["gt 1 2"], gtInst("(unit (apply [k1 [f3 $inc t]] 5))"), ["t"], []],
+	["(f3 $inc t) , 5", "[~t]", "(f3 $inc t) , 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["(f4 $inc t) 5（f4 $inc t 5 と同じく口が全部埋まるとは分からない）", "[~t]", "(f4 $inc t) 5", ["gt 1 2"], gtInst("(unit (apply [f4 $inc t] 5))"), ["t"], []],
+	["[(f4 $inc t) 5]", "[~t]", "[(f4 $inc t) 5]", ["gt 1 2"], gtInst("[[f4 $inc t] 5]"), ["t"], []],
+	// 括った閉じ（R143 で閉じた適用を1行の括りで包んだ物。中で恒等射や括りを重ねても同じ）が外の適用の頭か実引数（素の口・括りの口・穴・最後の括り・可変長の口）に
+	// なったら、外の適用を後ろに書いた項ごと、同じ印 zero の `!_` で閉じる（括りで止めない、U〔答え〕[2026-11-22 07:51:15 UTC 828ee417]「1」）。答えは括らない形と同じ：
+	// `(add 1) 5` は `add 1 5` と同じ（カリー化）なので、括りの有無で答えを割らない（t の長さが何でも、括りの中だけ閉じた答えにはならない）。内で t の届く口がもう2つ
+	// 以上と分かっているので、外では口を数え直さない（外の残りの口が1つでも閉じる）。知らせは t を書いた所の warning だけで、木は書いた外の適用を後ろの項ごと包んだ
+	// (unit …) を1つ（内は書いた葉のまま）。外の外へも及ぶ。
+	["(add t) 5（add t 5 と同じ）", "[~t]", "(add t) 5", ["gt 1 2"], gtInst("(unit (apply [add t] 5))"), ["t"], []],
+	["[add t] 5", "[~t]", "[add t] 5", ["gt 1 2"], gtInst("(unit (apply [add t] 5))"), ["t"], []],
+	["((add t)) 5（括りを重ねても同じ）", "[~t]", "((add t)) 5", ["gt 1 2"], gtInst("(unit (apply [[add t]] 5))"), ["t"], []],
+	["(i (add t)) 5（恒等射を重ねても同じ、単位律）", "[~t]", "(i (add t)) 5", ["gt 1 2"], gtInst("(unit (apply [i [add t]] 5))"), ["t"], []],
+	["(inc add t) 5（合成の閉じを括っても同じ）", "[~t]", "(inc add t) 5", ["gt 1 2"], gtInst("(unit (apply [inc add t] 5))"), ["t"], []],
+	["(add (inc t)) 5（書き下しを数えた閉じを括っても同じ）", "[~t]", "(add (inc t)) 5", ["gt 1 2"], gtInst("(unit (apply [add [inc t]] 5))"), ["t"], []],
+	["(add t 5) 6（後ろの項ごと閉じた物を括っても同じ）", "[~t]", "(add t 5) 6", ["gt 1 2"], gtInst("(unit (apply [add t 5] 6))"), ["t"], []],
+	["(add _ t) 5（穴の口で数えた閉じを括っても同じ）", "[~t]", "(add _ t) 5", ["gt 1 2"], gtInst("(unit (apply [add _ t] 5))"), ["t"], []],
+	// 外の適用が受ける後ろの項のうち `!_` と分かる値は、中の閉じが値の口だけの段なら消える（括らない `add t w 5` の木と同じ、R112・R137）。括りの口の段なら残す（`pq t w` と同じ）。
+	["(add t) w 5（add t w 5 と同じく w は消える）", "[~t]", "(add t) w 5", ["gt 1 2"], gtInst("(unit (apply [add t] 5))"), ["t"], []],
+	["(add t) (add t)（後ろの閉じも `!_` と分かる値で消える。知らせは書いた t ごとに1つ）", "[~t]", "(add t) (add t)", ["gt 1 2"], gtInst("(unit [add t])"), ["t", "t"], []],
+	["(pq t) w（pq t w と同じく括りの口の段では残す）", "[~t]", "(pq t) w", ["gt 1 2"], gtInst("(unit (apply [pq t] w))"), ["t"], []],
+	["inc (add t) 5（外の素の口が1つでも閉じる。合成の add inc t 5 と同じ答え）", "[~t]", "inc (add t) 5", ["gt 1 2"], gtInst("(unit (apply inc (construct [add t] 5)))"), ["t"], []],
+	["inc (add t)（本体の根は外の inc ごと `!_`）", "[~t]", "inc (add t)", ["gt 1 2"], gtInst("(unit (apply inc [add t]))"), ["t"], []],
+	["inc [add t]", "[~t]", "inc [add t]", ["gt 1 2"], gtInst("(unit (apply inc [add t]))"), ["t"], []],
+	["inc (add t 5)", "[~t]", "inc (add t 5)", ["gt 1 2"], gtInst("(unit (apply inc [add t 5]))"), ["t"], []],
+	["inc (add (inc t))", "[~t]", "inc (add (inc t))", ["gt 1 2"], gtInst("(unit (apply inc [add [inc t]]))"), ["t"], []],
+	["add 1 (add t)（外の残りの口が1つでも閉じる）", "[~t]", "add 1 (add t)", ["gt 1 2"], gtInst("(unit (apply add (construct 1 [add t])))"), ["t"], []],
+	["add (add t)", "[~t]", "add (add t)", ["gt 1 2"], gtInst("(unit (apply add [add t]))"), ["t"], []],
+	["f3 (add t) 1 2（後ろに書いた 1 2 ごと）", "[~t]", "f3 (add t) 1 2", ["gt 1 2"], gtInst("(unit (apply f3 (construct [add t] 1 2)))"), ["t"], []],
+	["k1 5 (add t)", "[~t]", "k1 5 (add t)", ["gt 1 2"], gtInst("(unit (apply k1 (construct 5 [add t])))"), ["t"], []],
+	["add _ (add t)（外の穴の関数でも）", "[~t]", "add _ (add t)", ["gt 1 2"], gtInst("(unit (apply add (construct _ [add t])))"), ["t"], []],
+	["h (add t)（h : a [~xs] ? a。外の可変長の口でも）", "[~t]", "h (add t)", ["gt 1 2"], gtInst("(unit (apply h [add t]))"), ["t"], []],
+	["n (add t)（n : [~x] ? x。外の最後の括りの口でも）", "[~t]", "n (add t)", ["gt 1 2"], gtInst("(unit (apply n [add t]))"), ["t"], []],
+	["i (add t)（外の恒等射でも）", "[~t]", "i (add t)", ["gt 1 2"], gtInst("(unit (apply i [add t]))"), ["t"], []],
+	["add 1 (inc (add t))（外の外へも及ぶ）", "[~t]", "add 1 (inc (add t))", ["gt 1 2"], gtInst("(unit (apply add (construct 1 [inc [add t]])))"), ["t"], []],
+	["inc (inc (add t)) 5", "[~t]", "inc (inc (add t)) 5", ["gt 1 2"], gtInst("(unit (apply inc (construct [inc [add t]] 5)))"), ["t"], []],
+	// 外の適用を閉じた先は括らない閉じと同じ：閉じは書いた所で `!_` と分かる値（印 zero）なので、括らない `,`・`|`・`;` の辺と値の並びの項では、ほかの `!_` と分かる値と
+	// 同じく消え（R112・R137。`,` と `|` の単位でもある）、`&` の辺では残る。
+	["(add t) , 1（`,` は適用の外、R121。`!_` は `,` の単位なので本体は 1）", "[~t]", "(add t) , 1", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["(add t) | 5（`!_` は `|` の単位）", "[~t]", "(add t) | 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["(add t) ; 5", "[~t]", "(add t) ; 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["(add t) & 5（`&` の辺では残る）", "[~t]", "(add t) & 5", ["gt 1 2"], gtInst("(& [add t] 5)"), ["t"], []],
+	["inc (add t) , 1（閉じた inc (add t) が `,` の辺で消える）", "[~t]", "inc (add t) , 1", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["5 (add t) 6（5 add t 6 と同じく、値の上に積まれた閉じは後ろの 6 ごと並びの項で消える）", "[~t]", "5 (add t) 6", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["7 (add t) 8（7 add t 8 と同じ）", "[~t]", "7 (add t) 8", ["gt 1 2"], gtInst("7"), ["t"], []],
+	["5 (add t)（5 add t と同じ）", "[~t]", "5 (add t)", ["gt 1 2"], gtInst("5"), ["t"], []],
+	// 印は演算子の外へ運ばない。`$[add t]` は `!_` と分かる値（R56）で、外の値の口では消える（括らない `inc $[add t] 5` と同じ答え）。
+	["inc [$[add t]] 5（`$[add t]` は `!_` と分かる値、R56）", "[~t]", "inc [$[add t]] 5", ["gt 1 2"], gtInst("(apply inc 5)"), ["t"], []],
+	// 括りの中が `,` の行なら括った閉じでない（`(add t , 1)` は w の `(w , 1)` と同じく、中が 1 の括り）。
+	["(add t , 1) 5", "[~t]", "(add t , 1) 5", ["gt 1 2"], gtInst("(construct [add t , 1] 5)"), ["t"], []],
+	// 括らない `,`・`|`・`;` の辺と並びの項でも、閉じた適用は `!_` と分かる値として消える（`w , 1` が 1 なのと同じ）。`!_` どうしなら1つ残る。`&` の辺では残る
+	// （`w & 5` と同じ。手続きの本体の行は下の行）。
+	["add t , 1（`,` は適用の外、R121）", "[~t]", "add t , 1", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["1 , add t", "[~t]", "1 , add t", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["add t 5 , 1（後ろに書いた 5 ごと `!_`）", "[~t]", "add t 5 , 1", ["gt 1 2"], gtInst("1"), ["t"], []],
+	["add t , 1 , 2", "[~t]", "add t , 1 , 2", ["gt 1 2"], gtInst("(, 1 2)"), ["t"], []],
+	["add t | 5", "[~t]", "add t | 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["5 | add t", "[~t]", "5 | add t", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["inc add t | 5", "[~t]", "inc add t | 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["add t ; 5", "[~t]", "add t ; 5", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["add t ; add t（`!_` どうし。書いた所が2つ）", "[~t]", "add t ; add t", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t", "t"], []],
+	["5 ; add t", "[~t]", "5 ; add t", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["5 add t（値の上に積まれた閉じた適用は並びの項で消える、R137）", "[~t]", "5 add t", ["gt 1 2"], gtInst("5"), ["t"], []],
+	["5 6 add t", "[~t]", "5 6 add t", ["gt 1 2"], gtInst("(construct 5 6)"), ["t"], []],
+	["add t | add t（`!_` どうし）", "[~t]", "add t | add t", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t", "t"], []],
+	["add t & 5（`&` の辺では残る、w & 5 と同じ）", "[~t]", "add t & 5", ["gt 1 2"], gtInst("(& (unit (apply add t)) 5)"), ["t"], []],
+	["gt : [x ~t] ? add t（[x ~xs] の残りも）", "[x ~t]", "add t", ["gt 1 2 3"], gtInst("(unit (apply add t))", "[x ~t]"), ["t"], []],
+	["add t , add t（書いた所が2つ。`!_` どうしの `,` は `!_`）", "[~t]", "add t , add t", ["gt 1 2"], gtInst("(unit (apply add t))"), ["t", "t"], []],
+	["add t を2つの行で呼ぶ（書いた所ごとに1つ）", "[~t]", "add t", ["gt 1 2", "gt 3 4"], gtInst("(unit (apply add t))"), ["t"], []],
+	["add t を形の違う実体で呼ぶ（実体を跨いでも書いた所ごとに1つ）", "[~t]", "add t", ["gt 1 2", "gt 1 2 3", "gt [1 2] [3]"], "(: gt (? [[~t]] (inst [A…] (unit (apply add t))) (inst [N…] (unit (apply add t)))))", ["t"], []],
+	["add t を呼ばない（呼ばれない本体は読まない、R25）", "[~t]", "add t", ["5"], "(: gt (? [[~t]] (defer {add t})))", [], []],
+	// 入らない形：届く口が1つなら書き下し、最後の括りの口・可変長の口・射影の名前は今のまま。
+	["add 1 t（残りの口が1つ）", "[~t]", "add 1 t", ["gt 1 2"], gtInst("(apply add (construct 1 t))"), [], []],
+	["(add 1) t（部分適用の残りの口が1つ）", "[~t]", "(add 1) t", ["gt 1 2"], gtInst("(apply [add 1] t)"), [], []],
+	["ha t（ha : add _ 10。穴の口が1つ）", "[~t]", "ha t", ["gt 1 2"], gtInst("(apply ha t)"), [], []],
+	["ha t 5（t は穴だけに届き、5 は後ろに積む）", "[~t]", "ha t 5", ["gt 1 2"], gtInst("(construct (apply ha t) 5)"), [], []],
+	["add _ 5 t（前に書いた 5 が2つ目の口を埋め、t は穴だけに届く）", "[~t]", "add _ 5 t", ["gt 1 2"], gtInst("(apply add (construct t 5))"), [], []],
+	["add 1 _ t", "[~t]", "add 1 _ t", ["gt 1 2"], gtInst("(apply add (construct 1 t))"), [], []],
+	["pair t（[a ~as] が頭を受け、[b ~bs] が残りを丸ごと受ける）", "[~t]", "pair t", ["gt 1 2"], gtInst("(apply pair t)"), [], []],
+	["add [~t]（括った持ち上げも要素1つ。add ~t と同じく本体の根に裸の関数が残る、R125）", "[~t]", "add [~t]", ["gt 1 2"], gtInst("(unit (apply add [~t]))"), [], ["information/bare-function-return"]],
+	["inc t（下書きの例。値 2 2）", "[~t]", "inc t", ["gt 1 2"], gtInst("(apply inc t)"), [], []],
+	["inc t 5", "[~t]", "inc t 5", ["gt 1 2"], gtInst("(construct (apply inc t) 5)"), [], []],
+	["inc (inc t)（外の届く口も1つ）", "[~t]", "inc (inc t)", ["gt 1 2"], gtInst("(apply inc [inc t])"), [], []],
+	["add 1 (inc t)（外の届く口も1つ）", "[~t]", "add 1 (inc t)", ["gt 1 2"], gtInst("(apply add (construct 1 [inc t]))"), [], []],
+	["inc (inc t 5)（外の届く口も1つ）", "[~t]", "inc (inc t 5)", ["gt 1 2"], gtInst("(apply inc [inc t 5])"), [], []],
+	["add 1 (inc t 5)", "[~t]", "add 1 (inc t 5)", ["gt 1 2"], gtInst("(apply add (construct 1 [inc t 5]))"), [], []],
+	["inc (inc i t 5)（恒等射を挟んでも、外の届く口は1つ）", "[~t]", "inc (inc i t 5)", ["gt 1 2"], gtInst("(apply inc [inc i t 5])"), [], []],
+	["add 1 (inc i t 5)", "[~t]", "add 1 (inc i t 5)", ["gt 1 2"], gtInst("(apply add (construct 1 [inc i t 5]))"), [], []],
+	["[+] t（可変長の口は丸ごと受ける。下書きの例、値 3）", "[~t]", "[+] t", ["gt 1 2"], gtInst("(apply [+] t)"), [], []],
+	["hf t（最後の括りの口は丸ごと受ける。下書きの例、値 1 2）", "[~t]", "hf t", ["gt 1 2"], gtInst("(apply hf t)"), [], []],
+	["fp t（名前を並べた括りの口は射影、R91）", "[~t]", "fp t", ["gt 1 2"], gtInst("(apply fp t)"), [], []],
+	["use $add t（t は use の2つ目の口だけに届く）", "[~t]", "use $add t", ["gt 1 2"], gtInst("(apply use (construct $add t))"), [], ["information/bare-function-return"]],
+	["f3 1 2 t（残りの口が1つ）", "[~t]", "f3 1 2 t", ["gt 1 2"], gtInst("(apply f3 (construct 1 2 t))"), [], []],
+	["add (t ' 0) t（t ' 0 が1つ目の口を埋める）", "[~t]", "add (t ' 0) t", ["gt 1 2"], gtInst("(apply add (construct [t ' 0] t))"), [], []],
+	["h t（h : a [~xs] ? a。a が頭、xs が残り。実装で決めた所）", "[~t]", "h t", ["gt 1 2"], gtInst("(apply h t)"), [], []],
+	["add ~t（~t は要素1つなので add の2つ目の口が空き、本体の根に裸の関数が残る、R125）", "[~t]", "add ~t", ["gt 1 2"], gtInst("(unit (apply add ~t))"), [], ["information/bare-function-return"]],
+	["gt : [a b] ? add b（射影の名前は長さの見えない器でない）", "[a b]", "add b", ["gt 1 2"], gtInst("(unit (apply add b))", "[a b]"), [], ["information/bare-function-return"]],
+	["gt : [s] ? add s（射影の名前）", "[s]", "add s", ["gt 1 2"], gtInst("(unit (apply add s))", "[s]"), [], ["information/bare-function-return", "information/bracket-excess"]],
+];
+for (const [name, params, body, calls, want, unsized, others] of r143Rows) {
+	total++;
+	let r;
+	try {
+		r = resolve(p1([...R143D, `gt : ${params} ? ${body}`, ...calls]));
+	} catch (e) {
+		fail(`R143 ${name}`, `断られた: ${e.reason || e.name} ${e.gate || ""} ${e.message}`);
+		continue;
+	}
+	const problems = [];
+	const got = show(r.trees[R143_AT]);
+	if (got !== want) problems.push(`gt の木 got:  ${got}`, `       want: ${want}`);
+	const last = r.trees[r.trees.length - 1];
+	if (calls[0].startsWith("gt ") && kindOf(last) !== "A") problems.push(`根の種類 got: ${kindOf(last)}  want: A`);
+	const us = r.diagnostics.filter((d) => d.reason === "unsized-container");
+	if (JSON.stringify(us.map((d) => d.name)) !== JSON.stringify(unsized)) problems.push(`unsized-container got: ${JSON.stringify(us.map((d) => d.name))}  want: ${JSON.stringify(unsized)}`);
+	for (const d of us) {
+		const head = `長さの見えない器 \`${d.name}\` の要素が、`;
+		if (d.severity !== "warning" || d.line !== R143_AT + 1 || !d.message.startsWith(head) || !d.message.includes("括りの口で受けます") || !d.message.includes("§4 R143")) {
+			problems.push(`unsized-container の重さか行か文面が違う: ${JSON.stringify(d)}`);
+		}
+	}
+	const rest = r.diagnostics.filter((d) => d.reason !== "unsized-container").map((d) => `${d.severity}/${d.reason}`).sort();
+	if (JSON.stringify(rest) !== JSON.stringify(others)) problems.push(`ほかの知らせ got: ${JSON.stringify(rest)}  want: ${JSON.stringify(others)}`);
+	if (problems.length) fail(`R143 ${name}`, ...problems);
+	else ok(`R143 ${name}`);
+}
+// 器より前に書いた実引数（穴も）の門：t は頭の要素を1つ以上持つので、後ろの値と合わせて口が全部埋まると分かれば、t を1項で受けた時と同じ門で断る（R25。
+// `!_` にする前に見る）。
+for (const [name, body, gateId, defs = []] of [
+	["f3 _ $inc t", "f3 _ $inc t", "G7"],
+	["f3 $inc _ t", "f3 $inc _ t", "G7"],
+	["f3 $inc t 5", "f3 $inc t 5", "G7"],
+	["add _ _ _ t（前から 2 個の外の穴）", "add _ _ _ t", "G13"],
+	["f3 _ q t（q : $inc。名前で運んでも同じ）", "f3 _ q t", "G7", ["q : $inc"]],
+	["f3 _ ($inc) t（括っても同じ）", "f3 _ ($inc) t", "G7"],
+	["f3 $inc t vs~（後ろの撒く項は流れの数で口を埋める、R51）", "f3 $inc t vs~", "G7"],
+	// 括りの関数・穴の関数も、前に書いた席は器の長さに依らない。書き下した並び（`(inc t)`）が外の2つ以上の口に届く所でも同じ。
+	["bf $inc t 5（bf : a [b] c ? a + c）", "bf $inc t 5", "G7", ["bf : a [b] c ? a + c"]],
+	["p3f $inc t 5（p3f : a [b] c ? a + b + c）", "p3f $inc t 5", "G7", ["p3f : a [b] c ? a + b + c"]],
+	["pp $inc (inc t) 5（pp : a [b] c ? a + c）", "pp $inc (inc t) 5", "G7", ["pp : a [b] c ? a + c"]],
+	["(pp $inc) (inc t) 5", "(pp $inc) (inc t) 5", "G7", ["pp : a [b] c ? a + c"]],
+	["pp $inc [inc t] 5", "pp $inc [inc t] 5", "G7", ["pp : a [b] c ? a + c"]],
+	["hk2 $inc t 5（hk2 : f4 _ _ _ 3）", "hk2 $inc t 5", "G7", ["hk2 : f4 _ _ _ 3"]],
+	["hk2 $inc (inc t) 5", "hk2 $inc (inc t) 5", "G7", ["hk2 : f4 _ _ _ 3"]],
+	// 合成で後ろの段の印のある実引数も、入れ子で書いた同じ形と同じ門（法則1）。
+	["inc pf2 t 5（pf2 : f3 $inc）", "inc pf2 t 5", "G7", ["pf2 : f3 $inc"]],
+	["pf2 (inc t) 5（その入れ子）", "pf2 (inc t) 5", "G7", ["pf2 : f3 $inc"]],
+	["inc (f3 $inc) t 5", "inc (f3 $inc) t 5", "G7"],
+	["(f3 $inc) (inc t) 5（その入れ子）", "(f3 $inc) (inc t) 5", "G7"],
+	// 括った閉じ（`(add t)`）は1要素以上の値か関数なので、その前に書いた席も t の長さに依らない。口が全部埋まると分かれば、外の適用を閉じる前に門を見る。
+	["f3 $inc (add t) 5（括った閉じの前の席）", "f3 $inc (add t) 5", "G7"],
+	["f3 _ $inc (add t)", "f3 _ $inc (add t)", "G7"],
+	["f3 $inc _ (add t)", "f3 $inc _ (add t)", "G7"],
+	["(f3 $inc) (add t) 5", "(f3 $inc) (add t) 5", "G7"],
+	["add _ _ _ (add t)（前から 2 個の外の穴）", "add _ _ _ (add t)", "G13"],
+	// 閉じた括りは `!_` と分かる値なので、穴の並びの門は同じ席に `w` を置いた並びと同じ（関数・撒く項が来れば穴の規則が先に断る。`add _ inc w` は G7、`add _ w vs~` は G13）。
+	["add _ inc (add t)（add _ inc w と同じ）", "add _ inc (add t)", "G7"],
+	["add _ (add t) inc", "add _ (add t) inc", "G7"],
+	["add inc _ (add t)", "add inc _ (add t)", "G7"],
+	["f3 _ inc (add t)", "f3 _ inc (add t)", "G7"],
+	["f3 _ (add t) inc", "f3 _ (add t) inc", "G7"],
+	["add _ [inc] (add t)", "add _ [inc] (add t)", "G7"],
+	["add _ i (add t)（恒等射も関数）", "add _ i (add t)", "G7"],
+	["add _ (add t) vs~（add _ w vs~ と同じ）", "add _ (add t) vs~", "G13"],
+	["add _ vs~ (add t)", "add _ vs~ (add t)", "G13"],
+	// 括った閉じ（`(f3 $inc t)`）の中の門は、外の適用が受けた値で口が全部埋まると分かれば、括らない `f3 $inc t 5` と同じ門で断る（括りを重ねても、恒等射を挟んでも、
+	// 合成で書いても、外の外から流れ込んでも）。外の段は合成と同じく閉じの前に入る（法則1：`inc (f3 $inc t) 5` は `(f3 $inc t) (inc 5)`、`add 1 (f3 $inc t) 5` は
+	// `(f3 $inc t) (add 1 5)`）。穴も口を埋める（穴の関数の実体を作る、R81）。
+	["(f3 $inc t) 5（f3 $inc t 5 と同じ）", "(f3 $inc t) 5", "G7"],
+	["[f3 $inc t] 5", "[f3 $inc t] 5", "G7"],
+	["((f3 $inc t)) 5", "((f3 $inc t)) 5", "G7"],
+	["(i (f3 $inc t)) 5", "(i (f3 $inc t)) 5", "G7"],
+	["(f3 $inc t) 5 6", "(f3 $inc t) 5 6", "G7"],
+	["(f3 $inc t) w 5（w は値の口で消える）", "(f3 $inc t) w 5", "G7"],
+	["(f3 $inc t) _", "(f3 $inc t) _", "G7"],
+	["(f4 $inc t) 5 6", "(f4 $inc t) 5 6", "G7"],
+	["(f4 $inc t 5) 6", "(f4 $inc t 5) 6", "G7"],
+	["[(f4 $inc t) 5] 6（閉じを括った外の適用を、さらに外の適用が受けても）", "[(f4 $inc t) 5] 6", "G7"],
+	["inc [(f4 $inc t) 5] 6", "inc [(f4 $inc t) 5] 6", "G7"],
+	["((f3 $inc) t) 5", "((f3 $inc) t) 5", "G7"],
+	["(f3 $inc inc t) 5", "(f3 $inc inc t) 5", "G7"],
+	["(f3 $inc (inc t)) 5", "(f3 $inc (inc t)) 5", "G7"],
+	["inc (f3 $inc t) 5", "inc (f3 $inc t) 5", "G7"],
+	["k1 (f3 $inc t) 5 6（k1 5 6 の結果が流れ込む）", "k1 (f3 $inc t) 5 6", "G7"],
+	["add 1 (f3 $inc t) 5", "add 1 (f3 $inc t) 5", "G7"],
+	["5 (f3 $inc t) 6", "5 (f3 $inc t) 6", "G7"],
+	// 書き下しの後ろに積んだ値も、器の要素の下限に入る（`inc t 5` は要素が2つ以上）。
+	["f3 $inc (inc t 5)", "f3 $inc (inc t 5)", "G7"],
+	["f3 $inc (inc i t 5)", "f3 $inc (inc i t 5)", "G7"],
+	["f3 $vs (inc t 5)（番地の算術、R62）", "f3 $vs (inc t 5)", "G21"],
+	// 器より後ろに書いた穴：器（t・括った閉じ）は1要素以上なので、器より後ろの穴の位置は書いた位置以上。器を1要素と数えても前から n 個の外に来る穴があれば、
+	// どの長さでも断るので先に断り、答えと言い分は器を A の葉1つに置いた並びで穴の規則を読んだ物（長さ1の G13）にする（D の考え）。器より前にも穴があれば、どの長さでも
+	// G13。器が全部の穴より前（`add t _ _`）なら、長さ2以上は器の要素が前から n 個の口を埋め、後ろの穴は R46 の G7（書いた `add 1 2 _ _`）か、器より前の印のある実引数の
+	// 門（`f3 $vs t _ _` は長さ2以上で G21）。単調なのは G13 だけなので器より後ろの値の G7 は足さない（上の通る行の
+	// `add _ t $inc`）が、外の穴のある並びは G13（`add _ t _ $inc`・`f3 _ $inc t _ _` は、書いた `add _ 1 _ $inc`・`f3 _ $inc 1 _ _` と同じ）。
+	["add _ t _ 5（器より後ろの穴）", "add _ t _ 5", "G13"],
+	["add _ t _ 5 6", "add _ t _ 5 6", "G13"],
+	["add _ t _", "add _ t _", "G13"],
+	["add t _ _", "add t _ _", "G13"],
+	["f3 _ t _ _ 5", "f3 _ t _ _ 5", "G13"],
+	["f3 _ t _ _", "f3 _ t _ _", "G13"],
+	["add _ (add t) _（括った閉じも1要素以上）", "add _ (add t) _", "G13"],
+	["add _ (add t) _ 5", "add _ (add t) _ 5", "G13"],
+	["add _ (add t) 5 _", "add _ (add t) 5 _", "G13"],
+	["add _ t _ $inc", "add _ t _ $inc", "G13"],
+	["f3 _ $inc t _ _", "f3 _ $inc t _ _", "G13"],
+	// 穴の並びの中の括った閉じ（`(f3 $inc t)`）は、t が短くて中の口が埋まらなければ関数の項なので穴の規則が G7、埋まれば中の門が G7 なので、長さに依らず G7。
+	["add _ (f3 $inc t) 5（穴の並びの中の括った閉じ）", "add _ (f3 $inc t) 5", "G7"],
+	["add _ 5 (f3 $inc t)", "add _ 5 (f3 $inc t)", "G7"],
+	["f3 _ (f3 $inc t) 5 6", "f3 _ (f3 $inc t) 5 6", "G7"],
+	["(add _ (f3 $inc t)) 5", "(add _ (f3 $inc t)) 5", "G7"],
+	["add _ (f4 $inc t) 5", "add _ (f4 $inc t) 5", "G7"],
+	["add (f3 $inc t) _ 5", "add (f3 $inc t) _ 5", "G7"],
+	["f3 1 _ (f3 $inc t) 5", "f3 1 _ (f3 $inc t) 5", "G7"],
+	["add _ (f3 $inc t)", "add _ (f3 $inc t)", "G7"],
+	["add _ (f3 $inc t) _", "add _ (f3 $inc t) _", "G7"],
+	["add _ w (f3 $inc t) 5（w は値の口で消える）", "add _ w (f3 $inc t) 5", "G7"],
+	// 可変長の口（R41）は1つ以上を受けて並びの終わりで閉じるので、その段の結果1つが括った閉じに流れ込む（法則1：`n (f3 $inc t) 5` は `(f3 $inc t) (n 5)`）。
+	["n (f3 $inc t) 5（n : [~x] ? x）", "n (f3 $inc t) 5", "G7"],
+	["n (f3 $inc t) 5 6", "n (f3 $inc t) 5 6", "G7"],
+	["hf (f3 $inc t) 5（hf : [~xs] ? xs）", "hf (f3 $inc t) 5", "G7"],
+	["h (f3 $inc t) 5 6（h : a [~xs] ? a。a が 5、xs が 6 で h が閉じる）", "h (f3 $inc t) 5 6", "G7"],
+	// 後ろの `!_` と分かる値（無い欄の w・未定義の名前）も、括りの口では空の器として席を取る（R122）ので、可変長の口の段は閉じて結果1つが流れ込む
+	// （書いた `n (f3 $inc 1) w` と同じ G7）。
+	["n (f3 $inc t) w", "n (f3 $inc t) w", "G7"],
+	["n (f3 $inc t) w w", "n (f3 $inc t) w w", "G7"],
+	["hf (f3 $inc t) w", "hf (f3 $inc t) w", "G7"],
+	["n (f3 $inc t) zz（未定義の名前）", "n (f3 $inc t) zz", "G7"],
+	// 括った頭（`(n (f3 $inc t))`）は括りで止めない（`(add t) 5` は `add t 5`）ので、後ろの `w` も括らない `n (f3 $inc t) w` と同じ G7。
+	["(n (f3 $inc t)) w（括った頭も同じ）", "(n (f3 $inc t)) w", "G7"],
+	["(n (f3 $inc t)) w w", "(n (f3 $inc t)) w w", "G7"],
+	["(hf (f3 $inc t)) w", "(hf (f3 $inc t)) w", "G7"],
+	// 括りの関数の段で括った閉じの後ろに書いた穴：書いた長さ1〜3 がどれも断るので先に断る（D）。中の門が断るなら中の門の G7（書いた `n (f3 $inc 1 2) _` と同じ。
+	// 穴の規則が断り、中の門も断る時は中の門の断り）、ほかは括りの関数の実引数の穴の G5（§3.5。書いた `n (add 1 2) _` と同じ）。
+	["n (f3 $inc t) _（中の門。書いた n (f3 $inc 1 2) _ と同じ）", "n (f3 $inc t) _", "G7"],
+	["pq (f3 $inc t) _", "pq (f3 $inc t) _", "G7"],
+	["h (f3 $inc t) _", "h (f3 $inc t) _", "G7"],
+	["fp (f3 $inc t) _", "fp (f3 $inc t) _", "G7"],
+	["hf (f3 $inc t) _", "hf (f3 $inc t) _", "G7"],
+	["n (add t) _（括りの関数の実引数の穴。書いた n (add 1 2) _ と同じ）", "n (add t) _", "G5"],
+	["n (f3 1 t) _", "n (f3 1 t) _", "G5"],
+	["h (add t) _", "h (add t) _", "G5"],
+	["fp (add t) _", "fp (add t) _", "G5"],
+	["hf (add t) _", "hf (add t) _", "G5"],
+]) {
+	checkRefused(`R143 ${name}`, p1([...R143D, `gt : [~t] ? ${body}`, "gt 1 2", ...defs]), gateId);
+}
+// 括った閉じの中の門と書き下しの下限で断った言い分は、括らない `f3 $inc t 5` と同じく、gt の実体の本体で f3 を形 $L A A で呼んだ実体を名指す。
+for (const body of ["f3 $inc t 5", "(f3 $inc t) 5", "inc (f3 $inc t) 5", "f3 $inc (inc t 5)", "n (f3 $inc t) _", "(n (f3 $inc t)) w"]) {
+	checkRefused(`R143 ${body} の実体の並び`, p1([...R143D, `gt : [~t] ? ${body}`, "gt 1 2"]), "G7", [["gt", "[N…]"], ["f3", "$L A A"]]);
+}
+// 中の門で断った行は、書いた `n (f3 $inc 1 2) _` と同じく f3 の本体の行。
+for (const body of ["n (f3 $inc t) _", "(n (f3 $inc t)) w"]) {
+	total++;
+	const label = `R143 ${body} の断る行（f3 の本体の行）`;
+	try {
+		const r = resolve(p1([...R143D, `gt : [~t] ? ${body}`, "gt 1 2"]));
+		fail(label, `断るはずが通った: ${show(r.trees[R143_AT])}`);
+	} catch (e) {
+		if (e.gate === "G7" && e.line === p1At("f3") + 1) ok(`${label} → G7`);
+		else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line}  want: G7 @${p1At("f3") + 1}`, String(e.message));
+	}
+}
+// 可変長の口（R41）は1つ以上受けて閉じるので、t を要素1つと見て空になりうる `h4 $inc t 5` は、呼ばれるとは分からず門を見ない（R143 の閉じ）。
+checkPass("R143 h4 $inc t 5（h4 : a b c [~xs] ? a + b）", p1([...R143D, "gt : [~t] ? h4 $inc t 5", "gt 1 2", "h4 : a b c [~xs] ? a + b"]), gtInst("(unit (apply h4 (construct $inc t 5)))"), null, { at: R143_AT, severities: ["warning/unsized-container"] });
+// 括りの口で t を受けた実体の結果（`tl2 t`）は、長さの見えない器でなく中身の見えない並び（R142）なので、段を重ねても外の口では未知（`!_` にしない）。
+checkPass("R143 add (tl2 (tl2 t))（tl2 : [y ~ys] ? ys）", p1([...R143D, "gt : [~t] ? add (tl2 (tl2 t))", "tl2 : [y ~ys] ? ys", "gt 1 2 3 4"]), "(apply gt (construct 1 2 3 4))", "未知", { severities: [] });
+checkPass("R143 その gt の実体", p1([...R143D, "gt : [~t] ? add (tl2 (tl2 t))", "tl2 : [y ~ys] ? ys", "gt 1 2 3 4"]), gtInst("(apply add [tl2 [tl2 t]])"), null, { at: R143_AT });
+// 本体が閉じた実体を外の適用で呼んでも、知らせは本体に書いた所の1つだけ（Q104 の芯：書いた所で1つ、呼んだ所では足さない）。
+checkPass("R143 gt : [~t] ? add t ⏎ inc (gt 1 2)", p1(["gt : [~t] ? add t", "inc (gt 1 2)"]), "(apply inc [gt 1 2])", "A", { severities: ["warning/unsized-container"] });
+// 手続きの本体の行では、閉じた適用は行として残る（`w` の行と同じ）。行の中の括らない `,` の辺では消える。
+for (const [name, lines, want] of [
+	["手続きの本体の行の add t は残る", ["gt : [~t] ?", "\tadd t", "\t5", "", "gt 1 2"], gtInst("(block (unit (apply add t)) 5)")],
+	["手続きの本体の行の中の add t , 1 は 1", ["gt : [~t] ?", "\tadd t , 1", "\t5", "", "gt 1 2"], gtInst("(block 1 5)")],
+	["手続きの本体の行の (add t) 5 は残る（括った閉じの外の適用も行として残る）", ["gt : [~t] ?", "\t(add t) 5", "\t5", "", "gt 1 2"], gtInst("(block (unit (apply [add t] 5)) 5)")],
+]) {
+	checkPass(`R143 ${name}`, p1(lines), want, null, { at: P1_PRE.length, severities: ["warning/unsized-container"] });
+}
+// 本体の枝（`⇥c : v` の行。枝の値のブロックの中の枝も）の条件か値が R143 の閉じ（書いた所で印 zero の `!_`。括った頭と外の適用ごと閉じた物、書き下しを外で数えた閉じも）なら、
+// 同じ席に未定義の名前を置いた時と同じく、定義の所で G22（R128、11-18 の決まり。U〔答え〕[2026-11-22 10:52:45 UTC 828ee417]「1だね」）。G22 は書いた行で見るので、呼ぶ行が
+// 無くても断る。断った行は枝を書いた行で、言い分は R143（長さの決まらない t の要素が決まった口2つ以上に届く）と、要素に名前を付ける括りの仮引数と、同じ型どうしの比べの条件の
+// 案内（U [2026-11-22 09:54:37 UTC 828ee417]「関数を返したいなら、必ず$で返す。型チェックしたいなら同型の不等号とかでいける！」）。R143 の閉じが R48 の被演算子・`&` の辺に
+// ある所（`(add t) > 0 : 1`）も同じ言い分。[名前, gt の仮引数, gt の本体の行, 断る行（gt の定義の行から数えた行）, 条件か値か, 言い分が名指す書いた式]。
+const r143G22Why = (side, part) =>
+	`の${side} \`${part}\` は、長さの決まらない \`t\` の要素が決まった口2つ以上に届くので、書いた所で \`!_\` です（§4 R143）。その枝は、条件なら選ばれず、値なら選ばれても次の枝へ進むだけです（§4 R128）。` +
+	"要素を口に渡すなら、括りの仮引数で要素に名前を付けます（`[a b ~r]` のように）。長さや型で振り分けるなら、条件に同じ型どうしの比べを書きます。";
+for (const [name, params, rows, at, side, part] of [
+	["値の add t", "[~t]", ["\t1 > 0 : add t", "\t5"], 1, "値", "add t"],
+	["値の (add t) 5（括った頭は外の適用ごと閉じる）", "[~t]", ["\t1 > 0 : (add t) 5", "\t5"], 1, "値", "[add t] 5"],
+	["値の inc (add t)", "[~t]", ["\t1 > 0 : inc (add t)", "\t5"], 1, "値", "inc [add t]"],
+	["値の inc (add t) 5", "[~t]", ["\t1 > 0 : inc (add t) 5", "\t5"], 1, "値", "inc [add t] 5"],
+	["値の add t 5", "[~t]", ["\t1 > 0 : add t 5", "\t5"], 1, "値", "add t 5"],
+	["値の add _ t 5（穴の口も数える）", "[~t]", ["\t1 > 0 : add _ t 5", "\t5"], 1, "値", "add _ t 5"],
+	["値の f3 t 5", "[~t]", ["\t1 > 0 : f3 t 5", "\t5"], 1, "値", "f3 t 5"],
+	["値の inc add t（合成で後ろの段の口にも届く）", "[~t]", ["\t1 > 0 : inc add t", "\t5"], 1, "値", "inc add t"],
+	["値の add (inc t)（書き下しを外の口で数える）", "[~t]", ["\t1 > 0 : add (inc t)", "\t5"], 1, "値", "add [inc t]"],
+	["値の [add t]", "[~t]", ["\t1 > 0 : [add t]", "\t5"], 1, "値", "[add t]"],
+	["値の (add t) & 1（`&` の辺では閉じが残る）", "[~t]", ["\t1 > 0 : (add t) & 1", "\t5"], 1, "値", "[add t] & 1"],
+	["条件の add t", "[~t]", ["\tadd t : 1", "\t5"], 1, "条件", "add t"],
+	["条件の (add t)", "[~t]", ["\t(add t) : 1", "\t5"], 1, "条件", "[add t]"],
+	["条件の (add t) > 0（R48 の被演算子の閉じ）", "[~t]", ["\t(add t) > 0 : 1", "\t5"], 1, "条件", "[add t] > 0"],
+	["入れ子の枝の値の add t", "[~t]", ["\t1 > 0 :", "\t\t2 > 0 : add t", "\t\t6", "\t5"], 2, "値", "add t"],
+	["gt : [a ~t] ? の値の add t（[x ~xs] の残りも）", "[a ~t]", ["\ta > 0 : add t", "\t5"], 1, "値", "add t"],
+	// 恒等射が残りの名前を直に受けても長さの見えない器のまま（R29・R126 の単位律 i X ≅ X。覗き読みの残りの名前の種類に依らない）。
+	["値の add (i t)", "[~t]", ["\t1 > 0 : add (i t)", "\t5"], 1, "値", "add [i t]"],
+	["値の add [i t]", "[~t]", ["\t1 > 0 : add [i t]", "\t5"], 1, "値", "add [i t]"],
+	["値の f3 (i t)", "[~t]", ["\t1 > 0 : f3 (i t)", "\t5"], 1, "値", "f3 [i t]"],
+	["値の add (i i t)", "[~t]", ["\t1 > 0 : add (i i t)", "\t5"], 1, "値", "add [i i t]"],
+	["値の inc (add (i t))", "[~t]", ["\t1 > 0 : inc (add (i t))", "\t5"], 1, "値", "inc [add [i t]]"],
+	["値の add (_ t)（括らない `_` の恒等射）", "[~t]", ["\t1 > 0 : add (_ t)", "\t5"], 1, "値", "add [_ t]"],
+	["条件の add (i t)", "[~t]", ["\tadd (i t) : 1", "\t5"], 1, "条件", "add [i t]"],
+	["gt : [a ~t] ? の値の add (i t)", "[a ~t]", ["\ta > 0 : add (i t)", "\t5"], 1, "値", "add [i t]"],
+	// R143 の閉じに当てた `@`（`$` と同じく R143 の言い分）。
+	["値の @[add t]", "[~t]", ["\t1 > 0 : @[add t]", "\t5"], 1, "値", "@[add t]"],
+	["値の @(add t)", "[~t]", ["\t1 > 0 : @(add t)", "\t5"], 1, "値", "@[add t]"],
+	// `@` で始まる `$`・`@` の重ね（`@$`・`@@`）も、単一の前置と同じく重ねた印を剥がした芯（R143 の閉じ）で読む（R56・R78）。
+	["値の @$[add t]", "[~t]", ["\t1 > 0 : @$[add t]", "\t5"], 1, "値", "@$[add t]"],
+	["値の @$(add t)", "[~t]", ["\t1 > 0 : @$(add t)", "\t5"], 1, "値", "@$[add t]"],
+	["値の @@[add t]", "[~t]", ["\t1 > 0 : @@[add t]", "\t5"], 1, "値", "@@[add t]"],
+	["条件の @$[add t]", "[~t]", ["\t@$[add t] : 1", "\t5"], 1, "条件", "@$[add t]"],
+	["条件の @@[add t]", "[~t]", ["\t@@[add t] : 1", "\t5"], 1, "条件", "@@[add t]"],
+	// 器より後ろに括りの関数の呼び出しや R81 の実体があっても、閉じは器の要素が届く口で決まる（覗き読みは実体の結果を中身の見えない並びでありうる物と置いて読み直す）。
+	["値の add t (fp 1 2 3)", "[~t]", ["\t1 > 0 : add t (fp 1 2 3)", "\t5"], 1, "値", "add t [fp 1 2 3]"],
+	["値の k1 t (fp t)", "[~t]", ["\t1 > 0 : k1 t (fp t)", "\t5"], 1, "値", "k1 t [fp t]"],
+	["値の add t (h 1 2)", "[~t]", ["\t1 > 0 : add t (h 1 2)", "\t5"], 1, "値", "add t [h 1 2]"],
+	["値の add t (n 1)", "[~t]", ["\t1 > 0 : add t (n 1)", "\t5"], 1, "値", "add t [n 1]"],
+	["値の add t (map $inc vs)", "[~t]", ["\t1 > 0 : add t (map $inc vs)", "\t5"], 1, "値", "add t [map $inc vs]"],
+	["値の (add t) (fp 1 2 3)", "[~t]", ["\t1 > 0 : (add t) (fp 1 2 3)", "\t5"], 1, "値", "[add t] [fp 1 2 3]"],
+	["値の inc (add t) (fp 1 2 3)", "[~t]", ["\t1 > 0 : inc (add t) (fp 1 2 3)", "\t5"], 1, "値", "inc [add t] [fp 1 2 3]"],
+	["条件の (add t (fp 1 2 3))", "[~t]", ["\t(add t (fp 1 2 3)) : 1", "\t5"], 1, "条件", "[add t [fp 1 2 3]]"],
+]) {
+	for (const call of ["gt 1 2", "7"]) {
+		total++;
+		const label = `R143 枝の G22 ${name}（${call === "7" ? "呼ぶ行が無い" : "gt 1 2 で呼ぶ"}）`;
+		const line = R143_AT + 1 + at;
+		try {
+			const r = resolve(p1([...R143D, `gt : ${params} ?`, ...rows, "", call]));
+			fail(label, `断るはずが通った: ${show(r.trees[R143_AT])}  知らせ: ${JSON.stringify(r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`))}`);
+		} catch (e) {
+			const m = String(e.message);
+			if (e.gate === "G22" && e.reason === GATE_REASON.G22 && e.line === line && m.includes(r143G22Why(side, part)) && !m.includes("未定義の名前・")) ok(`${label} → G22`);
+			else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line}  want: G22 @${line}`, m);
+		}
+	}
+}
+// 定義の所の覗き読みは実体を作らないので、器より前に実体の結果が来る行（`f3 (fp 1 2 3) t`）と、並びより前の実引数の門を見る行（`map $inc (add t)`・`use $inc (add t)`）は
+// 定義の所では読めない。呼べば、実体の本体を解く所（resolveBranch）で同じ R143 の言い分の G22 で断り（実体の門と同じく、gt を呼んだ実体の本体と名指す。行は枝を書いた
+// 行）、呼ばない定義は通る。
+for (const [name, rows, part] of [
+	["値の f3 (fp 1 2 3) t", ["\t1 > 0 : f3 (fp 1 2 3) t", "\t5"], "f3 [fp 1 2 3] t"],
+	["値の map $inc (add t)", ["\t1 > 0 : map $inc (add t)", "\t5"], "map $inc [add t]"],
+	["値の use $inc (add t)", ["\t1 > 0 : use $inc (add t)", "\t5"], "use $inc [add t]"],
+]) {
+	total++;
+	const label = `R143 枝の G22 ${name}（gt 1 2 で呼ぶ。実体の本体で断る）`;
+	const line = R143_AT + 2;
+	try {
+		const r = resolve(p1([...R143D, "gt : [~t] ?", ...rows, "", "gt 1 2"]));
+		fail(label, `断るはずが通った: ${show(r.trees[R143_AT])}  知らせ: ${JSON.stringify(r.diagnostics.map((d) => `${d.severity}/${d.reason}@${d.line}`))}`);
+	} catch (e) {
+		const m = String(e.message);
+		if (e.gate === "G22" && e.reason === GATE_REASON.G22 && e.line === line && m.startsWith("括りの関数 `gt` を形 [N…] で呼んだ実体の本体が、門に当たりました") && m.includes(r143G22Why("値", part))) ok(`${label} → G22`);
+		else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line}  want: G22 @${line}`, m);
+	}
+	checkPass(`R143 枝の ${name}（呼ぶ行が無い）`, p1([...R143D, "gt : [~t] ?", ...rows, "", "7"]), "7", "A", { severities: [] });
+}
+// 器より後ろの括りの関数の呼び出しの実体が門で断る（`f3 $inc 1 2` は G7、`f3 $vs 1 2` は G21。名前で運んだ `gw 1` の中の実体も）なら、定義の所の覗き読みは
+// その実体の結果を読めない（実体の門は呼んだ所で見る、R25）ので、枝の値を R143 の閉じと決めない。呼ばない定義は通り、呼べば実体の門の断り（行は f3 の本体の行、
+// 名指しは gt の実体から門に当たった実体までの並び）。
+for (const [name, defs, rows, gateId, chain] of [
+	["値の add t (f3 $inc 1 2)", [], ["\t1 > 0 : add t (f3 $inc 1 2)", "\t5"], "G7", [["gt", "[N…]"], ["f3", "$L A A"]]],
+	["値の add t (gw 1)（gw : [x] ? f3 $inc x 2）", ["gw : [x] ? f3 $inc x 2"], ["\t1 > 0 : add t (gw 1)", "\t5"], "G7", [["gt", "[N…]"], ["gw", "N"], ["f3", "$L A A"]]],
+	["値の add t (f3 $vs 1 2)", [], ["\t1 > 0 : add t (f3 $vs 1 2)", "\t5"], "G21", [["gt", "[N…]"], ["f3", "$[N…] A A"]]],
+]) {
+	checkPass(`R143 枝の ${name}（呼ぶ行が無い）`, p1([...R143D, ...defs, "gt : [~t] ?", ...rows, "", "7"]), "7", "A", { severities: [] });
+	total++;
+	const label = `R143 枝の ${name}（gt 1 2 で呼ぶ。実体の門で断る）`;
+	const line = p1At("f3") + 1;
+	try {
+		const r = resolve(p1([...R143D, ...defs, "gt : [~t] ?", ...rows, "", "gt 1 2"]));
+		fail(label, `断るはずが通った: ${show(r.trees[R143_AT + defs.length])}`);
+	} catch (e) {
+		const gotInst = e.instances ? JSON.stringify(e.instances.map((x) => [x.fn, x.shape])) : "なし";
+		if (e.gate === gateId && e.reason === GATE_REASON[gateId] && e.line === line && gotInst === JSON.stringify(chain)) ok(`${label} → ${gateId}`);
+		else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line} ${gotInst}  want: ${gateId} @${line} ${JSON.stringify(chain)}`, String(e.message));
+	}
+}
+// 器より後ろの実体の実引数に、さらに括りの関数の呼び出しがある行（`fq (fp 1 2 3) 2 3`）は、覗き読みが中の呼び出しの結果を中身の見えない並びでありうる物（種類の未知）と
+// 置くので、置いた物の上では外の実体が門に当たるかを確かめられない。確かめずに枝の値を R143 の閉じと読み、呼ぶ行が無くても G22（書いた `fq (fp 1 2 3) 2 3` は A で
+// 門に当たらない）。
+for (const call of ["7", "gt 1 2"]) {
+	total++;
+	const label = `R143 枝の G22 値の add t (fq (fp 1 2 3) 2 3)（fq : [a b c] ? add _ a 5。${call === "7" ? "呼ぶ行が無い" : "gt 1 2 で呼ぶ"}）`;
+	const line = R143_AT + 3;
+	try {
+		const r = resolve(p1([...R143D, "fq : [a b c] ? add _ a 5", "gt : [~t] ?", "\t1 > 0 : add t (fq (fp 1 2 3) 2 3)", "\t5", "", call]));
+		fail(label, `断るはずが通った: ${show(r.trees[R143_AT + 1])}`);
+	} catch (e) {
+		const m = String(e.message);
+		if (e.gate === "G22" && e.reason === GATE_REASON.G22 && e.line === line && m.includes(r143G22Why("値", "add t [fq [fp 1 2 3] 2 3]"))) ok(`${label} → G22`);
+		else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line}  want: G22 @${line}`, m);
+	}
+}
+// `$` を2つ重ねた枝の値（`$$[add t]`、その `@` の `@$$[add t]`）は、`!_` と分かる値に当てた `$` の `!_` なので、G22 の言い分は R143 でなく R49・R21（`$w` と同じ）。
+for (const part of ["$$[add t]", "@$$[add t]"]) {
+	for (const call of ["gt 1 2", "7"]) {
+		total++;
+		const label = `R143 枝の G22 値の ${part}（言い分は R49・R21。${call === "7" ? "呼ぶ行が無い" : "gt 1 2 で呼ぶ"}）`;
+		const line = R143_AT + 2;
+		try {
+			const r = resolve(p1([...R143D, "gt : [~t] ?", `\t1 > 0 : ${part}`, "\t5", "", call]));
+			fail(label, `断るはずが通った: ${show(r.trees[R143_AT])}`);
+		} catch (e) {
+			const m = String(e.message);
+			if (e.gate === "G22" && e.reason === GATE_REASON.G22 && e.line === line && m.includes("§4 R49・R21") && !m.includes("§4 R143")) ok(`${label} → G22`);
+			else fail(label, `got: ${e.reason} ${e.gate || ""} @${e.line}  want: G22 @${line}（R49・R21）`, m);
+		}
+	}
+}
+// 入らない形：枝の値の閉じが境目で消える物（`,`・`|`・並びの項。`+` は閉じを被演算子に持つ値で、値の段は + の単位で 1）、R142 の未知（tl2 t の結果は中身の見えない並び）、
+// 書き下し（届く口が1つ・可変長の口）は、R143 の閉じでないので G22 に当たらない。枝の後の既定の行は枝でないので、R143 の warning と `!_` のまま。
+for (const [name, rows, want, kind, severities] of [
+	["枝の値の add t , 1 は 1", ["\t1 > 0 : add t , 1", "\t5"], gtInst("(block (: (> 1 0) 1) 5)"), "A", ["warning/unsized-container"]],
+	["枝の値の (add t) | 5 は 5", ["\t1 > 0 : (add t) | 5", "\t5"], gtInst("(block (: (> 1 0) 5) 5)"), "A", ["warning/unsized-container"]],
+	["枝の値の 5 (add t) は 5", ["\t1 > 0 : 5 (add t)", "\t5"], gtInst("(block (: (> 1 0) 5) 5)"), "A", ["warning/unsized-container"]],
+	["枝の値の (add t) + 1", ["\t1 > 0 : (add t) + 1", "\t5"], gtInst("(block (: (> 1 0) (+ [add t] 1)) 5)"), "A", ["warning/unsized-container"]],
+	["枝の値の add 1 t（書き下し）", ["\t1 > 0 : add 1 t", "\t5"], gtInst("(block (: (> 1 0) (apply add (construct 1 t))) 5)"), "A", []],
+	["枝の値の inc t 5（書き下し）", ["\t1 > 0 : inc t 5", "\t5"], gtInst("(block (: (> 1 0) (construct (apply inc t) 5)) 5)"), "A", []],
+	["枝の値の h t（可変長の口）", ["\t1 > 0 : h t", "\t5"], gtInst("(block (: (> 1 0) (apply h t)) 5)"), "A", []],
+	["枝の後の既定の行の add t は `!_` のまま", ["\t1 > 0 : 5", "\tadd t"], gtInst("(block (: (> 1 0) 5) (unit (apply add t)))"), "A", ["warning/unsized-container"]],
+]) {
+	checkPass(`R143 ${name}`, p1([...R143D, "gt : [~t] ?", ...rows, "", "gt 1 2"]), want, null, { at: R143_AT, severities });
+	checkPass(`R143 ${name}（呼ぶ行が無い）`, p1([...R143D, "gt : [~t] ?", ...rows, "", "7"]), "7", "A", { severities: [] });
+}
+checkPass("R143 枝の値の add (tl2 t) は R142 の未知（tl2 : [y ~ys] ? ys）", p1([...R143D, "gt : [~t] ?", "\t1 > 0 : add (tl2 t)", "\t5", "", "tl2 : [y ~ys] ? ys", "gt 1 2"]), "(apply gt (construct 1 2))", "未知", { severities: [] });
+// 器より前に中身の見えない並びがあれば、t の届く口はその長さで変わる（R142 の未知）ので、実体の本体でも G22 にしない。
+checkPass("R143 枝の値の f3 (tl2 vs) t は R142 の未知", p1([...R143D, "gt : [~t] ?", "\t1 > 0 : f3 (tl2 vs) t", "\t5", "", "tl2 : [y ~ys] ? ys", "gt 1 2"]), "(apply gt (construct 1 2))", "未知", { severities: [] });
+// 未知の物を受けた残りの名前（`gt (add (tl2 vs))` の t）に当てた恒等射も受けた物そのもの（単位律）なので、実体でも R143 の閉じ。
+checkPass("R143 gt : [~t] ? add (i t) ⏎ gt (add (tl2 vs)) の gt の実体", p1([...R143D, "gt : [~t] ? add (i t)", "tl2 : [y ~ys] ? ys", "gt (add (tl2 vs))"]), "(: gt (? [[~t]] (inst U (unit (apply add [i t])))))", null, { at: R143_AT, severities: ["warning/unsized-container"] });
 
 // ---------------------------------------------------------------------------
 // R73〜R79（2026-10-26、§7.38）：2026-10-25 の答えの2つ目の片（sid c8ccdd69。U の時刻は UTC）
@@ -6563,7 +7784,8 @@ const r80FixPasses = [
 	["直し 穴の関数の鍵は書いた印を入れる：ht [h : (use $uu _)] が後（未知）", std(["uu : x ? [,] x", "ht : [h] ? h 5", "ht [h : (use $inc _)]", "ht [h : (use $uu _)]"]), "(apply ht [h : [use $uu _]])", "未知"],
 	["直し 穴の関数の使わない口のずらした点 (k2 ($vs + 0x10) _) 5（`k2 ($vs + 0x10) 5` と同じ A。前は札で G21）", std(["k2 : x y ? y", "(k2 ($vs + 0x10) _) 5"]), "(apply [k2 [$vs + 0x10] _] 5)", "A"],
 	["直し 単相化の実体の印の無い仮引数の $x：pz $inc 5（`pz 1 5`・β の `$5` と同じ A。前の版は G20）", std(["pz : f x ? $x", "pz $inc 5"]), "(apply pz (construct $inc 5))", "A"],
-	["直し 同じ x , $x の pz $inc vs（前の版は G20）", std(["pz : f x ? x , $x", "pz $inc vs"]), "(apply pz (construct $inc vs))", "A"],
+	// x に List を1要素で当てるのは前置 `~`（問5）。書いた `vs` は素の口で繋いで x が 1 になる（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）。
+	["直し 同じ x , $x の pz $inc ~vs（前の版は G20）", std(["pz : f x ? x , $x", "pz $inc ~vs"]), "(apply pz (construct $inc ~vs))", "A"],
 	["直し 同じ @f $x の gq $_ 5（前の版は G20）", std(["gq : f x ? @f $x", "gq $_ 5"]), "(apply gq (construct $_ 5))", "A"],
 	["直し 同じ部分適用 p2 : pz $inc ⏎ p2 5（前の版は G20）", std(["pz : f x ? $x", "p2 : pz $inc", "p2 5"]), "(apply p2 5)", "A"],
 	["直し 括りの関数の無いファイルの `$` で包む4段の鎖 a1 $inc（前の版は深さの門で G7）", src(["inc : x ? x + 1", "a1 : f ? a2 $f", "a2 : g ? a3 $g", "a3 : h ? a4 $h", "a4 : h ? 5", "a1 $inc"]), "(apply a1 $inc)", "A"],
@@ -6969,7 +8191,7 @@ const r94Passes = [
 	// 2026-10-28 の片9b（R112、§5 Q75 (e) の値の口の所を閉じた）：`!_` と分かる名前も値の口では消える（inc が残る）。前は R63 の A で `(apply inc e0)`・`(apply inc e8)`・
 	// `(apply inc un)`、片5 は G5。2026-11-08 の R138 で `e0 : []`・`e8 : ~[]`・`un : !_` は断るので、R91・R115・R102 の名前（R83W の w）で見る。
 	["R112 名前 inc w は inc が残る（前の見本は `inc e0`・`e8 : ~[]` ⏎ `inc e8`・`inc un` で、R94 の外の R63 の A、片5 は G5）", r94w("inc w"), "(unit inc)", "A", { leftoverDiag: ["inc"] }],
-	["R94 の外：空でない器 inc [1 2] は木の段では A（10-04 の TypeError は型の段の話）", r94("inc [1 2]"), "(apply inc [1 2])", "A"],
+	["R94 の外：空でない器 inc [1 2] は A（素の口で繋いで inc 1 2、R142）", r94("inc [1 2]"), "(apply inc [1 2])", "A"],
 	// R94 の外（今のまま）と見ていた書いた `[]` の行（`pb2 [] 1`・`(f3 _ 2) 1 []`・`hd [] 1`・`(go _ 2) []`・`i []`・`[] 5`・`$[[]]`）は、R138 で断るので外した。
 	// R95：点なしの可変長の口の空の流れ（片5 は R51 の丸ごと）。書いた `[]~` は R138 で断る（下の r94WrittenRows の `[inc,] []~`）ので、`!_` と分かる名前を撒いた
 	// `w~` で見る（前の見本は書いた `[]~`）。
@@ -8427,7 +9649,8 @@ const bracketBodyPasses = [
 	["括った本体の欄が隣の欄を引く", src(["g : x ? [", "\ty : x + 1", "\tz : y * 2", "]", "", "g 1"]), "(: g (? [x] [y : x + 1 ⏎ z : y * 2]))"],
 	["括った本体の欄の後ろに撒く行（list_model.md の set_foo）", src(["set_foo : v [~this] ? [", "\tfoo : v", "\tthis~", "]", "", "set_foo 1 [foo : 0]"]), "(: set_foo (? [v [~this]] (inst A {foo:N} [foo : v ⏎ this~])))"],
 	["括った本体の欄の値に括りを入れ子（example.sn の regreet）", src(["regreet : [~this] ? [", "\tgreet : [", "\t\twelcome : `w`", "\t\t(this ' greet)~", "\t]", "\tworld : `m`", "\tthis~", "]", "", "regreet [greet : [hi : `h`]]"]), "(: regreet (? [[~this]] (inst {greet:{hi:[N…]}} [greet : [welcome : `w` ⏎ [this ' greet]~] ⏎ world : `m` ⏎ this~])))"],
-	["括ったコンストラクタの本体（example.sn の Person を括った形）", src(["Person : name age etc x ? [", "\tname", "\tage", "\t@etc : x", "]", "", "john : Person `john` 18 $`Like` `Sushi`"]), "(: Person (? [name age etc x] [name ⏎ age ⏎ @etc : x]))"],
+	// 呼ぶ行の名前は文字列を1要素で渡す `~`john``（問5）。書いた `` `john` `` は素の口で文字に繋ぐ（R142、U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）ので、name が \j になる。
+	["括ったコンストラクタの本体（example.sn の Person を括った形）", src(["Person : name age etc x ? [", "\tname", "\tage", "\t@etc : x", "]", "", "john : Person ~`john` 18 $`Like` `Sushi`"]), "(: Person (? [name age etc x] [name ⏎ age ⏎ @etc : x]))"],
 	["括った本体の比べを左に置いた行も欄の行（枝の節にしない）", src(["g : x ? [", "\tx > 0 : 1", "\ty : 2", "]", "", "g 1"]), "(: g (? [x] [x > 0 : 1 ⏎ y : 2]))"],
 	["括らない本体の行に置いた括りの中の行は欄", src(["g : x ?", "\t[", "\t\ty : x + 1", "\t\tz : 2", "\t]", "", "g 1"]), "(: g (? [x] (block [y : x + 1 ⏎ z : 2])))"],
 	["枝の値に置いた括りの中の行は欄（外の行は枝）", src(["g : x ?", "\tx > 0 : [", "\t\ty : x + 1", "\t\tz : 2", "\t]", "\t0", "", "g 1"]), "(: g (? [x] (block (: (> x 0) [y : x + 1 ⏎ z : 2]) 0)))"],
@@ -10229,7 +11452,7 @@ const unitLeafShow = (x) => {
 
 		// 5. 残す物は断らない（U〔答え〕[22:56:31]「移る」。`_` は id として、穴・恒等射・括りの席・名前の右辺に書ける）
 		["穴 add _ 3 4 は (apply add (construct 4 3))（R16）", ["add _ 3 4"], "(apply add (construct 4 3))", "A", []],
-		["穴 go _ xs は余った xs が穴に入る（R34）", ["go : ys ? ys", "xs : 1 , 2", "go _ xs"], "(apply go xs)", "A", []],
+		["穴 go _ xs は xs を繋いだ go _ 1 2：余りの 1 が穴に入り、2 は後ろに積む（R142・R34・R35）", ["go : ys ? ys", "xs : 1 , 2", "go _ xs"], "(construct (apply go 1) 2)", "A", []],
 		["穴 gq 1 _ は残った口の関数で、根なので (unit …) と leftover-lambda（R16・R42・R48）", ["gq 1 _"], "(unit (? [$p0] (apply gq (construct 1 $p0))))", "A", ["warning/leftover-lambda@1"]],
 		["既定値のある口でも穴：gd 3 _（手で既定値を呼ぶ綴りは無い）", ["gd 3 _"], "(unit (? [$p0] (apply gd (construct 3 $p0))))", "A", ["warning/leftover-lambda@1"]],
 		["口の外の恒等射 _ 5 は (apply _ 5)（R44）", ["_ 5"], "(apply _ 5)", "A", []],

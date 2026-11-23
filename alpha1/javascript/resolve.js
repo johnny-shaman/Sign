@@ -2450,6 +2450,26 @@ function isLambdaName(name, ctx) {
   return !!(def && def.lambda);
 }
 
+// 名前がファイルの値の定義を直に指し、その右辺が書いた数の葉だけの並置（`x2 : 1 2`）か、それを指す別名（`x4 : x2`）か（nameKindOf が F.flatDefs に置く。namedSeqElems）。
+function flatDefOf(name, ctx) {
+  for (let s = ctx.scope; s; s = s.parent) {
+    if ((s.descs && s.descs.has(name)) || (s.params && s.params.has(name)) || (s.locals && s.locals.has(name))) return false;
+  }
+  const def = ctx.F.defs.get(name);
+  return !!def && !def.lambda && ctx.F.flatDefs.has(def);
+}
+// 右辺の木 t が、書いた数の葉か書いた番地の葉（印の無い字面で、数だけか番地だけ）を2つ以上並置した構築か、それを指す名前の葉か。括りと `,` は入れない（中身に置き換えると
+// 1項の括りか、読みの変わる `,` になる）。名前を含む並置と関数の項も、ここでは入れない（namedSeqElems が数えるのは字面の葉だけの並置と、その別名だけ）。文字列の葉は
+// 入れない（素の口では文字に繋ぐので、後ろに積んだ所の数え方は字面の綴りでもまだ決まっていない）。数と番地を混ぜた並置は、要素の desc が1つに決まらないので入れない。
+const flatLit = (x) => !!x && x.t === "leaf" && x.cat === "plain" && !!x.term && x.term.type === "atom" && !x.term.pre.length && !x.term.post.length && x.term.core.c === "lit";
+function flatSeqRoot(t) {
+  if (!t) return false;
+  if (t.t === "leaf") return t.cat === "plain" && !!t.flat;
+  if (t.t !== "construct") return false;
+  const live = liveItems(t.items);
+  if (live.length < 2 || !live.every(flatLit)) return false;
+  return live.every((x) => isScalar(descOfTree(x))) || live.every((x) => ADDRESS_LIT.test(x.term.core.text));
+}
 // 名前がファイルの値の定義を直に指すなら、その右辺の器の数（nameKindOf が F.valueCounts に置く）。仮引数・実体の中で
 // 渡された物（s.descs）と括りの欄の名前は数えない（null）：実体は長さを書かない形で共有される（R24）。
 function valueCountOf(name, ctx) {
@@ -2494,6 +2514,9 @@ const DIAG_SEVERITY = {
   "name-shadow": "information",
   // R21（2026-11-18）：見える範囲に定義の無い名前は `!_` と分かる値で、書いた所ごとに知らせる（undefinedNameNotices）。重さは利用者の答え「warning」。
   "name-undefined": "warning",
+  // R143（片 p1）：長さの見えない器（`[~t]` の t）の要素が2つ以上の決まった口に届いた所。答えは `!_` で、言い分は「括りの口で受けて」。名前は実装で決めた所。
+  // 重さは問3 の U〔答え〕[2026-11-20 20:03:57 UTC 9f9fd58f]「1」（読む段が warning を出す）。
+  "unsized-container": "warning",
 };
 // 知らせは書いた行を持つ（R127、2026-11-06 の寄せ5、§5 Q85 (n)）：at が行の木ならその行、無ければ出した時の読む段の今の行（F.line。atRow・resolveTree が
 // 解いている行の木の行にする）。どちらも無い物には、行のループの終わりにいちばん外の行を付ける。
@@ -2985,6 +3008,8 @@ function nameKindOf(F, def) {
     value = v.value;
     if (v.count !== null) F.valueCounts.set(def, v.count);
     else F.valueCounts.delete(def);
+    if (v.flat) F.flatDefs.add(def);
+    else F.flatDefs.delete(def);
     if (v.chars !== null) F.stringCounts.set(def, v.chars);
     else F.stringCounts.delete(def);
     F.unitDefs.set(def, v.unit);
@@ -3053,7 +3078,9 @@ function valueOfRoot(F, root, scope) {
     const hex = hexTree(root, { F, scope });
     // 右辺の値が Int か Int の List と書いた所から分かるか（R97：`$名前` の指す要素の幅。"scalar"・"list"・null、intName が読む）。
     const int = intTree(root, { F, scope });
-    return { value, count, chars, unit, hex, int };
+    // 右辺が書いた数の葉だけの並置か、それを指す別名か（namedSeqElems：後ろの項に書いた名前を、中身に置き換えた綴りと同じ数で数える所）。
+    const flat = count !== null && count >= 2 && flatSeqRoot(root);
+    return { value, count, chars, unit, hex, int, flat };
   }
 }
 
@@ -3662,6 +3689,7 @@ function scopeIdent(scope) {
 function instScope(F, op, defScope, b, key, ident) {
   const lam = makeLambda(op, { F, scope: defScope });
   lam.scope.descs = b.descs;
+  lam.scope.restNames = b.restNames; // 残りを受ける名前（`~xs`）は長さの見えない器（R143、unsizedSrc）
   lam.scope.key = key;
   lam.scope.ident = ident;
   lam.scope.depth = b.depth;
@@ -3671,14 +3699,24 @@ function instScope(F, op, defScope, b, key, ident) {
   return lam.scope;
 }
 
+// 中身の見えない並び（印 seqOf の形の無い A。実体の結果・頭と残りに分けた残り・合成の流れ、seqDesc）の desc か。
+const isOpaqueSeq = (d) => !!d && d.k === "A" && !!d.seqOf && !d.shape && !d.spread;
 // 仮引数に渡された物を当てる（R24 の表）。返す物は {descs（名前 → desc）, key, text}。
 // plain は素の関数の単相化（R81）の実体（仮引数は全部裸。言い分だけが違う）。
 function bindParams(params, argDescs, plain = false) {
   const descs = new Map();
+  // 括りの残りを受ける名前（`[~t]` の t・`[x ~xs]` の xs）。R91 で長さを持たないので、R143 の長さの見えない器（instScope が範囲に置く）。
+  const restNames = new Set(params.filter((p) => p.kind === "bracket" && p.simple && p.rest).map((p) => p.rest));
   const keys = [];
   const texts = [];
   params.forEach((p, i) => {
     const d = stripTag(argDescs[i]); // 素の関数の裸の仮引数の札は、実体に持ち込まない（paramTag の注）
+    // 中身の見えない並び（印 seqOf の形の無い A：実体の結果の `tl vs`・頭と残りに分けた残り、opaqueSplit）が括りの口に1項で来た（seqIn）：[x] ≅ x で括りが受ける
+    // List はその並びなので、残りの名前（`~xs`）も中身の見えない並び（R142。`tl (tl x4)` の外の tl の根の ys も、内の tl の根と同じく中身の見えない並びで、外の繋ぐ口
+    // では未知）。要素の中身は見えないので、裸の名前は中身の見えない A を受けた時と同じく未知（bindBracket）で、残りを畳んでも撒いても、並びに直に当てた時と同じ
+    // （`hh : [~h] ? [+] h` ⏎ `hh (tl vs)` は β の `[+] (tl vs)` と同じく未知、R31 の1項）。形の綴りは中身の見えない A と同じ `A` で、鍵だけを分ける（印 `…`。分けないと
+    // `hv (inc 5)` と `hv (tl vs)` が実体を分け合い、根が並びかを先に解いた方が決める）。
+    const seqIn = p.kind === "bracket" && isOpaqueSeq(d);
     if (p.kind === "bare") {
       // 裸の仮引数は、今までどおり A（R24）。渡された物の形を見ないので、鍵も A にする。
       // ただし関数を指す番地（`$inc`、R49）は、印を仮引数の desc に持ち越し（本体の `@f` が指す関数の口の数を知る）、
@@ -3737,17 +3775,18 @@ function bindParams(params, argDescs, plain = false) {
     // （印 zero、R91 の足りない名前と同じ線）。前は R90 で本体を読まなかった所。鍵と綴りに長さ 0 を足す（`<0`・`(0)`）：`!_` と分かる値の鍵は中身の見えない A と同じ
     // `A` なので、足さないと `pb2 un 1` と `pb2 (inc 5) 1` が実体を分け合い、先に解いた方の答え（名前が `!_` か未知か）を後の方が黙って使う。
     const empty = !short && p.simple && p.names.length > 0 && isKnownEmpty(d);
-    keys.push(descKey(dk) + (short ? `<${d.len}` : empty ? "<0" : ""));
+    keys.push(descKey(dk) + (short ? `<${d.len}` : empty ? "<0" : "") + (seqIn ? "…" : ""));
     texts.push(descText(dk) + (short ? `(${d.len})` : empty ? "(0)" : ""));
     if (!p.simple) {
       for (const n of p.all) descs.set(n, U()); // 入れ子の分解など、読み方が決まっていない括り（patternParamsOf の注）
       return;
     }
     bindBracket(p, d, descs);
+    if (seqIn && p.rest) descs.set(p.rest, seqDesc());
     if (short) p.names.slice(d.len).forEach((n) => descs.set(n, zeroDesc()));
     if (empty) p.names.forEach((n) => descs.set(n, zeroDesc()));
   });
-  return { descs, key: keys.join(" "), text: texts.join(" "), plain };
+  return { descs, restNames, key: keys.join(" "), text: texts.join(" "), plain };
 }
 function bindBracket(p, d, descs) {
   const setNames = (f) => p.names.forEach((n) => descs.set(n, f(n)));
@@ -3823,7 +3862,13 @@ function instantiate(F, fn, op, params, defScope, argDescs) {
   // R64 の出どころ（空なら本体を走らせない、`f : [a b c]` の話）を両方残す一番狭い線として主の Claude が閉じた物（R .80）。前は最後でない `[a]` にも当てて、
   // `second [] 1` は本体を読まずに `_`（A。前の綴り）で、木は答えと同じ形に見えて中身が逆だった。
   if (!plain && params.some((p, i) => p.kind === "bracket" && p.simple && p.names.length && (i === params.length - 1 || p.rest) && isKnownEmpty(argDescs[i]))) return { kind: A(), inst: null };
-  if (peeking) throw new PeekStop(); // 覗き読み（peekRead）は実体を作らない
+  // 覗き読み（peekRead）は実体を作らない。R143 の閉じを読み直す覗き読み（peekHold、writtenKinds の peekRow）だけは止めずに、実体の結果を中身の見えない並びでありうる
+  // 物（seqU）と置いて読み続ける。並びより前に書いた実引数の門の確かめ（gateProbe）は、本体の門が答えを決めるので、置かずに止める。門に当たる実体（heldGated）も
+  // 置かずに止める。
+  if (peeking) {
+    if (!peekHold || gateProbe || heldGated(F, fn, op, params, defScope, argDescs)) throw new PeekStop();
+    return { kind: seqU(), inst: null };
+  }
   const label = fn.label || (plain ? `[${cutShape(writeTree(op))}]` : fn.label); // 無名の素の関数は書いた綴りで名指しする
   const b = bindParams(params, argDescs, plain);
   const key = `${fnKey(fn)}|${b.key}`;
@@ -3854,8 +3899,18 @@ function instantiate(F, fn, op, params, defScope, argDescs) {
   } else noteCall(F, inst, op, label, false);
   b.depth = inst.depth; // 呼んだ側の物の範囲も、同じ深さを持つ（scopeOf）
   const root = instRootOf(F, inst, label);
+  // 本体の根が長さの見えない List（`tl : [y ~ys] ? ys` の ys）か中身の見えない並び（`k : [x] ? inc (tl vs)` の `inc (tl vs)`、settle の opaqueFed）か、長さの見えない
+  // 器を書き下した並び（`gt : [~t] ? inc t` の `inc t`、印 unsizedSeq）なら、結果に中身の見えない並びの印 seqOf を付ける（形は付けない中身の見えない A。R142 の繋ぐ口が
+  // 読む、seqResult。`add (k 1)` は β の `add (inc (tl vs))` と同じ。書き下した並びの結果は、実体の外では長さの見えない器の名前を持たないので、中身の見えない並び）。
+  // 根が種類の未知で、中身の見えない並びを受けて閉じた項（`gg : [x] ? add (tl vs)` の本体）なら、結果も中身の見えない並びでありうる物（seqU。`add (gg 1)` は β の
+  // `add (add (tl vs))` と同じ）。関数かもしれない物の印（fnMaybeOf）は持たない：返す所の裸の関数は R125 で `!_` なので、実体の結果はどの長さでも関数にならない
+  // （`inc (gg 1) 5` は A）。inst は、`$` で物にした括りの関数を呼んだ所が本体の余る関数を見るため（R75、dollarOpened）。
+  const answer = () => ({ kind: root === "A" ? (inst.rootSeq ? seqDesc() : A()) : inst.rootOpaque ? seqU() : U(), inst });
   // 本体が門に当たる実体を呼んだ：木を残す段はここで呼んだ行ごと断るので、この枠の計算の後ろは最後の木の道に無い（注の2）。
   if (inst.gated && F.stack.length) F.stack[F.stack.length - 1].gated = true;
+  // 並びより前に書いた実引数の門の確かめ（seatGate の gateProbe）は、本体が門に当たる時だけ、呼んだ所と同じ道で断る。当たらなければ、呼んだとは数えず
+  // （定義の行に描かず、本体を木まで解かない）、答えだけを返す：確かめた適用は、中身の見えない並びなら未知に、長さの見えない器なら `!_` に閉じる（R142・R143）。
+  if (gateProbe && !inst.gated) return answer();
   if (F.stack.length === 0) {
     recordCall(F, fn, inst);
     // 木と、本体の中の呼び出しの記録は、いま呼んだ側の物の範囲で歩く。実体を作ったのが木を残さない所（値の定義の種類を
@@ -3872,10 +3927,49 @@ function instantiate(F, fn, op, params, defScope, argDescs) {
     // 分け合った実体を、まだ歩いていない物で呼んだ：その物で本体を歩き、呼んだ `?` を記録する（R25）。
     if (!inst.walked.has(ident)) walkCalls(F, inst, scopeOf());
   }
-  // 実体の本体の根が A なら A、ほかは未知（§3.4 の素の関数の k = n と同じ）。結果は中身の見えない A。inst は、`$` で物にした括りの関数を呼んだ所が本体の
-  // 余る関数を見るため（R75、dollarOpened）。
-  return { kind: root === "A" ? A() : U(), inst };
+  // 実体の本体の根が A なら A、ほかは未知（§3.4 の素の関数の k = n と同じ）。結果は中身の見えない A（並びの印は上の answer の注）。
+  return answer();
 }
+
+// R143 の閉じを読み直す覗き読み（peekHold）で、実体の結果を seqU と置く前に、その実体が門に当たるか（本体が門に当たるか、門に当たる実体を呼ぶ）を、並びより前に書いた
+// 実引数の門の確かめ（gateProbe、seatCheck）と同じ読みで見る：覗き読みの外と同じく実体を作って本体の根を解き（instantiate・instRootOf）、作った物は覗き読みと同じ写し
+// （snapshotF）で F ごと戻す。門に当たる実体は、呼べばどの長さの並びでもその門で断る（R25。行は実体の門の行）ので、D（どの長さでも断るなら門が先）で閉じと読まない
+// （本体の枝の値の `add t (f3 $inc 1 2)`・`add t (f3 $vs 1 2)` は、枝でない本体と同じく、呼ばない定義では通り、呼べば f3 の実体の G7・G21）。門の外の断り（実体の深さ・
+// 守り・スタックの溢れ）も、呼んだ所で出るので同じに数える。
+// 実引数のどこかに種類の未知な物（U）があれば、確かめずに閉じと読む：入れ子の実体の結果は上の覗き読みの枝で seqU と置かれ、括りの口の器にまとめると要素の U になるので、
+// 確かめは置いた物の上で走って本当の実引数を見ない（`add t (fq (fp 1 2 3) 2 3)` の fq の実体は、置いた a の上では `add _ a 5` が門に当たって見えるが、書いた
+// `fq (fp 1 2 3) 2 3` は A で門に当たらない）。
+function heldGated(F, fn, op, params, defScope, argDescs) {
+  if (argDescs.some((d) => holdsU(d))) return false;
+  const saved = snapshotF(F);
+  const outer = { peeking, peekHold, memos };
+  peeking = 0;
+  peekHold = 0;
+  memos = freshMemos();
+  gateProbe++;
+  F.stack = [];
+  F.collectors = [];
+  try {
+    const r = instantiate(F, fn, op, params, defScope, argDescs);
+    return !!(r && r.inst && r.inst.gated);
+  } catch (e) {
+    if (e instanceof OperationError || stackRefusal(e) || widthRefusal(e)) return true;
+    throw e;
+  } finally {
+    gateProbe--;
+    ({ peeking, peekHold, memos } = outer);
+    restoreF(F, saved);
+  }
+}
+// desc d のどこかに種類の未知な物（U）があるか（器の要素の種類、List の要素と構造体の欄の中も見る。heldGated）。
+const holdsU = (d, depth = 0) =>
+  !!d &&
+  depth < 8 &&
+  (d.k === "U" ||
+    (Array.isArray(d.elements) && d.elements.includes("U")) ||
+    (!!d.shape &&
+      ((d.shape.s === "list" && holdsU(d.shape.elem, depth + 1)) ||
+        (d.shape.s === "struct" && Array.isArray(d.shape.fields) && d.shape.fields.some((f) => !!f && holdsU(f.desc, depth + 1))))));
 
 // 実体の本体の根の種類（bodyRootOf と同じ仕組み）。label は呼んだ名前（輪の道筋の一歩、stepText）。
 function instRootOf(F, inst, label) {
@@ -3897,6 +3991,11 @@ function instRootOf(F, inst, label) {
     const body = resolveBody(inst.lambda.right, { F, scope: inst.scope, diag: null, dead });
     inst.dead = dead[0] || null;
     value = body.rootKind;
+    // 根が長さの見えない List か中身の見えない並びか、長さの見えない器を書き下した並び（印 unsizedSeq と、それを頭の項に持つ構築、unsizedMark）か（instantiate の
+    // seqOf）。根が種類の未知で、中身の見えない並びを受けて閉じた項（opaqueSeqTree）か（instantiate の seqU）。根は括りを外して見る（[r] ≅ r、throughOf）。
+    const rt = body.tree ? throughOf(body.tree) : null;
+    inst.rootSeq = value === "A" && !!rt && (seqOfDesc(descOfTree(rt)) || !!unsizedMark(rt));
+    inst.rootOpaque = value === "U" && !!rt && opaqueSeqTree(rt);
   } catch (e) {
     if (!isGate(e)) {
       leaveNest(F, inst);
@@ -4080,6 +4179,7 @@ function classify(term, ctx, fresh = false) {
       case "name": {
         const desc = lookup(core.name, ctx);
         const extra = { isLambdaName: isLambdaName(core.name, ctx), count: valueCountOf(core.name, ctx), strCount: stringCountOf(core.name, ctx) };
+        if (flatDefOf(core.name, ctx)) extra.flat = true; // 書いた数の葉だけの並置を指す名前（namedSeqElems）
         // 名前の読み（どの定義を指すか）が決まらない名前には印 undecided を付ける（片イ、R120 の例外。reduceFold の前検査が読む）。
         if (desc.k === "U") {
           const why = undecidedWhy(core.name, ctx);
@@ -4491,7 +4591,8 @@ function classifyLift(term, ctx, plain) {
     const oneName = one && one.t === "leaf" && one.term && one.term.type === "atom" && !one.term.pre.length && !one.term.post.length && one.term.core.c === "name" ? one.term.core.name : null;
     const opaque = !!oneName && instOpaqueName(oneName, ctx);
     // 書いた `!_` を指すか（R56）は、木で見る（pointsToMark）か、中身の desc の印 zero で見る（R63。括りの関数の実体の中の `$[s , _]` の s は、名前の木では
-    // 見えない）。
+    // 見えない）。中身が長さの見えない器で閉じた適用（`$[add t]`、R143 の closeUnsized）も、書いた所で `!_` と分かる値（印 zero）なので、`$` の項も `!_` と
+    // 分かる値で、知らせは unsized-container の1つだけ（dollar-non-function を重ねない。綴りで分かる違反は書いた所で1つ、§5 Q104 の芯。実装で決めた所）。
     target = {
       kind: opaque ? U() : b.desc,
       opaque,
@@ -6534,8 +6635,8 @@ function resolveTreeIn(tree, ctx) {
       // R116（2026-10-28 の片9b、§5 Q73 の `#` の答え）：書き込み `#` の右の被演算子（書き込む値）も評価する所（印 "#r"）。左（書き込む先）は今のまま。
       const deferL = logic ? [] : null;
       const l = resolveEvaluatedSide(tree.left, tree.sym, deferL ? { ...ctx, deferLeft: deferL } : ctx);
-      // 評価する所で `!_` にした丸ごとの関数（`(unit X)`）は 2 の右（logicOp）が見る。
-      if (deferL && opKnownUnit(l) && l.t !== "unit") return logicLeftUnit(tree, ctx, deferL, l);
+      // 評価する所で `!_` にした丸ごとの関数（`(unit X)`）は 2 の右（logicOp）が見る。R143 の閉じた適用（印 unsized）は `!_` と分かる値なので、ここで消える（unsizedUnit）。
+      if (deferL && opKnownUnit(l) && (l.t !== "unit" || l.unsized)) return logicLeftUnit(tree, ctx, deferL, l);
       const deferR = logic ? [] : null;
       const r = resolveEvaluatedSide(tree.right, tree.sym === "#" ? "#r" : tree.sym, deferR ? { ...ctx, deferLeft: deferR } : ctx);
       if (deferR) return logicOp(tree, ctx, l, r, deferL, deferR);
@@ -6659,7 +6760,7 @@ function logicLeftUnit(tree, ctx, deferL, l) {
 }
 // 2 の右と 3。
 function logicOp(tree, ctx, l, r, deferL, deferR) {
-  if (opKnownUnit(r) && r.t !== "unit" && l && l.t === "unit" && l.placeWrap) {
+  if (opKnownUnit(r) && (r.t !== "unit" || r.unsized) && l && l.t === "unit" && l.placeWrap) {
     flushLeftovers(deferR);
     // 行が評価する所の被演算子か手続きの行なら、残った X もそこで `!_`（左の `(unit X)` のまま。後回しの知らせは、外の `|`・`;` が後回しにしていればそこへ渡し、
     // 無ければ出す）。根と、ほかの所は X（根は根の行の evaluated が包む）。
@@ -6681,7 +6782,7 @@ function logicOp(tree, ctx, l, r, deferL, deferR) {
   // 2026-11-16（恒等射の片）から：`7 ; i i , i i`・`7 ; inc , double`・`5 ; (1 & inc)` は 7・7・5。前は左が値だと右を消さず、
   // `(; 7 (, (unit inc) (unit double)))` のように組んでいた（左の `!_` と分かる辺は前から消していた、logicLeftUnit）。片1 の2周目（同じ日）に、左を解き直す所を足した
   // （前は評価する所で解いた左のまま返していて、`vv : gq 1 ; i , i` が `(: vv (apply gq (construct 1 !_)))` になっていた）。
-  if (opKnownUnit(r) && r.t !== "unit" && l && l.t !== "unit") {
+  if (opKnownUnit(r) && (r.t !== "unit" || r.unsized) && l && l.t !== "unit") {
     flushLeftovers(deferR);
     const at = logicPlaceOf(tree, ctx);
     if (at && at !== "root" && ctx.deferLeft) ctx.deferLeft.push(...deferL);
@@ -6849,8 +6950,27 @@ function resolveDefine(tree, ctx) {
 // fieldName は持たない（枝の左は欄の名前ではない）。呼ぶのは resolveBlockBody だけ（resolveTree の `:` は resolveDefine）。
 function resolveBranch(tree, ctx, notLast) {
   const left = resolveBranchCondition(tree, ctx);
+  refuseClosedBranch(tree, "条件", tree.left, left, ctx);
   const right = isBlockSeq(tree.right) ? resolveBlockBody(tree.right, ctx, notLast).tree : resolveTree(tree.right, tree.right && tree.right.type === "seq" ? { ...ctx, bodyRoot: true } : ctx);
+  if (!isBlockSeq(tree.right)) refuseClosedBranch(tree, "値", tree.right, right, ctx);
   return { t: "op", sym: ":", left, right, kind: A() };
+}
+// 本体の枝の R143 の閉じの、実体の側の G22（R128・R143）：枝の条件か値（書いた木 written、解いた木 t）が、実体の本体を解いた所で R143 の閉じ（印 unsized の `(unit …)`。
+// 括り・恒等射は外して見る、[r] ≅ r）なら、定義の所の G22（unitRowRefusals）と同じ言い分で断る。定義の所の覗き読みは実体を作らないので、実体の結果が器より前に来る行
+// （`f3 (fp 1 2 3) t`）と、並びより前の実引数の門を見る行（`map $inc (add t)`・`use $inc (add t)`）は定義の所で読めず、呼んだ時にここで断る（R25 の実体の門と同じ道で、
+// 行は枝を書いた行）。呼ばない定義では断らない。
+function refuseClosedBranch(row, side, written, t, ctx) {
+  if (!t || !unsizedUnit(throughOf(t))) return;
+  const names = [];
+  forEachFreeNameInTree(written, (n) => {
+    const s = innerScopeOf(n, ctx);
+    if (s && s.descs && s.descs.has(n) && s.restNames && s.restNames.has(n) && !names.includes(n)) names.push(n);
+  });
+  const what = names.length ? names.map((n) => `\`${n}\``).join("・") : "長さの見えない器";
+  throw gate(
+    "G22",
+    `本体の枝 \`${cutShape(writeTree(row))}\` の${side} \`${cutShape(writeTree(written))}\` は、長さの決まらない ${what} の要素が決まった口2つ以上に届くので、書いた所で \`!_\` です（§4 R143）。その枝は、条件なら選ばれず、値なら選ばれても次の枝へ進むだけです（§4 R128）。要素を口に渡すなら、括りの仮引数で要素に名前を付けます（\`[a b ~r]\` のように）。長さや型で振り分けるなら、条件に同じ型どうしの比べを書きます。`
+  );
 }
 // 枝の条件を `&` の左と同じに解く（R128、細目3・4。resolveTree の中置の枝の `&` の左の所と同じ：評価する所で解き（resolveEvaluatedSide）、括らない `_` は G7
 // （refuseOperandHole）、番地の算術で作った点・差は G21（refuseAddressDrop の logic））。作るのは新しい断りや知らせではなく、`&` の左の扱いをそのまま当てる。
@@ -6870,9 +6990,13 @@ const isColonRow = (r) => !!r && r.type !== "seq" && r.sym === ":";
 // 定義の所で G22（R67 と同じ門）。呼ばれない定義でも断る（読まない括りの関数の本体でも、書いた行を見る。R25）。見るのは書いた行が書いた所で R49 の類に入るかだけで、
 // 呼んだ形ごとの実体では見ない。だから判定は書いた木の上で決める（writtenKinds）。部分の項の種類（関数か・`!_` と分かる値か・ほかか）は、本体がその項を書いた所で解いた時と
 // 同じ答えにするので、本体の解き（classify・resolveTree）を覗き読み（peekRead）で借りる。覗き読みは木・知らせ・実体・覚えに何も残さない。
+// 括りの関数の本体の R143 の閉じ（`[~t]` の t の要素が2つ以上の決まった口に届く適用。綴りで決まり、どの実体でも書いた所で印 zero の `!_`）も、同じく定義の所で G22 で、言い分は
+// R143（writtenKinds の "closed"）。既定値は字下げの仮引数のブロックにだけ書け、その関数は括りの関数でない（R24・R131。`[~t]` の t は R91 の残りの名前でなく、`add t` は
+// 部分適用）ので、既定値に R143 の閉じは書けない。
 // 枝の後の既定の行は枝でないので見ない。返す物は行の木 → その行の最初の G22（書いた順。断りの順は行のループが決める、R127）。
 // 根拠：U [2026-11-18 01:54:27 UTC]「* !_を条件分岐で書くのはNG / * !_をデフォルト引数に置くのはNG / 下2つは未定義識別子でも、NG」と、条件分岐の範囲は本体の枝の行の
-// 条件と値の両方（利用者の答え）。
+// 条件と値の両方（利用者の答え）。枝の R143 の閉じは U〔答え〕[2026-11-22 10:52:45 UTC 828ee417]「1だね」と、U [2026-11-22 09:54:37 UTC 828ee417]「関数を返したいなら、
+// 必ず$で返す。型チェックしたいなら同型の不等号とかでいける！」（言い分の勧め）。
 //
 // 書いた木の種類（writtenKinds。G22 の判定だけが読む）：
 // - "zero"：`!_` と分かる値（R49 の印 zero）。取り込みの無い範囲の未定義の名前（R21）・`!_` と分かるファイルの値の定義の名前（`w : pw ' zz` の w・`q : typo` の q。名前の
@@ -6896,6 +7020,14 @@ const isColonRow = (r) => !!r && r.type !== "seq" && r.sym === ":";
 //   区間と点なしの括り（`[+ 1]`・`[' 0]`・`[-_]`・`[&]`・`[,]`・`[* 2,]`・`[inc,]`）・本体が関数と読む項（部分適用 `(add 1)`・合成 `(inc inc)`・`(i i)`・関数の印のある番地を
 //   開いた `@q`（`q : $inc`、R49））・口の外の括らない `_`（恒等射、R138。`i : _` の i と同じ）・中が括らない `_` 1つの `||_||`・`|_|`（ノルムと絶対値の口の穴、§2・R27）・
 //   それを1行で括った物）。
+// - "closed"：R143 の閉じ（長さの見えない器の要素が2つ以上の決まった口に届く適用。本体の読みでは後ろに書いた項ごと印 zero の `!_` で、木は書いた適用を包んだ
+//   `(unit …)`。closeUnsized・closedStep・unsizedHole・closedHole）。括って閉じた `(add t)` と、それを頭か実引数にして外の適用ごと閉じた `(add t) 5`・`inc (add t)`（A）、
+//   書き下しの閉じ `add (inc t)`（B）も同じ。括りの関数の本体を覗く範囲（visitLambda の bodyScope）は、残りを受ける名前（`[~t]` の t・`[x ~xs]` の xs）を実体の範囲と
+//   同じく長さの見えない器にする（bindParams の restNames。綴りで決めるので、渡された物の形を見ない desc は種類の未知）ので、本体がその項を書いた所で解いた読み（覗き読み）
+//   で決まる。G22 では "zero" と同じ `!_` と分かる値に数え（本体の枝の値に置いた R143 の閉じは、未定義の名前と同じく 11-18 の決まりで断る。U〔答え〕[2026-11-22 10:52:45
+//   UTC 828ee417]「1だね」）、言い分を R143 にする。単位だけの鎖の辺と R48 の被演算子でも "zero" と同じに読み、合わさった物に "closed" があれば "closed"（言い分を R143
+//   にする）。空白の並びでは、閉じが外の適用を後ろの項ごと閉じる（`(add t) 5`）か値の並びの項で消える（`5 (add t)`、C）かは並びの形で決まるので、"zero" の項を消す近道を
+//   使わず本体の読みで見る。
 // - "other"：ほか（値・仮引数（括りの仮引数・既定値の場の前の仮引数も）・欄・取り込みの範囲の名前・適用の答え・計算の `!_`（`3 < 2`・`1 / 0`）・算術とビット（`typo + 1` は `+` の単位で
 //   値が残る）・`$`・値の印の付いた項・本体が種類を決めない物（先の分からない `@x`、§2 で未知の段1〜9 の片側の欠けた点なし `[& 1]`・`[== 1]`・`[| 5]` と、F が要素1つに
 //   当てて閉じない `[F,]`（`[add,]`、R50））・覗き読みが止めた所（括りの関数の呼び出し・R81 の素の関数の実体・門）。
@@ -6904,7 +7036,10 @@ const R48_ROW_SYMS = new Set(["&", "==", "!=="]);
 const UNIT_CHAIN_SYMS = new Set([",", "|", ";"]);
 // 畳む2項の点なしのうち、結合の向きどおりの中置と同じに読む物（R31。比べの点なしは積で、ここに入らない）
 const INFIX_FOLD_SYMS = new Set(["+", "-", "*", "/", "%", "^", "||", ";;", "&&", "|", "&", ";"]);
-const zeroOrFn = (k) => k === "zero" || k === "fn";
+const zeroOrFn = (k) => k === "zero" || k === "fn" || k === "closed";
+const isZeroKind = (k) => k === "zero" || k === "closed";
+// R48 の被演算子・`#` の左・引く器の側が `!_` と分かる値にする物の種類：R143 の閉じ（"closed"）があれば "closed"（言い分を R143 にする）、ほかは "zero"。
+const zeroOrClosed = (kinds) => (kinds.includes("closed") ? "closed" : "zero");
 
 // ---- 覗き読み（peekRead） ----
 //
@@ -6916,6 +7051,11 @@ const zeroOrFn = (k) => k === "zero" || k === "fn";
 // - 同じ所で解き直す時の覚え（memos）は、その覗き読みだけの新しい表を使い、終わったら捨てて外の表に戻す（入れ子の覗き読みも自分の表を作る）。覗き読みの答えは
 //   外の表に入らず、外の表の答えも覗き読みでは使わない（覗き読みは実体を作らず、F を戻すので、外の読みと答えが違いうる）。
 let peeking = 0;
+// R143 の閉じを読み直す覗き読みの間か（instantiate は実体の結果を seqU と置く）と、覗き読みが実体・覚えの所で止まった数（peekRow が読み直すかを見る）。
+let peekHold = 0;
+let peekStops = 0;
+// 並びより前に書いた実引数の門の確かめ（seatGate）の間か。実体は門に当たる時だけ呼んだ所と同じに読む（instantiate）。
+let gateProbe = 0;
 // 同じ所で解き直す時の覚えの表（速さのためだけの物で、答えは覚えに依らない）：単位になりうる並び（resolveMarkedSeq）・`!_` と分かる値かを見た答え（seeZeroTail）・
 // `$`・`@` を重ねた項（classifyStacked）。
 const freshMemos = () => ({ seq: new WeakMap(), zeroTail: new WeakMap(), stacked: new WeakMap() });
@@ -6962,6 +7102,7 @@ function peekRead(F, f) {
   try {
     return f();
   } catch (e) {
+    if (e instanceof PeekStop) peekStops++;
     if (e instanceof PeekStop || e instanceof OperationError || stackRefusal(e) || widthRefusal(e)) return null;
     throw e;
   } finally {
@@ -7019,17 +7160,46 @@ function writtenKinds(F) {
     if (inner === Infinity) defKinds.set(def, written);
     return written;
   };
-  // 本体の読みの種類：desc（classify の答え）か、解いた木の根。
+  // 本体の読みの種類：desc（classify の答え）か、解いた木の根。R143 の閉じの `(unit …)`（印 unsized）は "closed"。
   const descKind = (d) => (!d ? "other" : zeroOf(d) ? "zero" : d.k === "L" ? "fn" : "other");
-  const treeKind = (t) => (!t || !t.kind ? "other" : isMark(t) || zeroOf(t.kind) ? "zero" : t.kind.k === "L" ? "fn" : "other");
+  const treeKind = (t) => (!t || !t.kind ? "other" : t.t === "unit" && t.unsized ? "closed" : isMark(t) || zeroOf(t.kind) ? "zero" : t.kind.k === "L" ? "fn" : "other");
   const peekCtx = (cx) => ({ F, scope: cx.scope, diag: [] });
+  // 覗いた所（書いた行の木か項）→ そこが R143 の閉じなら、覗き読みの R143 の知らせ（unsized-container）が名指した残りの名前（G22 の言い分が名指す。覗き読みの知らせは捨てるので、
+  // 名前だけをここに写す）。
+  const closedNames = new WeakMap();
+  const noteClosed = (at, c) => closedNames.set(at, c.diag.filter((d) => d.reason === "unsized-container").map((d) => d.name));
   // 書いた項 t を本体の classify で覗く（前置 `@` の項。R49・R78）。
   const peekTerm = (t, cx) => {
-    const l = peekRead(F, () => classify(t, peekCtx(cx)));
+    const c = peekCtx(cx);
+    const l = peekRead(F, () => classify(t, c));
+    noteClosed(t, c);
     return l && l.cat === "plain" ? descKind(l.desc) : "other";
   };
-  // 書いた空白の並びの行 r を、本体が括りの中の行を解くのと同じ所（評価する所の外）で覗く。
-  const peekRow = (r, cx) => treeKind(peekRead(F, () => resolveTree(r, peekCtx(cx))));
+  // 書いた空白の並びの行 r を、本体が括りの中の行を解くのと同じ所（評価する所の外）で覗く。括りの関数の本体（残りの名前のある範囲、bodyScope）で、覗き読みが実体の
+  // 呼び出しで止まった行は、実体の結果を中身の見えない並びでありうる物（seqU）と置いてもう一度覗き、R143 の閉じ（"closed"）と読めた時だけそれを使う（ほかは止まった時の
+  // "other" のまま）。置いた物は長さ1以上の並びでもありうる物で、閉じは長さの見えない器の要素が届く口だけで決まり、置いた物が器より前ならその要素が先に口を埋めうる
+  // （届く口が減るか未知）ので、置いて閉じと読めた行は、実体の結果が値の時も同じ閉じ（`add t (fp 1 2 3)`・`k1 t (fp t)`）。並びより前の実引数の門を見る所
+  // （`map $inc (add t)`）と、止まった項が器より前の行（`f3 (fp 1 2 3) t`）は、ここでは読めず、実体の本体を解く所（resolveBranch）で断る。
+  const hasRest = (cx) => {
+    for (let s = cx.scope; s; s = s.parent) if (s.restNames && s.restNames.size) return true;
+    return false;
+  };
+  const peekRow = (r, cx) => {
+    const c = peekCtx(cx);
+    const stops = peekStops;
+    const k = treeKind(peekRead(F, () => resolveTree(r, c)));
+    if (k === "closed") noteClosed(r, c);
+    if (k !== "other" || peekStops === stops || !hasRest(cx)) return k;
+    const c2 = peekCtx(cx);
+    peekHold++;
+    try {
+      if (treeKind(peekRead(F, () => resolveTree(r, c2))) !== "closed") return k;
+    } finally {
+      peekHold--;
+    }
+    noteClosed(r, c2);
+    return "closed";
+  };
   // 同じ記号の括らない鎖の辺（`a , b , c`・`a | b | c`）。括った辺（`(b , c)`）は1つの辺。
   const chainSides = (t, sym, out = []) => {
     if (t && t.type !== "seq" && t.sym === sym) {
@@ -7038,10 +7208,11 @@ function writtenKinds(F) {
     } else out.push(t);
     return out;
   };
-  // 単位だけの鎖（R61・R137）：単位（"zero"・"unit"）を消し、残りが無ければ "zero"（消えた物に印 zero があれば）か "unit"、1つならそれ、2つ以上で全部関数なら "unit"。
+  // 単位だけの鎖（R61・R137）：単位（"zero"・"closed"・"unit"）を消し、残りが無ければ "closed"（消えた物に R143 の閉じがあれば）か "zero"（印 zero があれば）か "unit"、
+  // 1つならそれ、2つ以上で全部関数なら "unit"。
   const chainKind = (kinds) => {
-    const rest = kinds.filter((k) => k !== "zero" && k !== "unit");
-    if (!rest.length) return kinds.includes("zero") ? "zero" : "unit";
+    const rest = kinds.filter((k) => !isZeroKind(k) && k !== "unit");
+    if (!rest.length) return kinds.includes("closed") ? "closed" : kinds.includes("zero") ? "zero" : "unit";
     if (rest.length === 1) return rest[0];
     return rest.every((k) => k === "fn") ? "unit" : "other";
   };
@@ -7092,7 +7263,7 @@ function writtenKinds(F) {
     if (r.sym !== "," || !r.left || !r.right) return null;
     const rest = chainSides(r, ",").filter((x) => {
       const k = row(x, cx);
-      return k !== "zero" && k !== "unit";
+      return !isZeroKind(k) && k !== "unit";
     });
     return rest.length === 1 ? soleSection(rest[0], cx, seen) : null;
   };
@@ -7108,7 +7279,7 @@ function writtenKinds(F) {
       const kinds = args.map((a) => term(a, cx));
       if (kinds.includes("fn")) return null;
       if (r.type === "seq") return { kind: "other", rest: [] }; // 算術とビットは `!_` を単位で受ける（R31・§3.7）
-      return { kind: UNIT_CHAIN_SYMS.has(r.sym) ? chainKind(kinds) : kinds.includes("zero") ? "zero" : "other", rest: [] }; // `|`・`;` は単位だけの鎖（R61）、`&` は R48
+      return { kind: UNIT_CHAIN_SYMS.has(r.sym) ? chainKind(kinds) : kinds.some(isZeroKind) ? zeroOrClosed(kinds) : "other", rest: [] }; // `|`・`;` は単位だけの鎖（R61）、`&` は R48
     };
     if (r.type !== "seq") return folded();
     const x = r.terms[0];
@@ -7129,15 +7300,17 @@ function writtenKinds(F) {
   // 隣の構築の項で、並びの項として消える（R137）ので、残ったその項の種類（"other"。`($inc ' 0) w` は `$inc ' 0` と同じ関数の番地、R102）。その1項が並びの最後の項
   // なら（"fn"・"unit" も）、前の "zero" の項は関数の下に積んだ構築の項で消える（R137）ので、残ったその項の種類（`w |_|` は `|_|`、`typo [+ inc]` は `[+ inc]`）。後ろに
   // "zero" の項が続く関数の項（`inc w`・`ln w`）は口で読みが分かれ（R112・R122）、"zero" でない項が2つ以上の並びと同じく、本体がその並びを書いた所で解いた種類
-  // （覗き読み。row はその並びの行の木、無ければ "other"）。
+  // （覗き読み。row はその並びの行の木、無ければ "other"）。R143 の閉じの項（"closed"）のある並びも本体の読みで見る：閉じは外の適用の頭か実引数なら外の適用を後ろの項ごと
+  // 閉じ（`(add t) 5`・`inc (add t)`、括りで止めない）、値の上なら値の並びの項で消える（`5 (add t)` は 5、C）ので、"zero" の項を消す近道には入れない。
   const seqKind = (terms, cx, r) => {
     const opened = openSection(terms, cx) || openAfterUnits(terms, cx);
     if (opened) {
       if (!opened.rest.length) return opened.kind;
-      if (opened.kind !== "zero") return "other";
+      if (!isZeroKind(opened.kind)) return "other";
       return opened.rest.length === 1 ? term(opened.rest[0], cx) : seqKind(opened.rest, cx, { type: "seq", terms: opened.rest });
     }
     const kinds = terms.map((x) => term(x, cx));
+    if (kinds.includes("closed")) return r ? peekRow(r, cx) : "other";
     const left = kinds.filter((k) => k !== "zero");
     if (!left.length) return "zero";
     if (left.length === 1 && (left[0] === "other" || kinds[kinds.length - 1] !== "zero")) return left[0];
@@ -7166,15 +7339,24 @@ function writtenKinds(F) {
     if (t.type === "seq") return t.terms.length === 1 ? term(t.terms[0], cx) : seqKind(t.terms, cx, t);
     if (!t.left || !t.right) return "other";
     if (UNIT_CHAIN_SYMS.has(t.sym)) return chainKind(chainSides(t, t.sym).map((x) => row(x, cx)));
-    if (R48_ROW_SYMS.has(t.sym)) return zeroOrFn(row(t.left, cx)) || zeroOrFn(row(t.right, cx)) ? "zero" : "other";
-    if (t.sym === "#") return zeroOrFn(row(t.left, cx)) ? "zero" : "other"; // `#` の左は書く場所（R87）。右（書き込む値、R116）は数えない
+    if (R48_ROW_SYMS.has(t.sym)) {
+      const ks = [row(t.left, cx), row(t.right, cx)];
+      return ks.some(zeroOrFn) ? zeroOrClosed(ks) : "other";
+    }
+    if (t.sym === "#") {
+      const k = row(t.left, cx); // `#` の左は書く場所（R87）。右（書き込む値、R116）は数えない
+      return zeroOrFn(k) ? zeroOrClosed([k]) : "other";
+    }
     return "other"; // `:`・`?`・改行
   });
   const term = once((t, cx) => {
     if (!t) return "other";
     if (t.type === "infix") {
       if (!t.left || !t.right) return "other";
-      if (R48_TERM_STAGES.has(t.stage)) return zeroOrFn(term(t.left, cx)) || zeroOrFn(term(t.right, cx)) ? "zero" : "other";
+      if (R48_TERM_STAGES.has(t.stage)) {
+        const ks = [term(t.left, cx), term(t.right, cx)];
+        return ks.some(zeroOrFn) ? zeroOrClosed(ks) : "other";
+      }
       if (t.sym === "'") return pickKind(t.left, t.right, cx);
       if (t.sym === "@") return pickKind(t.right, t.left, cx); // `k @ x` は `x ' k` の鏡（R26）
       return "other";
@@ -7188,15 +7370,31 @@ function writtenKinds(F) {
     // `~$x`・`~@x` は `[$x]`・`[@x]`（R79）：本体の読み（`!_` と分かる物に当てた `$`・印 zero の物に当てた `@` を持ち上げた `~$w`・`~@w` は `!_` と分かる値、R56・R78）。
     if (pre.length >= 2 && pre[0] === "~" && (pre[1] === "$" || pre[1] === "@") && !post.length && core.c !== "indent") return peekTerm(t, cx);
     // 長さ 0 と分かる流れ（`w~`、R84）。
-    if (!pre.length && post.length === 1 && post[0] === "~") return coreKind(core, cx) === "zero" ? "zero" : "other";
+    if (!pre.length && post.length === 1 && post[0] === "~") {
+      const k = coreKind(core, cx);
+      return isZeroKind(k) ? k : "other";
+    }
     // `~x~` は `[x]~`（classify と同じ写し、liftedSpread）。`~t` が `[t]` と読めない物（liftsAsBracket）は表に無い組み合わせで "other"。`@` の項は先が `!_` と分かる時だけ
     // `[@x]` と読むが、`[@x]~` を覗いた種類も先が `!_` と分かる時だけ "zero" なので、ここでは綴りの篩（liftShape）だけで分ける。
     if (isTildeSpreadTerm(t)) return liftShape(liftedSpread(t).head) ? term(liftedSpread(t).read, cx) : "other";
     // 前置 `@`：本体の読み（関数の印のある番地を開けばその関数、印 zero の物を開けば `!_` と分かる値、R49・R78。先の分からない `@x` は入力の項で "other"）。
-    if (pre.length === 1 && pre[0] === "@" && !post.length && (core.c === "name" || core.c === "bracket")) return peekTerm(t, cx);
+    // R143 の閉じに当てた `@`（`@[add t]`・`@(add t)`）は、R78 で同じ `!_` と分かる値で、言い分は `$[add t]` と同じく R143（"closed"）。
+    if (pre.length === 1 && pre[0] === "@" && !post.length && (core.c === "name" || core.c === "bracket")) {
+      const k = peekTerm(t, cx);
+      return k === "zero" && coreKind(core, cx) === "closed" ? "closed" : k;
+    }
     // `$` の項と、`$`・`@` を重ねた `@$x`・`@@x`：本体の読み（`!_` と分かる物に当てた `$`（`$w`・`$[typo]`・`$w~`・`$$w`）と、その `@`（`@$w`・`@$[$w]`・`@@[$[$w]]`）は
     // `!_` と分かる値、R56・R78。関数の番地（`$inc`）と値に当てた `$`（`$vs`）は "other"）。
-    if (pre[0] === "$" || (pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && !post.length)) return peekTerm(t, cx);
+    // R143 の閉じに当てた `$`（`$[add t]`）は、R56 で同じ `!_` と分かる値で、言い分は R143（"closed"）。前置 `@` の後ろに `$`・`@` を重ねた項は、印は核に近い物から結ぶ
+    // （classifyStacked・tailTerm）ので、核に近い `$` 1つまでとその外の `@` だけの重ね（`@$[add t]`・`@@[add t]`・`@@$[add t]`）なら、R56・R78 で同じ `!_` と分かる値で、
+    // 言い分は R143（"closed"）。`$` を2つ重ねた所（`$$[add t]`・`@$$[add t]`）は、`!_` と分かる値に当てた `$` の `!_` なので、言い分はその `$` の物。
+    if (pre[0] === "$" || (pre.length >= 2 && pre[0] === "@" && (pre[1] === "$" || pre[1] === "@") && !post.length)) {
+      const k = peekTerm(t, cx);
+      const lead = pre.findIndex((m) => m !== "@");
+      const inner = lead < 0 ? [] : pre.slice(lead);
+      const stack = pre.length === 1 || (pre[0] === "@" && (inner.length === 0 || (inner.length === 1 && inner[0] === "$")));
+      return k === "zero" && stack && !post.length && coreKind(core, cx) === "closed" ? "closed" : k;
+    }
     return "other";
   });
   const coreKind = (core, cx) => {
@@ -7227,7 +7425,10 @@ function writtenKinds(F) {
     }
     return row(r, cx);
   };
-  const pickKind = (box, key, cx) => (zeroOrFn(term(box, cx)) || pickZero(box, key, cx) ? "zero" : "other");
+  const pickKind = (box, key, cx) => {
+    const k = term(box, cx);
+    return zeroOrFn(k) ? zeroOrClosed([k]) : pickZero(box, key, cx) ? "zero" : "other";
+  };
   // 引く器 box を字面の鍵 key で引いた物が、読む段の本体の射影（classifyInfix の lowerPick・pickDesc）で `!_` と分かる値か。器は本体の classify で覗く（peekRead）。
   const pickZero = (box, key, cx) => {
     const k = pickKeyOf(key);
@@ -7238,32 +7439,86 @@ function writtenKinds(F) {
     if (lifted && k.int !== undefined) return k.int !== 0; // `$x ' k`（R102）：k が 0 でなければ1つの物の領域の外
     return !!zeroOf(pickDesc(l.desc, k));
   };
-  return { row, term };
+  return { row, term, closedNames };
 }
 function unitRowRefusals(lines, F) {
   const out = new Map();
   let found = null;
   const kinds = writtenKinds(F);
   const label = (op) => (F.namedLambdas.has(op) ? `関数 \`${F.namedLambdas.get(op).name}\`` : `関数 \`[${cutShape(writeTree(op))}]\``);
-  // 書いた式 tree が範囲 cx で `!_` と分かる値か（書いた木の上、writtenKinds）。
-  const zeroAt = (tree, cx) => !!tree && kinds.row(tree, cx) === "zero";
-  const refuseBranch = (op, row, side, tree) =>
+  // 書いた式 tree が範囲 cx で `!_` と分かる値なら、その種類（"zero"、R143 の閉じなら "closed"。書いた木の上、writtenKinds）。ほかは null。
+  const zeroAt = (tree, cx) => {
+    const k = tree ? kinds.row(tree, cx) : null;
+    return isZeroKind(k) ? k : null;
+  };
+  // 書いた木 tree の R143 の閉じが名指す長さの見えない器の名前（覗き読みの知らせの名前、writtenKinds の closedNames。書いた順で、重ねない）。R143 の言い分が名指す。
+  // 覗いた所の名前が無ければ（区間を開いて作った並び）、tree に書いた名前のうち、範囲 cx で括りの関数の残りを受ける名前に当たる物。
+  const unsizedNames = (tree, cx) => {
+    const out = [];
+    const put = (ns) => ns && ns.forEach((n) => out.includes(n) || out.push(n));
+    const inTree = (t) => {
+      if (!t) return;
+      put(kinds.closedNames.get(t));
+      if (t.type === "seq") t.terms.forEach(inTerm);
+      else {
+        inTree(t.left);
+        inTree(t.right);
+      }
+    };
+    const inTerm = (x) => {
+      if (!x) return;
+      put(kinds.closedNames.get(x));
+      if (x.type === "infix") {
+        inTerm(x.left);
+        inTerm(x.right);
+      } else if (x.core.rows) x.core.rows.forEach(inTree);
+    };
+    inTree(tree);
+    if (!out.length)
+      forEachFreeNameInTree(tree, (n) => {
+        const s = innerScopeOf(n, cx);
+        if (s && s.descs && s.descs.has(n) && s.restNames && s.restNames.has(n)) put([n]);
+      });
+    return out.length ? out.map((n) => `\`${n}\``).join("・") : "長さの見えない器";
+  };
+  // 言い分の `!_` と分かる理由：R143 の閉じ（"closed"）なら、長さの決まらない器の要素が届く口の数（R143）。ほかは未定義の名前の類（R49・R21）。
+  const zeroWhy = (k, tree, cx) =>
+    k === "closed"
+      ? `長さの決まらない ${unsizedNames(tree, cx)} の要素が決まった口2つ以上に届くので、書いた所で \`!_\` です（§4 R143）`
+      : `書いた所で \`!_\` と分かる値です（未定義の名前・\`!_\` と分かる名前・無い欄など、§4 R49・R21）`;
+  const refuseBranch = (op, row, side, tree, k, cx) =>
     withLine(
       gate(
         "G22",
-        `${label(op)} の本体の枝 \`${cutShape(writeTree(row))}\` の${side} \`${cutShape(writeTree(tree))}\` は、書いた所で \`!_\` と分かる値です（未定義の名前・\`!_\` と分かる名前・無い欄など、§4 R49・R21）。その枝は、条件なら選ばれず、値なら選ばれても次の枝へ進むだけです。名前の書き間違いを直すか、その枝を消します。本体の \`:\` の行は名前を定義しません（§4 R128）。`
+        `${label(op)} の本体の枝 \`${cutShape(writeTree(row))}\` の${side} \`${cutShape(writeTree(tree))}\` は、${zeroWhy(k, tree, cx)}。その枝は、条件なら選ばれず、値なら選ばれても次の枝へ進むだけです${k === "closed" ? "（§4 R128）" : ""}。` +
+          (k === "closed"
+            ? "要素を口に渡すなら、括りの仮引数で要素に名前を付けます（`[a b ~r]` のように）。長さや型で振り分けるなら、条件に同じ型どうしの比べを書きます。"
+            : "名前の書き間違いを直すか、その枝を消します。本体の `:` の行は名前を定義しません（§4 R128）。")
       ),
       rowTreeLine.get(row)
     );
-  const refuseDefault = (op, row) => {
+  const refuseDefault = (op, row, k, cx) => {
     const y = singleBareName(row.left) || cutShape(writeTree(row.left));
     return withLine(
       gate(
         "G22",
-        `${label(op)} の仮引数のブロックの行 \`${cutShape(writeTree(row))}\` の既定値 \`${cutShape(writeTree(row.right))}\` は、書いた所で \`!_\` と分かる値です（未定義の名前・\`!_\` と分かる名前・無い欄など、§4 R49・R21）。既定値に \`!_\` を置くのは、既定値を書かないのと同じです。既定値を書かずに、値で受けるなら \`${y}\`、参照で受けるなら \`[${y}]\` と書きます（§4 R139）。`
+        `${label(op)} の仮引数のブロックの行 \`${cutShape(writeTree(row))}\` の既定値 \`${cutShape(writeTree(row.right))}\` は、${zeroWhy(k, row.right, cx)}。既定値に \`!_\` を置くのは、既定値を書かないのと同じです。既定値を書かずに、値で受けるなら \`${y}\`、参照で受けるなら \`[${y}]\` と書きます（§4 R139）。`
       ),
       rowTreeLine.get(row)
     );
+  };
+  // 関数 op の本体を覗く範囲（makeLambda）。括りの関数（R24）なら、残りを受ける名前（`[~t]` の t・`[x ~xs]` の xs）を、実体の範囲（instScope）と同じく長さの見えない器
+  // にする（bindParams の restNames。R143 の器は綴りで決め、渡された物の形を見ないので、desc は仮引数の名前と同じ種類の未知）：本体の `add t` は、どの実体でも書いた所で
+  // R143 の `!_`（closeUnsized）なので、呼ばない定義でも同じ読みで見る。ほかの名前は makeLambda の仮引数のまま読む。
+  const bodyScope = (op, cx) => {
+    const scope = makeLambda(op, cx).scope;
+    const pattern = patternParamsOf(op.left);
+    const rest = pattern ? pattern.filter((p) => p.kind === "bracket" && p.simple && p.rest).map((p) => p.rest) : [];
+    if (rest.length) {
+      scope.descs = new Map(rest.map((n) => [n, U()]));
+      scope.restNames = new Set(rest);
+    }
+    return scope;
   };
   const visitBody = (op, right, cx) => {
     if (!isBlockSeq(right)) return visitTree(right, cx);
@@ -7273,9 +7528,11 @@ function unitRowRefusals(lines, F) {
         visitTree(row, cx);
         continue;
       }
-      if (zeroAt(row.left, cx)) return void (found = refuseBranch(op, row, "条件", row.left));
+      const kl = zeroAt(row.left, cx);
+      if (kl) return void (found = refuseBranch(op, row, "条件", row.left, kl, cx));
       const blockValue = isBlockSeq(row.right);
-      if (!blockValue && zeroAt(row.right, cx)) return void (found = refuseBranch(op, row, "値", row.right));
+      const kr = blockValue ? null : zeroAt(row.right, cx);
+      if (kr) return void (found = refuseBranch(op, row, "値", row.right, kr, cx));
       visitTree(row.left, cx);
       if (blockValue) visitBody(op, row.right, cx);
       else visitTree(row.right, cx);
@@ -7288,12 +7545,13 @@ function unitRowRefusals(lines, F) {
     for (const part of lambdaScopes(op)) {
       if (found) return;
       if (part.body) {
-        visitBody(op, op.right, { ...cx, scope: makeLambda(op, cx).scope });
+        visitBody(op, op.right, { ...cx, scope: bodyScope(op, cx) });
         continue;
       }
       const scope = part.bound.length ? { parent: cx.scope, params: new Map(part.bound.map((n) => [n, "other"])), locals: new Set(), key: cx.scope.key } : cx.scope;
       const dcx = { ...cx, scope };
-      if (zeroAt(part.tree, dcx)) return void (found = refuseDefault(op, part.row));
+      const kd = zeroAt(part.tree, dcx);
+      if (kd) return void (found = refuseDefault(op, part.row, kd, dcx));
       visitTree(part.tree, dcx);
     }
   };
@@ -7662,12 +7920,19 @@ const zeroTree = (t) => !!t && t.t === "op" && !!zeroOf(t.kind);
 // `|`・`;` では綴りで `!_` と分からない方の辺を残す（logicSide・logicLeftUnit。`(1 & inc) | w` は `[1 & inc]`。どちらも綴りで分からない `(w < 3) | (1 & inc)` は、
 // 左を評価する所で `!_` と分かって、右の `[1 & inc]`）。
 function unitRank(t) {
-  return isMark(t) ? 3 : knownUnitLeaf(t) || zeroTree(t) ? 2 : knownUnitValue(t) ? 1 : 0;
+  return isMark(t) ? 3 : knownUnitLeaf(t) || zeroTree(t) || unsizedUnit(t) ? 2 : knownUnitValue(t) ? 1 : 0;
 }
+// R143 の閉じた適用（closeUnsized・unsizedHole の `(unit …)`、印 unsized）：書いた所で `!_` と分かる値（種類は印 zero の A）なので、R49 の印 zero の木と同じ順位 2 で、
+// `,`・`|`・`;` の被演算子と値の隣の並びの項で単位として消える（括った `(add t)` は印 zero の括りの葉で同じく消える。`add t , 1` は `(add t) , 1` と同じ 1、法則12）。
+// 評価する所で `!_` にした丸ごとの関数の `(unit X)`（R42・R123）は関数の項なので入れない。
+const unsizedUnit = (t) => !!t && t.t === "unit" && !!t.unsized;
+// R143：括って閉じた適用の葉（1行の括りの中が R143 の閉じ。`(add t)`・`[add t]`・括りや恒等射を重ねた `((add t))`・`(i (add t))`。throughOf で中を見る）。
+// 外の適用の頭か実引数に来たら、外の適用も閉じる（closedStep・closedHole）。
+const closedUnsized = (x) => !!x && x.t === "leaf" && isPlainBracket1(x) && unsizedUnit(throughOf(x));
 // 読む段で `!_` と分かる値：書いた `!_`（印）、`!_` と分かる葉と印 zero の中置の木、中が1つでそれが `!_` と分かる括り（括った書いた void（前の綴りの `(_)`）・`(!_ !_)`・`(!_ | !_)`）。
 function knownUnitValue(t, depth = 0) {
   if (!t || depth > 32) return false;
-  if (isMark(t) || knownUnitLeaf(t) || zeroTree(t)) return true;
+  if (isMark(t) || knownUnitLeaf(t) || zeroTree(t) || unsizedUnit(t)) return true;
   if (t.t === "leaf" && t.term && t.term.type === "atom" && !t.term.pre.length && !t.term.post.length && t.term.core.c === "bracket" && t.view && Array.isArray(t.view.inner) && t.view.inner.length === 1) return opKnownUnit(t.view.inner[0], depth + 1);
   return false;
 }
@@ -8151,6 +8416,7 @@ function leafOf(term, c) {
     isQBracket: !!c.isQBracket,
     count: c.count === undefined ? null : c.count,
     strCount: c.strCount === undefined ? null : c.strCount,
+    ...(c.flat ? { flat: true } : {}), // 書いた数の葉だけの並置を指す名前（namedSeqElems）
     ...(c.undecided ? { undecided: c.undecided } : {}), // 名前の読みが決まらない理由（片イ、R120 の例外。undecidedWhy）
   };
 }
@@ -8499,8 +8765,17 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
         break;
       }
       foldStep(st, i);
+      if (foldSeq.stop) break; // R143：長さの見えない器で閉じた適用が、後ろに書いた項を全部受けた（closeUnsized・closedStep）
     }
     if (evaluate) fillDefaults(st);
+    // R143・R137：値の上に積まれた関数が長さの見えない器で閉じた適用（closeUnsized の `!_` と分かる値、unsizedUnit）は、括った `5 (add t)` の印 zero の括りの葉と
+    // 同じく、値の隣の並びの項として消える（法則5：`X F Y` は `X (F Y)`。seqUnitAt と同じく、下が A の値の所だけ）。`5 add t` は 5。括って閉じた適用が頭の適用
+    // （closedStep の `(unit …)`）も同じで、`5 (add t) 6` は `5 add t 6` と同じく 5。知らせは閉じた所で出してある。
+    {
+      const top = st.stack[st.stack.length - 1];
+      const below = st.stack[st.stack.length - 2];
+      if (unsizedUnit(top) && below && below.t !== "fn" && !!below.kind && below.kind.k === "A") st.stack.pop();
+    }
     // R137（2026-11-07）：いちばん上の関数の下が全部 `!_` と分かる値（knownUnitValue。`nope`・`un`・括った書いた void（前の綴りの `(_)`））なら、空白の積の単位として消す（`(nope inc) 5` は
     // `(!_ inc) 5` と同じ `(apply [nope inc] 5)`、`h : y ? zz inc` の本体は `(unit inc)`）。計算の `!_`（`((3 < 2) inc) 5`）は今のまま値の上の余り（R52、§5 Q95）。
     // 括りの中の値の並びの `!_` と分かる項（R49 の印 zero の物）は、畳み込みの1歩で並びの項として消え（R137、seqUnitAt）、葉は書いた括りのまま
@@ -8536,7 +8811,16 @@ function foldItems(items, ctx, evaluate, closeIdle, bodyRoot) {
 function holeSeq(items, ctx) {
   if (!items.some(isHoleItem)) return null;
   items = unitArgs(items);
-  const hole = tryHole(items, ctx);
+  // R143：長さの見えない器の要素が、穴の口も含めて2つ以上の決まった口に届けば、並びごと `!_`（unsizedHole）。括って閉じた適用が実引数なら、外の並びも `!_`（closedHole）。
+  // 中身の見えない並び（R142）なら種類の未知（opaqueHole）。
+  const unsized = closedHole(items, ctx) || unsizedHole(items, ctx) || opaqueHole(items, ctx);
+  if (unsized) return unsized;
+  // R142：器を運ぶ項と並ぶ穴の k は、繋いだ後の要素で数える（R16・R34・R89。名前を中身に置き換えても答えは同じなので、`add _ xs` は `add _ 1 2`）。
+  // 木は書いた綴りに戻す（unspliceTree）。
+  const opened = spliceHoleItems(items, ctx);
+  if (opened) items = opened;
+  const hole0 = tryHole(items, ctx);
+  const hole = hole0 && opened ? unspliceTree(hole0) : hole0;
   if (hole) return hole;
   const refusal = holeRefusal(items);
   if (refusal) throw refusal;
@@ -8721,11 +9005,86 @@ const asValueMark = (x) => ({ ...x, desc: A(), kind: A() });
 // bodyRoot）。空の流れを受けた関数を閉じてよいか（R70、closeEmpty）だけが読む。applyKind では null（書いた並びが無い）。
 let foldCtx = null;
 let foldSeq = null;
+// R143（括った頭 U〔答え〕[2026-11-22 07:51:15 UTC 828ee417]「1」、括りで止めない）：畳み込みの i 番目の項 x が括って閉じた適用（closedUnsized。中は長さの見えない器で
+// 閉じた、書いた所で `!_` と分かる値）で、外の適用の頭か実引数になったら、外の適用も後ろに書いた項ごと、同じ印 zero の `!_` にする。答えは括らない形と同じ
+// （`(add t) 5` は `add t 5`、`inc (add t)` は合成の `add inc t` と同じく閉じる。`(add 1) 5` が `add 1 5` と同じなのと同じく、括りの有無で答えを割らない）。
+// 内の数えでもう2つ以上の口に届くと分かっているので、外の届く口は数えず（reachOf・unsizedHole・unsizedInto に入れない）、どの口（素の口・括りの口・最後の括り・可変長の口）
+// でも閉じる。木は外の書いた適用を後ろの項ごと包んだ `(unit …)` 1つで、中の閉じた括りは書いた葉のまま。知らせは中の閉じが書いた所で出したので足さない（§5 Q104 の芯）。
+// - いちばん上が関数：x とその後ろの項をその段の実引数にして閉じる（closeOuter。閉じる前に、外の段に前に書いた印のある実引数の門を見る：`f3 $inc (add t) 5` は G7、
+//   口が全部埋まると分からない `f3 $inc (add t)` は門を見ない。D と同じ）。
+// - いちばん上が空か A の値：x が頭の適用（`X F Y` は `X (F Y)`、法則5）で、後ろに書いた項を実引数にして閉じる。書いた `!_` は入れず、中の閉じが値の口だけの段
+//   （印 valueOnly：closeOuter の素の関数の段・穴の並び）なら `!_` と分かる値（seqUnitItem）も入れない（括らない `add t w 5` の木が w を落とすのと同じ、R112・R137。
+//   括りの口の段の `(pq t) w` は `pq t w` と同じく残す）。後ろに書いた項が無ければ x は並びの項の `!_` と分かる値のまま（R137）。値の上に積んだ閉じは、並びの終わりに
+//   値の隣で消える（foldItems：`5 (add t) 6` は `5 add t 6` と同じく 5）。
+// - いちばん上が種類の未知な値なら読まない（それが関数かは値の段が決める）。
+// 中の閉じの門（D：器より前に書いた印のある実引数の席）は、外から来た項で口が全部埋まると分かれば、括らない形と同じ門で読み直す（閉じの印 unsizedGate。答えは括らない
+// 形と同じ）：頭なら後ろに書いた値の項と穴（穴は穴の規則で口の席を取る）の数を足し（`(f3 $inc t) 5` は `f3 $inc t 5` と同じ G7、`(f3 $inc t) _` は `f3 $inc t _` と同じ）、
+// 実引数なら外の段が合成と同じく閉じの前に入って流れ込む値の数を足す（closeOuter・flowInto：`inc (f3 $inc t) 5` は G7、`k1 (f3 $inc t) 5` は k1 の口が埋まらないので
+// R143 の `!_` だけ）。作った `(unit …)` も、さらに外から来た項の数を足して読み直す印を持つ（`[(f4 $inc t) 5] 6` は `f4 $inc t 5 6` と同じ G7）。
+// 頭なら、後ろに書いた `!_` と分かる値（seqUnitItem）の数も渡す：中の閉じが括りの関数の可変長の口の1つだけを埋める段なら、括りの口で空の器として席を取る（R122、flowInto）
+// ので、括らない形と同じ門で読む（`(n (f3 $inc t)) w` は `n (f3 $inc t) w` と同じ G7）。
+// 実引数なら、閉じる前に括りの関数の段の後ろの穴を見る（patternHoleAfter：`n (f3 $inc t) _` は G7、`n (add t) _` は G5）。
+// 閉じたら true（並びの畳み込みはここで終える、foldSeq.stop）。
+function closedStep(st, i, top, x) {
+  const q = foldSeq;
+  if (!closedUnsized(x) || !q || q.st !== st) return false;
+  const gate = throughOf(x).unsizedGate || null;
+  if (top && top.t === "fn") {
+    const s = curStage(top);
+    if (!s) return false;
+    patternHoleAfter(top, s, st.items.slice(i + 1), gate);
+    top.log.push({ k: "arg", tree: x, group: s.group });
+    top.groups[s.group].args.push({ tree: x });
+    closeOuter(top, s, 1, gate);
+    spliceDone(st.stack, top);
+    return true;
+  }
+  if (top && (!top.kind || top.kind.k !== "A")) return false;
+  const after = st.items.slice(i + 1).filter((t) => !isMark(t));
+  if (!after.length) return false;
+  const vo = !!throughOf(x).valueOnly;
+  const rest = vo ? after.filter((t) => !seqUnitItem(t)) : after;
+  const extra = valueCount(rest) + rest.filter(isHoleItem).length;
+  const seats = rest.filter(seqUnitItem).length;
+  if (gate && (extra > 0 || seats > 0)) gate(extra, seats);
+  const arg = rest.length === 1 ? rest[0] : { t: "construct", items: rest, kind: A() };
+  const inner = rest.length ? { t: "apply", head: x, arg, kind: { k: "L" } } : x; // 後ろの項が全部消えたら、閉じた括りを包むだけ（`(add t) w` は `(unit [add t])`）
+  st.stack.push({ t: "unit", inner, kind: zeroDesc(), unsized: true, ...(vo ? { valueOnly: true } : {}), ...(gate ? { unsizedGate: (k, sk = 0) => gate(extra + k, seats + sk) } : {}) });
+  q.stop = true;
+  return true;
+}
+// 括りの関数の段 s が括って閉じた適用（中の門の読み直しは innerGate）を実引数に受けた所で、後ろの項 after に書いた穴（D の考え：どの長さでも断るなら先に断る）。閉じは、t が短くて
+// 中の口が埋まらなければ関数の項1つ（長さ1 の読み）で、埋まれば中の門（器より前に書いた印のある実引数の席）で読む物。長さ1 の読みで、閉じが s の口を1つ取り、穴より前に
+// 書いた値の項が続く口を取った後で、穴がまだ s の口に入るなら、穴の規則は括りの関数の実引数の穴で断る（G5、holeStep。穴は素の関数の実引数にだけ書ける、§3.5）。その時：
+// - 中の門が中の口の全部埋まる数で断るなら、どの長さでも断るので、中の門の断りを出す（closedInnerGate と同じ。`n (f3 $inc t) _` は、書いた長さ1 の `n (f3 $inc 1) _` が
+//   G5、長さ2 の `n (f3 $inc 1 2) _` が f3 を形 $L A A で呼んだ実体の G7 なので、その G7）。
+// - 断らず、s が可変長の口を持つ（最後の括りの口は並びの残りを丸ごと受ける、R24・R41）なら、穴はどの長さでも s の口に入るので G5（`n (add t) _`・`h (add t) _`・
+//   `n (f3 1 t) _` は、書いた長さ0〜3 がどれも G5）。
+// - 断らず、口の数の決まった段（`pq : [a] y ? y`）なら、長い閉じは値を2つ以上並べて s の口を埋め、穴が外に出うる（書いた `pq (add 1 2 3) _` は通る）ので、閉じのまま。
+// 穴より前に値でも `!_` でもない項（関数・種類の未知な項・撒く項・`!_` と分かる値）があれば、穴の着く口が数えられないので見ない（閉じのまま）。
+function patternHoleAfter(e, s, after, innerGate) {
+  if (!s.fn || s.fn.type !== "pattern") return;
+  const k = after.findIndex(isHoleItem);
+  if (k < 0) return;
+  const before = after.slice(0, k);
+  if (!before.every((t) => isMark(t) || (isValueItem(t) && !t.writtenEmpty))) return;
+  const sh = stageShape(s);
+  if (sh.unknown) return;
+  const taken = s.recv.length + 1 + before.filter((t) => !isMark(t)).length;
+  if (!sh.varying && taken >= sh.fixed) return;
+  if (innerGate) probeGate(() => innerGate(FILL_ALL));
+  if (sh.varying) throw patternHoleGate(e.groups[s.group].item);
+}
+// 括りの関数の実引数の穴（G5、§3.5。holeStep・patternHoleAfter）。
+function patternHoleGate(item) {
+  return gate("G5", `括りの関数 \`${show(item)}\` の実引数に穴 \`_\` があります。穴は素の関数の実引数にだけ書けます（§3.5、U〔答え〕10-14 22:23）。`);
+}
 function foldStep(st, i) {
   let x = st.items[i];
   const stack = st.stack;
   const top = stack[stack.length - 1];
   if (isMark(x)) return markStep(st, i, top);
+  if (closedStep(st, i, top, x)) return; // R143：括って閉じた適用は、外の適用を後ろに書いた項ごと閉じる
   if (seqUnitItem(x) && seqUnitAt(st, i, top)) throw new WrittenEmptyAtValue(x.writtenEmpty); // R137：空白の並びの項の `!_` と分かる値は書いた `!_` と同じに読み直す
   if (isHoleItem(x)) x = holeStep(st, i, top);
   if (x.kind.k === "A") {
@@ -8740,6 +9099,8 @@ function foldStep(st, i) {
       if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
       return;
     }
+    // R142・R143：素の口と最後でない括りの口に来た並びは、繋いでから前から取る（spliceStep）。
+    if (!isSpreadNode(x) && spliceStep(top, x)) return void spliceDone(stack, top);
     feed(top, x);
     if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
     return;
@@ -8747,7 +9108,12 @@ function foldStep(st, i) {
   // 種類の未知な項（片イ、R120。前は G7・G2(a)）：いちばん上が値か空なら積み、関数なら口に当てる。それが値か関数かで隣との結び方は変わるが、それは値の段が
   // 書いた項の並び（written）を左から2つずつ畳んで決める（問3）。木はこの読みの予想。
   if (x.cat === "plain" && x.kind.k === "U") {
-    if (!top || top.t !== "fn") return void stack.push(x);
+    if (!top || top.t !== "fn") {
+      if (!top || (top.kind && top.kind.k === "A")) fnMaybeHead(st, i, x); // R142：関数かもしれない物を頭に読んだ時の門
+      return void stack.push(x);
+    }
+    if (spliceStep(top, x)) return void spliceDone(stack, top); // R143 は綴りで決める（要素の種類の分からない `[~t]` の t も、spliceOf）
+    fnMaybeFeed(top, x); // R142：繋ぐ口でない口（可変長の口・点なし）に来た関数かもしれない物
     feed(top, x);
     if (entryDone(top)) stack[stack.length - 1] = markSaturated(top, renderEntry(top));
     return;
@@ -8884,9 +9250,7 @@ function holeStep(st, i, top) {
   if (!top || top.t !== "fn") return out;
   const s = curStage(top);
   const item = top.groups[s.group].item;
-  if (s.fn && s.fn.type === "pattern") {
-    throw gate("G5", `括りの関数 \`${show(item)}\` の実引数に穴 \`_\` があります。穴は素の関数の実引数にだけ書けます（§3.5、U〔答え〕10-14 22:23）。`);
-  }
+  if (s.fn && s.fn.type === "pattern") throw patternHoleGate(item);
   const sh = stageShape(s);
   const left = sh.fixed - s.recv.length;
   const why = sh.unknown
@@ -9200,26 +9564,88 @@ function readerAtPlain(fn, trees) {
 // 段 s が閉じて、結果 r になった。r が値なら、次の段の最初の口に入る（合成は適用の繰り返し、R11）。値でなければ（未知か、引いた
 // 関数）、そこから先は未知で、後ろの括りの関数は未知を受けて実体を作る（R25、§5 Q24・Q27。ほかの関数の本体の根は引かない、Q28）。
 function settle(e, s, r) {
-  s.done = true;
-  s.result = r;
+  // 関数かもしれない未知の物を受けた段（s.fnMaybeIn、fnMaybeFeed）の答えは、どちらに読むかが値の段で決まるので種類の未知（後ろの段も未知、下の流れ）。
+  if (s.fnMaybeIn) r = U();
+  // 届く口が1つの繋ぐ口で中身の見えない並びを受けた段（s.opaqueFed、spliceStep と下の流れ）は、頭の要素を受けて残りを後ろに積む（R142・R35）ので、結果も
+  // 中身の見えない並び（印 seqOf。形は付けない）。`add (inc X)` が合成の `… inc add` と同じく後ろの口へ届く（法則「合成は左から畳む」）。結果が値の並びに
+  // 入れられない物（番地・Reader・`!_` と分かる値・中に関数か未知が見える物。opaqueListDesc と同じ除き）は今のまま。
+  if (s.opaqueFed && r.k === "A" && !r.spread && !readerOf(r) && !zeroOf(r) && !hasAddr(r) && deepKind(r) === "A") r = seqDesc();
   const idx = e.stages.indexOf(s);
   const next = e.stages[idx + 1];
+  if (!next && isIdFn(s.fn)) r = idTail(e, s, r);
+  s.done = true;
+  s.result = r;
   if (!next || next.group !== s.group) e.groups[s.group].result = r;
   if (!next) return;
-  if (r.k !== "A") {
+  // 中身の見えない並び（実体の結果。`[* 2,] add 1 2` の `[* 2,] 1 2`）が、届く口が2つ以上の繋ぐ口へ流れる：何個の口を埋めるかは値の段で決まるので、後ろは未知の
+  // 流れと同じ（opaqueInto と同じ線、R142）。閉じる前に、後ろの段に当てた印のある実引数の門を見る（seatGate）。答えに印 saturated を付けない（markSaturated）。
+  // 届く口が1つなら、後ろに可変長の口があれば頭と残りに分けて受け（opaqueSplit。`[* 2,] h1 1 2` は入れ子の `h1 ([* 2,] 1 2)` と同じ、法則1）、無ければ1項で受ける
+  // （opaqueFedAt）。
+  const seqIn = r.k === "A" && spliceMouth(next) && seqOfDesc(r);
+  const opaque = seqIn && reachOf(e, next) >= 2;
+  if (opaque) {
+    // 流れの要素の下限は1つ。その数と後ろに書いた値の項で next から後ろの口が全部埋まると分からなければ、関数かもしれない物（印 fnMaybe、opaqueInto と同じ読み）。
+    const later = laterValues(e);
+    const pre = next.recv.slice();
+    const gate = (k) => seatGate(e, next, 1 + later + k, pre);
+    const fill = (k) => fillsAll(e, next, 1 + later + k, pre);
+    gate(0);
+    e.opaqueRest = true;
+    if (!fill(0)) e.fnMaybe = { fill, gate };
+  } else if (seqIn) opaqueFedAt(next);
+  if (r.k !== "A" || opaque) {
+    // 恒等射の段は受けた物そのもの（R29・R126 の単位律：`i X` ≅ X）なので、種類の未知な中身の見えない並び（seqU）は、すぐ後ろに続く恒等射の段にもそのまま渡す
+    // （`add (i i (add _ (tl vs)))` は `add (i (add _ (tl vs)))` と同じく未知。括った `(i i)` と名前で運んだ `ii : i i` も同じ段の並び）。恒等射でない段からは未知。
+    let pass = !opaque && r.k === "U" && !!r.seqOf;
     for (let j = idx + 1; j < e.stages.length; j++) {
       const t = e.stages[j];
+      pass = pass && isIdFn(t.fn);
       if (t.fn && t.fn.type === "pattern" && t.fn.n === 1) t.fn.instantiate([U()]);
       t.done = true;
-      t.result = U();
+      t.result = pass ? r : U();
       const g = e.groups[t.group];
       if (g.first === j) g.flowIn = true;
-      g.result = U();
+      g.result = t.result;
     }
     return;
   }
   if (next.group !== s.group) e.groups[next.group].flowIn = true;
-  putArg(e, next, composeLeaf(r));
+  if (seqIn && splitMouth(next)) return opaqueSplit(e, next);
+  // 恒等射から恒等射へは、受けた並びのまま渡す（単位律 i i ≅ i）ので、書き下しの残りの印 unsizedRest と、長さの見える要素の印 idElems も渡す（unsizedInto・idTail）。
+  const id2 = isIdFn(s.fn) && isIdFn(next.fn);
+  const rest = id2 ? s.recv.find((t) => !!t.unsizedRest) : null;
+  const els = id2 && !rest ? idElems(s, r) : null;
+  putArg(e, next, rest ? { ...composeLeaf(A()), unsizedRest: rest.unsizedRest } : els ? { ...composeLeaf(r), idElems: els } : composeLeaf(r));
+}
+// 合成の最後の段の恒等射 s が、受けた並びのまま閉じる（R29・R126 の単位律：`inc i X` ≅ `inc X`）。受けた物が書いた木に見えない形で入っていれば（繋いだ要素・
+// 書き下しの残り）、項の木に印を付ける（closeEntry）：長さの見えない器の書き下しの残り（印 unsizedRest、unsizedInto）を受けたなら、項は書き下した並び（印
+// unsizedSeq、種類は A。`add (inc i t)` は `add (inc t)` と同じく R143）。長さの見える要素（idElems）があれば、その要素（印 spliceElems。throughOf はこの適用で止まる）。
+// 返すのは段の結果。
+function idTail(e, s, r) {
+  const rest = s.recv.find((t) => !!t.unsizedRest);
+  if (rest) {
+    e.unsizedSeq = rest.unsizedRest;
+    return A();
+  }
+  const els = idElems(s, r);
+  if (els) e.splicedElems = els;
+  return r;
+}
+// 恒等射の段 s が受けた並び（結果 r）の、長さの見える要素：2項以上の値を受けて、r の長さが受けた項の数と同じなら、受けた項（書いた木はそのまま、ほかは desc の葉。
+// `x3 : 1 2 3` ⏎ `add (inc i x3)` は `add (inc x3)` と同じく `add 2 2 3`、`f3 (inc i x3 5)` は `f3 (inc x3 5)` と同じ）。前の恒等射の段から要素（印 idElems、settle）を
+// 1つ受けたなら、その要素（`inc i i x3 5` は `inc i x3 5` と同じ）。受けた項に中身の見えない並びか長さの見えない器（spliceOf の opaque・unsized。括り・恒等射・名前で
+// 包んだ物も）があれば、長さは見えないので null（`add (i (tl vs) 5)` は `add ((tl vs) 5)` と同じく中身の見えない並び）。
+function idElems(s, r) {
+  const live = liveItems(s.recv);
+  if (live.length === 1 && live[0].idElems) return live[0].idElems;
+  if (live.length < 2 || r.k !== "A" || r.len !== live.length) return null;
+  const hidden = (t) => {
+    const sp = spliceOf(t);
+    return !!sp && (!!sp.opaque || !!sp.unsized);
+  };
+  if (live.some(hidden)) return null;
+  // 受けた項が名前で運んだ長さの見える並び（namedSeqElems）なら、中身に置き換えた綴りと同じくその要素（P1・単位律：`inc i x2 x2` は `inc x2 x2`・`inc i 1 2 1 2` と同じく4つ）。
+  return live.flatMap((t) => namedSeqElems(t) || [t.term ? t : composeLeaf(descOfTree(t))]);
 }
 
 // 2026-10-23 までは、ここに逆適用（reverseEntry：値の後ろの関数がその値を主語に取る。主語が撒く項なら G9、主語の口が1つに決まらなければ
@@ -9247,7 +9673,12 @@ function closeEntry(e) {
   // （renderEntry。2026-10-23 までは、後ろの関数が並びから何も受けていなければ逆適用と同じ綴り `·rev` にしていた）。
   // R136：口が可変長の `?` の関数（括りの関数。裸の残りの口は G22 で廃止）は、並びの終わりのここで閉じるので、ここでも呼び終えた答えに印 saturated を付ける
   // （付けないと `h : [x] ? [,] x` の `(h 5) inc` が関数でありうる項に読まれ、素の関数の `h : x ? [,] x` と割れて warning が黙る。法則4）。
+  // 合成の最後の恒等射が受けた並びのまま閉じた項（idTail）は、繋いだ所（spliceDone）と同じく、木に受けた並びの要素か書き下した並びの印を持たせる。
   const tree = renderEntry(e);
+  if (tree && typeof tree === "object" && entryDone(e)) {
+    if (e.splicedElems) tree.spliceElems = e.splicedElems;
+    if (e.unsizedSeq) tree.unsizedSeq = e.unsizedSeq;
+  }
   return entryDone(e) ? markSaturated(e, tree) : tree;
 }
 
@@ -9398,26 +9829,69 @@ function noteExcess(fn, args) {
   base.params.forEach((p, i) => {
     if (i < off || p.kind !== "bracket" || !p.simple || p.rest || !p.names.length) return;
     const j = i - off;
-    const items = i === base.params.length - 1 ? args.slice(j) : args.slice(j, j + 1);
+    const last = i === base.params.length - 1;
+    const items = last ? args.slice(j) : args.slice(j, j + 1);
     // 書いた所（知らせを1回にする鍵）は、括りに入った実引数のうち最初の書いた項。合成の前の段の結果（`inc fab 1 2 3` の `inc 1`）は書いた項を持たないので、
     // その次の書いた項を鍵にする（2026-10-26 の確かめの直し。前は書いた項を持たない物が1つでもあれば数えず、`fab (inc 1) 2 3` だけが知らせた）。
-    const at = items.find((t) => !!t.term);
-    if (!items.length || !at) return;
+    // 鍵を作るのは excessKey（繋いだ要素の鍵も。R142）。
+    const key = excessKey(items, i);
+    if (!items.length || !key) return;
     // 1項なら、書いた器の数か文字列の文字の数（flowLength：String ≅ List(Char)、撒いた `` `abcd`~ `` の flowCount と同じ数え方。2026-10-26 の確かめの直し。
     // 前は writtenLength だけで、`` fab `abcd` `` は知らせず `` fab `abcd`~ `` だけが知らせた）。
-    const count = items.length >= 2 ? (items.some(isSpreadNode) ? null : items.length) : isSpreadNode(items[0]) ? flowCount(items[0]) : excessLength(items[0], ctx);
+    // 繋いだ要素（R142）と最後でない括りに来た前置 `~` の1項は excessCount が数える。長さの見えない残り（印 lenUnknown：opaqueSplit・unsizedInto の残り。空かも
+    // しれない）は数えず、ほかの項の数を下限にする（下限が名前より多い時だけ、書いた時点で分かる余り）。その残りと並ぶ撒いた流れは流れの数（数えられない流れは 0）で
+    // 下限に足す（`pb2 (tl vs) vs~` の [b] は 3 つ以上）。長さの見えない残りの無い、撒く項を含む2項以上の並び（`pb2 5 6 vs~`）は、closeKind が数えずに未知で閉じる（R24）。
+    // 長さの見えない残りが要素の下限（印 lowerKnown、restLower：頭の項が中身の見えない並びの構築を名前で運んだ `cc : (tl vs) 5 6` の残りは 5 6 の2つ以上）を持てば、
+    // それも下限に足す（書いた `pb2 (tl vs) 5 6` と同じ数え、P1・[r] ≅ r）。
+    const open = items.some((t) => !!t.lenUnknown);
+    const known = items.filter((t) => !t.lenUnknown);
+    const openLower = items.reduce((n, t) => n + (t.lenUnknown && typeof t.lowerKnown === "number" ? t.lowerKnown : 0), 0);
+    const lower = (xs) => xs.reduce((n, t) => n + (!isSpreadNode(t) ? 1 : typeof flowCount(t) === "number" ? flowCount(t) : 0), 0);
+    const count =
+      items.length >= 2 ? (!items.some(isSpreadNode) ? known.length + openLower : open ? lower(known) + openLower : null) : open ? openLower || null : excessCount(items[0], ctx);
     if (count === null || count <= p.names.length) return;
-    if (ctx.F.reportedExcess.has(at.term)) return;
-    ctx.F.reportedExcess.add(at.term);
+    if (ctx.F.reportedExcess.has(key)) return;
+    ctx.F.reportedExcess.add(key);
     const names = `[${p.names.join(" ")}]`;
     const restHint = `[${[...p.names.slice(0, -1), `~${p.names[p.names.length - 1]}`].join(" ")}]`;
     pushDiag(
       ctx,
       "bracket-excess",
       base.label,
-      `括りの関数 \`${base.label}\` の括り \`${names}\` は名前が ${p.names.length} つで、受けた List の要素は ${count} つです。名前は List の前からの射影で、名前の無い要素は受けません（積み直しません。§4 R64）。残りが欲しければ \`${restHint}\` と書きます。`
+      `括りの関数 \`${base.label}\` の括り \`${names}\` は名前が ${p.names.length} つで、受けた List の要素は ${count} つ${open ? "以上" : ""}です。名前は List の前からの射影で、名前の無い要素は受けません（積み直しません。§4 R64）。残りが欲しければ \`${restHint}\` と書きます。`
     );
   });
+}
+// noteExcess の知らせを1回にする鍵：括りに入った実引数のうち最初の書いた項（合成の前の段の結果は書いた項を持たないので、その次の書いた項）。繋いだ要素（R142。
+// P1 の U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」）で書いた所を持たない物（名前で運んだ要素・`,` の行）だけなら、繋いだ並びの書いた所と括りの位置 i の組
+// （1つの並びが2つの括りに入りうる：`pb2 x3` の `[a]` と `[b]`）。どちらも無ければ null（数えない）。
+const excessKeys = new WeakMap();
+// 頭と残りに分けた残り（印 restFrom、restLower）も、分けた並びの書いた所と括りの位置 i の組。
+function excessKey(items, i) {
+  const at = items.find((t) => !!t.term);
+  if (at) return at.term;
+  const from = items.find((t) => (!!t.spliceFrom && !!t.spliceFrom.term) || (!!t.restFrom && !!t.restFrom.term));
+  if (!from) return null;
+  const term = (from.spliceFrom && from.spliceFrom.term) || from.restFrom.term;
+  let m = excessKeys.get(term);
+  if (!m) excessKeys.set(term, (m = new Map()));
+  if (!m.has(i)) m.set(i, { term, at: i });
+  return m.get(i);
+}
+// noteExcess の1項の数（括り1つに入った実引数1つ）。撒いた流れは流れの数。繋いだ要素の葉（R142。書いた所を持たない物）は desc の長さ（数・文字は 1）。括りに来た
+// 前置 `~` の持ち上げ（`~[1 2]`）は要素1つ x として入る（問5）ので、括りが受ける List は x で、x の数（最後の括りに1項で来た物も同じ：最後の括りは残りの並び
+// `~[1 2]` 1つを受け、[x] ≅ x でその List は x。実体の鍵の `[N…]` も x を射影する。`pb2 ~[1 2] ~[3 4]` は名前で運んだ `cc : 1 2 , 3 4` の `pb2 cc` と同じく、
+// 括りごとに知らせる）。括りの中・名前の右辺の根に着いた持ち上げも同じ（sourceOf。[r] ≅ r、`[~[1 2]]`・`yy : ~[1 2]` の yy は `~[1 2]`）。ほかは excessLength。
+function excessCount(t, ctx) {
+  if (isSpreadNode(t)) return flowCount(t);
+  if (t.spliceFrom && !t.term) return typeof t.desc.len === "number" ? t.desc.len : isScalar(t.desc) ? 1 : null;
+  const src = sourceOf(t, ctx);
+  const lift = src.marked && isLiftTerm(src.tree.term) && src.tree.view && Array.isArray(src.tree.view.inner) && src.tree.view.inner.length === 1 ? src.tree.view.inner[0] : null;
+  if (lift) return excessLength(lift, src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx);
+  const n = excessLength(t, ctx);
+  // 書いた項で数えられなければ、出どころの木で数える（括りの中・恒等射に当てた物・名前の右辺の根。単位律と [r] ≅ r：`pq ((i [1 2]) , 3 4)` は `pq ([1 2] , 3 4)` と同じ知らせ）。
+  if (n !== null || !src.tree || src.tree === t) return n;
+  return excessLength(src.tree, src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx);
 }
 
 // noteExcess の1項の数：書いた器の数（writtenLength）か、文字列の文字の数。文字列も、余ったラムダが消えて残った1項（`` (`ab` inc) ``）はその1項で数える
@@ -9460,7 +9934,34 @@ function stringLengthThrough(t, ctx) {
 // R91（§5 Q71 の答え）：括りの関数に当てる実引数の desc に、書いた時点で分かる長さ（len）を付ける（bindParams の短い括りの名前）。長さは、撒いた流れなら流れの数、
 // ほかは flowLength（書いた器の数・文字列の文字の数・数は1）。分からなければ付けない。len は形にも実体の鍵（internDesc）にも入らず、名前が足りないときだけ鍵に足す。
 const withLen = (d, n) => (typeof n === "number" && !!d && d.k === "A" ? { ...d, len: n } : d);
-const argDescOf = (t) => withLen(descOfTree(t), isSpreadNode(t) ? flowCount(t) : flowLength(t));
+// 括りの関数に渡す実引数の desc（argDescOf）と、繋いだ並びの要素の desc（spliceOf）：括り・恒等射・名前の右辺で包んだ中身の見えない並び（seqResult。包みの木の desc は
+// 印 seqOf を持たない）は、包みを外した並びと同じ印の desc にする（[r] ≅ r。括りの口はそれを中身の見えない並びとして受ける、bindParams の seqIn：`tl (tl x4)` の外の
+// tl は、内の tl の結果の並びを受ける。名前で運んだ `cc : (tl vs) 5` の `pair cc` も、書いた `pair [(tl vs) 5]` と同じ）。
+const argDescOf = (t) => withLen(elemDescOf(t, foldCtx), isSpreadNode(t) ? flowCount(t) : flowLength(t));
+// 頭の項が中身の見えない並びの構築（opaqueHeadTree。括った `[(tl vs) 5]`・名前で運んだ `cc : (tl vs) 5` の cc）も、中身の見えない並びの desc にする（書いた
+// `hd (tl vs) 5` で最後の括りが受ける並びと同じ）。
+function elemDescOf(t, ctx) {
+  const d = descOfTree(t);
+  // 形を持つ desc（構造体・List）を中まで辿る見方（hasAddr など）は、形の無い desc か頭の項が中身の見えない並びの構築と分かった後だけ（欄どうしで同じ物を指す
+  // 形を毎回辿ると、倍々に深くなる形で手間が倍々になる）。
+  const base = !!d && d.k === "A" && !d.spread && !d.seqOf;
+  const plain = () => !readerOf(d) && !zeroOf(d) && !hasAddr(d);
+  const seq = base && ((!d.shape && plain() && seqResult(t, ctx)) || (opaqueHeadOf(t, ctx) && plain()));
+  return seq ? seqDesc() : d;
+}
+// 項 x の出どころ（sourceOf）が、頭の項が中身の見えない並びの構築か。
+function opaqueHeadOf(x, ctx) {
+  const src = sourceOf(x, ctx);
+  return opaqueHeadTree(src.tree, src.crossed && ctx && ctx.F ? { F: ctx.F, scope: ctx.F.fileScope } : ctx);
+}
+// 木 t が、頭の項が中身の見えない並び（elemDescOf が seqOf の形の無い A と読む物：実体の結果の `(tl vs)`・頭と残りに分けた残り・それを括りと恒等射と名前で包んだ物）の
+// 構築か（`(tl vs) 5`）。並びは繋いでから前から取る（P1）ので、頭の要素も長さも見えない中身の見えない並び（書いた `pair (tl vs) 5` の最後の括りが受ける並びと同じ）。
+// 頭より後ろの項だけが中身の見えない並びの構築（`5 (tl vs)`）は、今のまま要素の見える List。ctx は t を書いた範囲。
+function opaqueHeadTree(t, ctx) {
+  if (!t || t.t !== "construct") return false;
+  const live = liveItems(t.items);
+  return live.length >= 2 && isOpaqueSeq(elemDescOf(live[0], ctx));
+}
 
 // 並びの終わりで閉じた段の種類（R41）。撒く項を受けていれば、k を数えないので未知（R24。括りの関数は実体を作らない、§5 Q29）。
 function closeKind(s) {
@@ -9472,7 +9973,11 @@ function closeKind(s) {
   // 大事だと思う。」）。前（2026-10-24 の R51 の前）は撒く項があれば k を数えないので未知だった（R24）。写す関数があれば、要素ごとに当てた
   // 種類が全部 A のときだけ A（mapOver）。
   // 写す関数の無い貪欲な単項も、写す器の中身に関数か未知が見えれば G7（`[[* 2],] fs` と揃える。mapOver の注）。
-  if (fn && fn.type === "pfGreedyUnary" && !s.tainted) return mapOver(fn.map || null, args);
+  // 2つ以上か器を写した結果は、長さの見えない並び（印 seqOf。R142 の繋ぐ口が読む、settle）。
+  if (fn && fn.type === "pfGreedyUnary" && !s.tainted) {
+    const r = mapOver(fn.map || null, args);
+    return r.k === "A" && (k >= 2 || (k === 1 && !isScalar(descOfTree(args[0])))) ? { ...r, seqOf: true } : r;
+  }
   // R64（2026-10-26）：括りの関数の最後の括り（参照の口）に入ったのが撒いた流れ1つだけ（`f vs~`・`map $inc vs~`・`f [1 2 3]~`）なら、流れの要素を書き並べた
   // 行（`f 1 2 3`）と同じ1つの List、つまり撒いた器そのもの（`f vs`・`f [1 2 3]`）を受ける。参照の口では書き並べと括った積（`f [1 , 2 , 3]`、R64。
   // 括らない `,` は適用の外、R121）が同じ List（双積の点、R）で、R51 の「最後の口が可変長なら丸ごと受ける」の丸ごとはこの List。前（R51 の決定）は撒く項で k を数えない（R24）ので未知で、`f vs` の A と割れていた
@@ -9481,6 +9986,9 @@ function closeKind(s) {
     noteExcess(fn, args);
     return fn.instantiate([...args.slice(0, -1).map(argDescOf), withLen(args[k - 1].desc.of, flowCount(args[k - 1]))]).kind;
   }
+  // 最後の括りが長さの見えない残り（印 lenUnknown、opaqueSplit・unsizedInto）と撒いた流れを受けた並び（`pb2 (tl vs) vs~`）も、残りを 0 個以上、流れを流れの数と数えた
+  // 下限が名前より多ければ知らせる（noteExcess。種類は今のまま未知、R24）。
+  if (fn && fn.type === "pattern" && fn.lastBracket && !s.tainted && args.some((t) => !!t.lenUnknown) && args.some(isSpreadNode)) noteExcess(fn, args);
   if (s.tainted || args.some(isSpreadNode)) return U();
   switch (fn && fn.type) {
     case "pfGreedyUnary":
@@ -9500,14 +10008,36 @@ function closeKind(s) {
       return k === 1 ? foldOneKind(args[0]) : A();
     // 段18 の点なし（`[' k]`）は 2026-10-26 から口1つの関数で、口が埋まった所（doneKind）で閉じるので、ここには来ない（R77。前は並びの終わりで閉じ、
     // 1つなら `x ' k` と同じ desc、2つ以上なら未知だった）。
-    case "id":
-      // 恒等射（R29）：1項なら受けた物そのもの（desc ごと）、2項以上なら並び（中身の見えない A）。
-      return k === 1 ? descOfTree(args[0]) : A();
+    case "id": {
+      // 恒等射（R29）：1項なら受けた物そのもの（desc ごと）、2項以上なら受けた並びそのもの（単位律：`i 1 2` は `1 2` と同じ List の形と長さ。繋ぐ口は受けた並びの木で
+      // 数える、throughOf の isIdApply。実体の鍵も同じなので、`pair (i 1 2 , 3 4)` は `pair (1 2 , 3 4)` と同じ実体で、`pq (i 1 2 , 3 4)` の括りの余りも同じく知らせる）。
+      // 並びに長さの見えない残り（印 lenUnknown：opaqueSplit・unsizedInto）があれば中身の見えない並び、要素に関数か未知が見えれば中身の見えない A（形を付けない）。
+      // 受けた物が中身の見えない並び（括りの中・名前の右辺の印 seqOf も見る、seqResult）なら、その印も渡す（R142：`add (i X)` は合成の `… i add` と同じく
+      // 後ろの口へ届く）。
+      // 長さの見えない器の書き下しの残り（印 unsizedRest、unsizedInto）を受けて合成の最後で閉じた恒等射は、書き下した並びのまま（settle の idTail が種類を A にして、
+      // 印 unsizedSeq を項に付ける）。受けた物が種類の未知な中身の見えない並び（印 opaqueSeq の木・種類 seqU。出どころで見る、sourceOf）なら、その印も渡す
+      // （`add (i (add _ (tl vs)))` は `add (add _ (tl vs))` と同じく未知）。
+      if (k !== 1) {
+        if (args.some((t) => !!t.lenUnknown)) return seqDesc();
+        const seq = { t: "construct", items: args, kind: A() };
+        const d = k >= 2 ? descOfTree(seq) : null;
+        return d && d.k === "A" && !d.spread && deepKind(d) === "A" ? withLen(d, writtenLength(seq)) : A();
+      }
+      const d = descOfTree(args[0]);
+      if (d && d.k === "U" && !d.seqOf && opaqueSeqTree(sourceOf(args[0], foldCtx).tree)) return seqU();
+      return d && d.k === "A" && !d.spread && !seqOfDesc(d) && seqResult(args[0], foldCtx) ? seqDesc() : d;
+    }
     case "pattern": {
       // 最後の仮引数が括りの関数（R24）：前の仮引数に1つずつ当て、残りの並び全体を最後の括りが1つの List として受ける（R64：名前はその List の射影）。
       noteExcess(fn, args);
       if (k === fn.n) return fn.instantiate(args.map(argDescOf)).kind;
       const front = args.slice(0, fn.n - 1).map(argDescOf);
+      // 残りの並びの頭が中身の見えない並び（印 seqOf の形の無い A：opaqueSplit の残り・実体の結果）なら、頭の要素も長さも見えないので、最後の括りはその並びを1項で
+      // 受けた時と同じく中身の見えない並びを受ける（bindParams の seqIn：名前は未知、`~rest` は中身の見えない並び）。`hd (tl vs) 5` と `pair (tl vs) (tl vs)` は、
+      // 括った `hd [(tl vs) 5]`・名前で運んだ `cc : (tl vs) 5` ⏎ `hd cc` と同じく未知（頭の項が中身の見えない並びの構築も中身の見えない並び、opaqueHeadTree）。
+      // 頭より後ろだけにあれば（`hd 5 (tl vs)`）、残りの並びは括って書いた `[5 (tl vs)]` と同じ List の形で、名前は前から当たる。
+      const restArgs = args.slice(fn.n - 1);
+      if (restArgs.length && isOpaqueSeq(argDescOf(restArgs[0]))) return fn.instantiate([...front, seqDesc()]).kind;
       const restTree = { t: "construct", items: args.slice(fn.n - 1), kind: A() };
       const rest = withLen(descOfTree(restTree), writtenLength(restTree)); // 長さは括って書いた `[e1 … em]`・積の `e1 , … , em` と同じ数え方（法則23）
       return fn.instantiate([...front, rest]).kind;
@@ -9543,13 +10073,24 @@ function cLength(C) {
 }
 // 書いた器の中身の数（[x] ≅ x）。数は 1。中身が見えて、要素が全部値のときだけ数える。
 function writtenLength(t) {
+  if (t && t.spliceElems) return t.spliceElems.length; // 繋いで余りを積んだ項（R142・R35、spliceDone）は、頭の結果と余りの要素の数
   const d = descOfTree(t);
   if (isScalar(d)) return 1;
-  const allA = (xs) => xs.every((x) => !!x && !isSpreadNode(x) && elementKind(x) === "A");
+  // 長さの見えない残り（印 lenUnknown、opaqueSplit・unsizedInto。空かもしれない）を項に持つ並びは数えない。
+  const allA = (xs) => xs.every((x) => !!x && !x.lenUnknown && !isSpreadNode(x) && elementKind(x) === "A");
   const one = vanishedOne(t); // 余ったラムダは消える（vanishedOne の注）
   if (one) return writtenLength(one);
   if (t.t === "construct") {
     const live = liveItems(t.items);
+    // 頭の項が繋いで余りを積んだ項（印 spliceElems、spliceDone）なら、構築はその要素の後ろに残りの項を積んだ並び（R35・P1：`inc x3 5` は `inc 1 2 3 5` と同じく、
+    // inc の結果・2・3・5 の4つ。括った頭 `(inc x3) 5` も同じ、[r] ≅ r）。
+    // 後ろの項が名前で運んだ長さの見える並びなら、中身に置き換えた綴りと同じ数で数える（P1：`inc x2 x2` は `inc 1 2 1 2` と同じく4つ、namedSeqElems）。頭が余りの
+    // 無い書き下しの適用（`add x2 x2` の `add x2`。`add 1 2 1 2` と同じく add の結果・1・2 の3つ）でも同じ。頭が名前や値の構築なのは今のまま項の数。
+    const head = live.length ? throughOf(live[0]) : null;
+    const rest = live.slice(1);
+    const restCount = () => rest.reduce((n, x) => n + (namedSeqElems(x) || [x]).length, 0);
+    if (head && head.spliceElems) return allA(rest) ? head.spliceElems.length + restCount() : null;
+    if (head && head.t === "apply" && allA(live)) return 1 + restCount();
     return allA(live) ? live.length : null;
   }
   if (t.t === "op" && t.sym === ",") {
@@ -9570,12 +10111,36 @@ function writtenLength(t) {
   }
   return null;
 }
+// 長さの見える書き下しの後ろ（頭が印 spliceElems の構築か余りの無い書き下しの適用の構築、writtenLength・writtenItems。恒等射の尾が受けた項、idElems）に書いた項 x が、
+// 名前で運んだ長さの見える並び（ファイルの値の定義を直に指す名前で、右辺が書いた数の葉か番地の葉だけを2つ以上並置した物か、それを指す別名。印 flat、flatSeqRoot）なら、
+// その要素の葉（綴りの無い要素なので `·`）。P1（名前を中身に置き換えても答えは変わらない）で、`yy : inc x2 x2` の後ろの x2 は、中身に置き換えた `inc 1 2 1 2` と
+// 同じく 1 2 の2つ（合成の `inc f4 x2 x2` で f4 の口に来た x2 を繋ぐのとも同じ、法則1）。繋ぐのは名前1段だけで、書いた括り（`inc x2 [5 6]` の `[5 6]`、書いた
+// `inc 1 2 [5 6]` と同じ1項）と前置 `~` の持ち上げ（要素1つ）は今のまま1項。右辺が括りか `,` の積（`vs : 1 , 2 , 3`）の名前は、中身に置き換えると1項の括りか、
+// 読みの変わる `,` になるので、今のまま1項。右辺に名前を含む並置（`x5 : x2 3`）は、ここでは数えずに1項のまま（数えるのは字面の葉だけの並置と、その別名だけ）。
+// ほかは null。
+function namedSeqElems(x) {
+  if (!x || x.t !== "leaf" || x.cat !== "plain" || !x.term || x.term.type !== "atom" || x.term.pre.length || x.term.post.length || x.term.core.c !== "name") return null;
+  if (!x.flat || typeof x.count !== "number" || x.count < 2 || !x.desc || x.desc.spread || deepKind(x.desc) !== "A") return null;
+  const es = elemsOfContainer(x.desc);
+  // 要素は数か番地の字面の物（flatSeqRoot が字面の葉だけの並置と決めた名前なので、印の無い A の要素は番地の字面）。
+  if (!es || es.length !== 1 || !(isScalar(es[0]) || (es[0].k === "A" && Object.keys(es[0]).length === 1))) return null;
+  return Array.from({ length: x.count }, () => ({ t: "leaf", term: null, cat: "plain", desc: es[0], kind: es[0], view: { v: "atom", text: "·" } }));
+}
 // writtenLength で数えた物の、要素の木の並び（数えたのと同じ道。[x] ≅ x で1つの数・1行の括りはその中身）。名前（ファイルの値の定義の右辺の数）は木が無いので null。
 function writtenItems(t) {
+  if (t && t.spliceElems) return t.spliceElems; // 繋いで余りを積んだ項（R142・R35、spliceDone）
   if (isScalar(descOfTree(t))) return [t];
   const one = vanishedOne(t);
   if (one) return writtenItems(one);
-  if (t.t === "construct") return liveItems(t.items);
+  if (t.t === "construct") {
+    const live = liveItems(t.items);
+    const head = live.length ? throughOf(live[0]) : null;
+    // 頭の繋いだ要素の後ろに残りの項（writtenLength と同じ数え。名前で運んだ長さの見える並びは、その要素の葉、namedSeqElems）。頭が余りの無い書き下しの適用なら、
+    // 頭の項の後ろに同じく残りの項。
+    const rest = live.slice(1).flatMap((x) => namedSeqElems(x) || [x]);
+    if (head && head.spliceElems) return [...head.spliceElems, ...rest];
+    return head && head.t === "apply" ? [live[0], ...rest] : live;
+  }
   if (t.t === "op" && t.sym === ",") return commaItems(t);
   if (t.t === "leaf" && t.cat === "plain" && t.term && t.term.type === "atom" && !t.term.pre.length && !t.term.post.length) {
     const c = t.term.core.c;
@@ -9987,6 +10552,926 @@ function refuseEmptyStream(e, s, x) {
   );
 }
 
+// ---- 繋ぐ口（R142・R143） ----
+//
+// R142：素の口（裸の仮引数。穴の関数・部分適用の口も）と最後でない括りの口に並び（List・String・名前で運んだ器）が来たら、先に繋いで、口が前から1要素ずつ取る。
+// 名前を中身に置き換えても答えは変わらない（`x3 : 1 2 3` ⏎ `inc x3` は `inc 1 2 3`）。余りは後ろに積み（R35）、最後の括りの口は残りを丸ごと受ける（R64）。括りは内を
+// 解いて外す（[r] ≅ r）ので `add [1 2]` は `add 1 2`。2階の器（`m : 1 2 , 3 4`）は行を要素に繋ぐ（繋ぐのは1段だけ）。`!_` と分かる要素は並びの項で消えた後で数える
+// （R137。`x4 : 1 w 3` ⏎ `add x4` は `add 1 3`）。器を1要素で渡すのは、前置 `~`（解けない1段の持ち上げ。`~x` は要素1つ x として入る）と、括った積（`pair [xs , ys]`、
+// `,` の辺が1要素）。根拠：P1 の U〔答え〕[2026-11-20 11:17:34 UTC 9f9fd58f]「1」、問4 の U〔答え〕[2026-11-20 20:07:12 UTC 9f9fd58f]「1」（`add vs` は `add 1 2 3`）、
+// 問5（2026-11-20 の決まり。前置 `~` は解けない持ち上げ）。
+// R143：長さの見えない器（`[~t]` の t・`[x ~xs]` の xs のように、R91 で長さを持たない残りの名前）は括りの口で受ける物。要素が届きうる決まった口（reachOf・unsizedHole）が
+// 2つ以上なら、その適用を後ろに書いた項ごと `!_`（木は書いた適用を包んだ `(unit …)`、A）にして、warning の unsized-container で知らせる（書いた所ごとに1つ）。1つなら
+// 書き下し（頭の要素で埋め、残りは後ろに積む）。根拠：問3 の U〔答え〕[2026-11-20 20:03:57 UTC 9f9fd58f]「1」、及ぶ所は U〔答え〕[2026-11-22 01:07:56 UTC 828ee417]「1」
+// （`gt : [~t] ? add t 5` も 5 を含めて丸ごと `!_`。数えるのは t の要素が届きうる決まった口で、合成で後ろの段に届く口と、後ろの値が埋める穴の口も入る）。
+// 中身の見えない並び（実体の結果 `add (tl vs)`・それを右辺に持つ名前・合成の前の段から流れて来た並び `[* 2,] add 1 2`）が、届きうる決まった口が2つ以上の所に来たら、
+// 何個の口を埋めるかは値の段で決まる（value_spec V12）ので、読む段は種類を未知にして leftover-lambda を出さない（実装で決めた所）。届く口が1つなら、後ろに可変長の口
+// （最後の括り・`[~xs]`）があれば頭の要素と残りに分けて受け（opaqueSplit。残りは可変長の口が丸ごと受けるので余ったラムダは無い。入れ子の `h1 (tl vs)` は合成の
+// `… tl h1` と同じ、法則1）、無ければ1項で受ける（残りは後ろに積む、R35）。
+
+// 段 s の次の口が繋ぐ口か：口の数の決まった素の関数（部分適用・穴の関数も）と括りの関数の固定の口（裸の仮引数と最後でない括り）。区間・段18 の点なし・
+// 既定値のある関数（§5 Q126）、恒等射・可変長の口（丸ごと受ける）、撒く項を受けた段は繋がない。
+function spliceMouth(s) {
+  if (!s || !s.fn || s.tainted) return false;
+  const t = s.fn.type;
+  if (t !== "plain" && t !== "pattern") return false;
+  return s.recv.length < fnShape(s.fn).fixed;
+}
+// 恒等射に当てた適用（R29・R126 の単位律：`i X` ≅ X。2項以上なら受けた並びそのもので、`i 5 6` ≅ `5 6`）か。頭は恒等射の項か、恒等射だけを合成した項（`i i`。
+// 合成の木の種類は段の関数を持たないので、項ごとに見る）。撒く項を受けた物（流れ、R51）は見ない。
+const isIdHead = (h) => !!h && (isIdentityKind(h.kind) || (h.t === "compose" && Array.isArray(h.items) && h.items.length > 0 && h.items.every((u) => !!u && isIdentityKind(u.kind))));
+const isIdApply = (t) =>
+  !!t && t.t === "apply" && isIdHead(t.head) && !!t.kind && t.kind.k === "A" && !!t.arg && !isSpreadNode(t.arg) && !(t.arg.t === "construct" && t.arg.items.some(isSpreadNode));
+// 印の無い1行の括りの葉（[r] ≅ r で中を見る所）。
+const isPlainBracket1 = (t) =>
+  !!t && t.t === "leaf" && t.cat === "plain" && !!t.term && t.term.type === "atom" && !t.term.pre.length && !t.term.post.length && t.term.core.c === "bracket" && !!t.view && Array.isArray(t.view.inner) && t.view.inner.length === 1;
+// 項 x の、値を変えない包みを外した木（R142 の数え）：1行の括りは中（[r] ≅ r）、余ったラムダの消えた構築はその1項（vanishedOne）、恒等射に当てた適用は受けた物
+// （isIdApply）。名前は辿らない（sourceOf が辿る）。合成の最後の恒等射が受けた並びのまま閉じた適用（idTail）は、適用そのものが印を持つのでそこで止める：
+// 長さの見えない器を書き下した並び（印 unsizedSeq。`inc i t 5` は `(apply i (construct (apply inc t) 5))`）と、繋いで長さの見える並び（印 spliceElems。`inc i x3 5` は
+// `inc x3 5` と同じく inc の結果・2・3・5 の4つ、単位律 f i ≅ f）。受けた物の構築の頭の `inc t`・`inc x3` は印を持たない。どの歩みも木の中へ1段進むので、木の深さで
+// 止まる（括りを何段重ねても同じ物に着く、[r] ≅ r）。
+function throughOf(x) {
+  let t = x;
+  while (t) {
+    const one = vanishedOne(t);
+    if (one) t = one;
+    else if (isIdApply(t) && !t.unsizedSeq && !t.spliceElems) t = t.arg;
+    else if (isPlainBracket1(t)) t = t.view.inner[0];
+    else break;
+  }
+  return t;
+}
+// 名前 name を今の範囲で引いて、仮引数・実体で渡された物・局所の名前に当たれば、その範囲。ファイルの定義と未定義の名前は null。
+function innerScopeOf(name, ctx) {
+  for (let s = ctx ? ctx.scope : null; s; s = s.parent) {
+    if ((s.descs && s.descs.has(name)) || (s.params && s.params.has(name)) || (s.locals && s.locals.has(name))) return s;
+  }
+  return null;
+}
+// 項 x の出どころ（R142・R143 の数え。名前を中身に置き換えても答えは変わらない、[r] ≅ r）：throughOf で包みを外し、ファイルの値の定義を指す名前は右辺の根へ
+// 辿る（右辺の名前はファイルの範囲で引く、法則47。mayBeFunction・seqResult と同じ。輪は seen で止める）。返す物は、着いた木 tree と、名前を渡ったか crossed
+// （渡ったら要素の木は別の行の物）と、着いた所が前置・後置の印の付いた項（前置 `~` の持ち上げ・`@x` など）なら marked、仮引数・実体で渡された物・局所の
+// 名前なら、その名前 name と範囲 scope。
+function sourceOf(x, ctx) {
+  const seen = new Set();
+  let scope = ctx ? ctx.scope : null;
+  let crossed = false;
+  let t = throughOf(x);
+  for (let depth = 0; t && depth < 64; depth++) {
+    // 恒等射に当てた適用で、受けた物の種類が分からない物（未知の物を受けた `[~t]` の t・覗き読みの残りの名前を受けた `i t`。throughOf は種類が A の物だけ外す）も、
+    // 受けた物が長さの見えない器の名前なら、その名前（R29・R126 の単位律 i X ≅ X。R143 の器は綴りで決め、渡された物の形を見ない）。
+    if (t.t === "apply" && isIdHead(t.head) && !t.unsizedSeq && !t.spliceElems && t.arg && !isSpreadNode(t.arg) && t.arg.t !== "construct") {
+      const inner = sourceOf(t.arg, { ...(ctx || {}), scope });
+      if (inner.name && isRestName(inner)) return { ...inner, crossed: crossed || inner.crossed };
+      break;
+    }
+    if (t.t !== "leaf" || t.cat !== "plain" || !t.term || t.term.type !== "atom") break;
+    if (t.term.pre.length || t.term.post.length) return { tree: t, crossed, marked: true };
+    const c = t.term.core;
+    if (c.c !== "name") break;
+    const s = innerScopeOf(c.name, { scope });
+    if (s) return { tree: t, crossed, name: c.name, scope: s };
+    const def = ctx && ctx.F ? ctx.F.defs.get(c.name) : null;
+    const root = def && !def.lambda && !seen.has(def) ? ctx.F.defRoots.get(def) : null;
+    if (!root) break;
+    seen.add(def);
+    t = throughOf(root);
+    scope = ctx.F.fileScope;
+    crossed = true;
+  }
+  return { tree: t, crossed };
+}
+// R143 の長さの見えない器：出どころ src（sourceOf）が、括りの関数の実体の範囲の残りを受ける名前（`[~t]` の t・`[x ~xs]` の xs、bindParams の restNames）か。
+// 綴りで決める（渡された物の形を見ない）。射影の名前（`[a b]` の b・`[s]` の s）と裸の仮引数は長さの見えない器ではない。
+const isRestName = (src) => !!src.scope && !!src.scope.descs && src.scope.descs.has(src.name) && !!src.scope.restNames && src.scope.restNames.has(src.name);
+// 出どころ src が長さの見えない器なら、名指す残りの名前の葉 from と、そこまでに書き下した関数の綴り via（unsizedSeq の注）。ほかは null。長さの見えない器は、残りの
+// 名前そのものと、それを届く口が1つの所で書き下して残りを後ろに積んだ項（印 unsizedSeq：`inc t` は `inc t0` の後ろに t の残り。外の繋ぐ口では t の要素がまだ届く）。
+// 書き下した並びの後ろに項を積んだ構築（`inc t 5` は R35 で `inc t0`・t の残り・5 と並ぶ）も、頭の項が書き下した並びなら同じ（unsizedMark。外の繋ぐ口では t の
+// 要素がまだ届く：`add (inc t 5)` は `add (inc t) 5` と同じく R143）。合成の最後の恒等射が書き下しの残りを受けて閉じた適用（`inc i t 5`）も、適用そのものが印を持つ
+// （idTail。throughOf はそこで止まる）。残りの名前を頭に書いた並置（`t 5`）は、並置の読み（同じ階に積む）の片で決める。
+// 括って閉じた適用（`(add t)`。中は closeUnsized・unsizedHole の `(unit …)`）は長さの見えない器でなく、書いた所で `!_` と分かる値なので、ここでは印を返さず、外の数え
+// （reachOf・unsizedHole・unsizedInto の書き下し）に入れない：内の数えでもう2つ以上の口に届くと分かっているので、外の適用は外の届く口の数に依らず、後ろに書いた項ごと
+// 同じ `!_` で閉じる（closedStep・closedHole。`(add t) 5` は `add t 5`、`inc (add t)` は合成の `add inc t` と同じ。括りで止めない、U〔答え〕[2026-11-22 07:51:15 UTC
+// 828ee417]「1」）。外の書き下しに入れると、`!_` と分かる値を頭と残りに割ってしまう。
+const unsizedSrc = (src) => (isRestName(src) ? { from: src.tree, via: "" } : unsizedMark(src.tree));
+// 木 t が、長さの見えない器を書き下した並び（印 unsizedSeq）か、それを頭の項に持つ構築か。その印か null。
+function unsizedMark(t) {
+  if (!t) return null;
+  if (t.unsizedSeq) return t.unsizedSeq;
+  if (t.t !== "construct") return null;
+  const live = liveItems(t.items);
+  const head = live.length ? throughOf(live[0]) : null;
+  return head && head.unsizedSeq ? head.unsizedSeq : null;
+}
+const unsizedOf = (x, ctx) => unsizedSrc(sourceOf(x, ctx));
+// 文字列の字面（バックスラッシュと逆引用符の無い物、stringCount）の文字の葉（R142：String ≅ List(Char) は文字に繋ぐ。綴りは文字の字面の `\X`）。字面でなければ null。
+function charTrees(t) {
+  if (!t || t.t !== "leaf" || t.cat !== "plain" || !t.term || t.term.type !== "atom" || t.term.pre.length || t.term.post.length || t.term.core.c !== "lit") return null;
+  if (stringCount(t.term.core) === null) return null;
+  return [...t.term.core.text.slice(1, -1)].map((ch) => ({ t: "leaf", term: null, cat: "plain", desc: scalarDesc(), kind: scalarDesc(), view: { v: "atom", text: `\\${ch}` } }));
+}
+// 項 t が文字列か、文字列を含む並びを運ぶ名前か：文字列の字面（バックスラッシュのある物も）と、それを1行で括った物・文字列を右辺に持つファイルの値の定義の名前
+// （stringLength）と、右辺（出どころ、sourceOf）が文字列を含む並置の名前（`` xs : `ab` `cd` `` の xs）。spliceOf。
+function stringItem(t, ctx) {
+  if (!t || t.t !== "leaf" || t.cat !== "plain" || !t.term || t.term.type !== "atom" || t.term.pre.length || t.term.post.length) return false;
+  const c = t.term.core;
+  if (c.c === "lit") return typeof c.text === "string" && c.text.length >= 2 && c.text[0] === "`" && c.text[c.text.length - 1] === "`";
+  if (stringLength(t) !== null) return true;
+  if (c.c !== "name" || !ctx) return false;
+  const y = sourceOf(t, ctx).tree;
+  if (!y || y === t) return false;
+  if (y.t === "leaf") return stringItem(y, null);
+  return y.t === "construct" && liveItems(y.items).some((u) => stringItem(u, null));
+}
+// 長さの見えない List の desc：要素が全部値の List の形で、長さが書いた所から分からない物。番地・Reader・`!_` と分かる値は入れない。
+const opaqueListDesc = (d) => !!d && d.k === "A" && !d.spread && !!d.shape && d.shape.s === "list" && typeof d.len !== "number" && deepKind(d) === "A" && !readerOf(d) && !zeroOf(d) && !hasAddr(d);
+// 中身の見えない並びの印 seqOf の付いた中身の見えない A：実体の結果で本体の根が長さの見えない List の物（instantiate）と、2つ以上か器を写した貪欲な単項の結果
+// （closeKind）と、届く口が1つの段で中身の見えない並びを受けて残りを後ろに積んだ結果（settle の opaqueFed）と、それを受けた恒等射の結果（closeKind）。形は付けない
+// （鍵と形の綴りは中身の見えない A のまま）。
+function seqDesc() {
+  return { k: "A", seqOf: true };
+}
+const seqOfDesc = (d) => opaqueListDesc(d) || (!!d && d.k === "A" && !d.spread && !!d.seqOf);
+// 種類の未知な、中身の見えない並びでありうる物の印 seqOf の付いた U：実体の本体の根が、届く口が2つ以上の所で中身の見えない並びを受けて閉じた項（印 opaqueSeq、
+// markSaturated・opaqueHole）の物（instantiate。`gg : [x] ? add (tl vs)` の `gg 1` は β の `add (tl vs)` と同じ）。鍵は U のまま（internDesc）。
+function seqU() {
+  return { k: "U", seqOf: true };
+}
+// 項 x の木が、中身の見えない並び（seqOfDesc）か：1行の括りは中を見て（[r] ≅ r。余ったラムダの消えた構築も、その1項）、恒等射に当てた適用は受けた物を見て
+// （R29・R126）、ファイルの値の定義を指す名前は右辺の根を見る（右辺の名前はファイルの範囲で引く。mayBeFunction と同じ）。
+function seqResult(x, ctx) {
+  const seen = new Set();
+  let scope = ctx ? ctx.scope : null;
+  for (let t = x, depth = 0; t && depth < 64; depth++) {
+    if (t.kind && seqOfDesc(t.kind)) return true;
+    const one = vanishedOne(t);
+    if (one) {
+      t = one;
+      continue;
+    }
+    if (isIdApply(t)) {
+      t = t.arg;
+      continue;
+    }
+    if (t.t !== "leaf" || t.cat !== "plain" || !t.term || t.term.type !== "atom" || t.term.pre.length || t.term.post.length) return false;
+    const c = t.term.core;
+    if (c.c === "bracket") {
+      if (!t.view || !Array.isArray(t.view.inner) || t.view.inner.length !== 1) return false;
+      t = t.view.inner[0];
+      continue;
+    }
+    if (c.c !== "name" || !ctx || !ctx.F || innerScopeOf(c.name, { scope })) return false;
+    const def = ctx.F.defs.get(c.name);
+    if (!def || def.lambda || seen.has(def)) return false;
+    seen.add(def);
+    t = ctx.F.defRoots.get(def);
+    scope = ctx.F.fileScope;
+  }
+  return false;
+}
+// 木 t が、中身の見えない適用で閉じた項（印 opaqueSeq：届く口が2つ以上の所で中身の見えない並びを受け、後ろを未知で閉じた項、markSaturated・opaqueHole）か、
+// その項を本体の根に持つ実体の結果（種類 seqU）か、それを項に持つ構築（後ろに書いた項は、その適用が受けたか後ろに積まれたかが値の段で決まる）か。
+const opaqueSeqLeaf = (t) => !!t && (!!t.opaqueSeq || (!!t.kind && t.kind.k === "U" && !!t.kind.seqOf));
+function opaqueSeqTree(t) {
+  if (!t) return false;
+  if (opaqueSeqLeaf(t)) return true;
+  return t.t === "construct" && liveItems(t.items).some((u) => opaqueSeqLeaf(throughOf(u)));
+}
+// 実体の範囲の射影の名前（括りの名前。残りの名前は R143）の desc d が List の形か：器を運ぶ名前（R142）。実体は長さで分けない（R91）ので長さは見ない。
+const projectionSeq = (src, d) => !!src.scope.descs && src.scope.descs.has(src.name) && opaqueListDesc(withoutLen(d));
+// x が繋ぐ並びなら、その要素の葉（要素の desc を持ち、書いた要素の木を elTree に持つ）。長さの見えない器は { unsized: true, from, via }（unsizedSrc）、中身の見えない並びは
+// { opaque: true }。
+// 数えは出どころ（sourceOf）で見る：括りの中・恒等射に当てた物・名前の右辺の根も同じ（[r] ≅ r、R29・R126、名前を中身に置き換えても答えは変わらない）。
+// 繋がない物（数・構造体・番地と印・空・要素に関数か未知が見える器（§5 Q20）・前置 `~` の持ち上げ（要素1つ）・裸の仮引数と数の名前）は null。
+function spliceOf(x, ctx = foldCtx) {
+  if (!x || !x.kind || isSpreadNode(x) || isMark(x) || isHoleItem(x) || x.holeParam || x.writtenEmpty || x.spliceFrom) return null;
+  if (x.cat && x.cat !== "plain") return null;
+  const src = sourceOf(x, ctx);
+  // 印の付いた項：前置 `~` の持ち上げは要素1つ（問5）、`@x`・値の印の付いた項は今のまま1項。
+  if (src.marked) return null;
+  // 長さの見えない器は綴りで決める（R143）ので、要素の種類が分からない残り（未知の物を受けた `[~t]` の t）と、それを書き下した並び（`(uu t)`）も同じ。
+  const unsized = unsizedSrc(src);
+  if (x.kind.k === "U") return unsized ? { unsized: true, ...unsized } : opaqueSeqTree(src.tree) ? { opaque: true } : null;
+  if (x.kind.k !== "A") return null;
+  const d = descOfTree(x);
+  if (!d || d.k !== "A" || d.spread || isScalar(d)) return null;
+  if (readerOf(d) || zeroOf(d) || hasAddr(d)) return null;
+  if (d.shape && d.shape.s === "struct") return null;
+  if (unsized) return { unsized: true, ...unsized };
+  if (opaqueSeqTree(src.tree)) return { opaque: true };
+  // 頭の項が中身の見えない並びの構築（`cc : (tl vs) 5` の cc・`[(tl vs) 5]`）も中身の見えない並び（opaqueHeadTree。書いた `pair (tl vs) 5` と同じく頭と残りに分ける）。
+  if (opaqueHeadTree(src.tree, src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx)) return { opaque: true };
+  // 仮引数・実体で渡された物・局所の名前は、括りの関数の実体の射影の名前で List の形の物だけ中身の見えない並び。裸の仮引数（A）と数の名前は繋がない。
+  if (src.scope) return projectionSeq(src, descOfTree(src.tree)) ? { opaque: true } : null;
+  const y = src.tree;
+  // 文字列は、括りの中で余ったラムダが消えた1項（`(`ab` inc)` は `` `ab` ``、R52・法則16）と、文字列を指すファイルの値の名前も文字の数で数える（excessLength と同じ道）。
+  const n0 = writtenLength(y);
+  const n = n0 !== null ? n0 : stringLengthThrough(y, src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx);
+  if (n === null) return opaqueListDesc(d) || seqResult(x, ctx) ? { opaque: true } : null;
+  if (n === 0) return null;
+  const items = writtenItems(y) || charTrees(y);
+  // 文字列を含む2つ以上の並置（`[`ab` `cd`]`・`` xs : `ab` `cd` `` の xs・`[1 `ab`]`）は、並置の中の文字列が素の口で文字に繋がるかが決まっていない（11-21、§5）ので、
+  // 繋がずに1項で渡す。文字列1つ（`` `ab` ``・`` st : `ab` `` の st、charTrees）は文字に繋ぐ。`,` の積（`[`a` , `bc` `d`]`）は辺が1要素（R140）なので、辺で繋ぐ。
+  const comma = !!y && y.t === "op" && y.sym === ",";
+  if (items && items.length >= 2 && !comma && items.some((t) => stringItem(t, src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx))) return null;
+  // own：要素の木がこの行に書いた物。名前の右辺の木は別の行の物なので、長さだけ desc に移した葉で入れる（spliceInto）。
+  const own = !src.crossed;
+  const leaf = (desc, el, i) => ({ t: "leaf", term: null, cat: "plain", desc, kind: desc, view: { v: "atom", text: el ? show(el) : "·" }, elTree: el, own, spliceFrom: x, spliceIdx: i, spliceN: n });
+  if (items && items.length === n) {
+    if (!items.every((t) => !!t && elementKind(t) === "A")) return null;
+    // 要素の desc は、書いた所で渡す時と同じ（argDescOf：括りで包んだ中身の見えない並びは印 seqOf。名前の右辺の要素はファイルの範囲で見る）。
+    const at = src.crossed ? { F: ctx.F, scope: ctx.F.fileScope } : ctx;
+    return { n, elems: items.map((t, i) => leaf(withLen(elemDescOf(t, at), flowLength(t)), t, i)) };
+  }
+  // 要素の木が見えない物は、要素の desc が数に決まる時だけ、それを n 個繋ぐ（混ぜた要素の desc は印・番地・関数の区別を落とすので繋がない）。
+  const es = elemsOfContainer(d);
+  return es && es.length === 1 && isScalar(es[0]) ? { n, elems: Array.from({ length: n }, (_, i) => leaf(es[0], null, i)) } : null;
+}
+// 段 s の口に来た並びの要素が届きうる決まった口の数（R143）：s の残りの決まった口と、合成で後ろの段に届く口（後ろの段は前の段の結果で口を1つ埋めるので、
+// その段の決まった口 − 1）。恒等射の段は受けた物をそのまま渡す（R29・R126 の単位律）ので数えずに通る。可変長の口（R41）は残りを丸ごと受けるのでそこで数え終わり、
+// 口の数の分からない段（§3.4）の手前で止める。合成は左から実行する（R11）。
+function reachOf(e, s) {
+  const sh = stageShape(s);
+  let total = Math.max((sh.fixed || 0) - s.recv.length, 0);
+  if (sh.varying || sh.unknown) return total;
+  for (const u of e.stages.slice(e.stages.indexOf(s) + 1)) {
+    if (isIdFn(u.fn)) continue;
+    const su = stageShape(u);
+    if (su.unknown) break;
+    total += Math.max((su.fixed || 0) - 1, 0);
+    if (su.varying) break;
+  }
+  return total;
+}
+// 中身の見えない並びを、届く口が1つで後ろに可変長の口の無い段 s が1項で受けた（spliceStep・settle。決まった口が1つなら1項、実装で決めた所）。P1 では
+// 頭の要素が口を埋めて残りは後ろに積まれる（R35）ので、s の結果も中身の見えない並び（印 opaqueFed、settle が seqOf にする。`add (inc (tl vs))` が合成の
+// `tl inc add vs` と同じく add の2つの口へ届く）。後ろに可変長の口がある段は残りをその口が受ける（opaqueSplit）ので、ここには来ない。
+function opaqueFedAt(s) {
+  const sh = stageShape(s);
+  if (!sh.varying && !sh.unknown) s.opaqueFed = true;
+}
+// 段 s の届く口が1つ（最後の決まった口）で、その後ろに可変長の口（最後の括り・`[~xs]`、R41）があるか：中身の見えない並びは頭の要素で決まった口を埋め、残りを
+// 可変長の口が丸ごと受ける（opaqueSplit）。
+function splitMouth(s) {
+  const sh = stageShape(s);
+  return !!sh.varying && !sh.unknown && s.recv.length + 1 === sh.fixed;
+}
+// 中身の見えない並び（中身の見えない A）を、届く口が1つで後ろに可変長の口がある段 s が受けた（spliceStep・settle）：P1 では頭の要素が決まった口を埋め、残り（長さの
+// 見えない残り。空かもしれない）を可変長の口が丸ごと受ける（R64・R41。長さの見えない器の書き下し unsizedInto と同じ：`h t` は a が頭、xs が残り）。頭は中身の
+// 見えない値、残りは中身の見えない並び（長さを数えない印 lenUnknown）。段は並びの終わりで閉じて実体を作る（closeEntry）。並びが空なら呼び終えないので、答えに印
+// saturated を付けない（印 opaqueSplit、markSaturated。R136：関数でありうる）。`h1 : a [~xs] ? a` ⏎ `h1 (tl vs)` は合成の `tl h1 vs` と同じ実体で、leftover-lambda は無い。
+// 書いた並び x（流れなら無い）の要素の下限（lowerOf）が2つ以上なら、残りはその下限から頭の1つを引いた数以上の要素を持つ（印 lowerKnown。名指しの鍵は x、印 restFrom）：
+// R64 の余りの知らせ（noteExcess）は、名前で運んだ `cc : (tl vs) 5 6` の `pb2 cc` も、書いた `pb2 (tl vs) 5 6` と同じく残りを2つ以上と数える（P1・[r] ≅ r）。
+function opaqueSplit(e, s, x) {
+  putArg(e, s, composeLeaf(A()));
+  putArg(e, s, { ...composeLeaf(seqDesc()), lenUnknown: true, ...restLower(x) });
+  e.opaqueSplit = true;
+}
+// 並び x を頭と残りに分けた残りの、要素の下限の印（opaqueSplit・unsizedInto）。下限が無ければ空。
+function restLower(x) {
+  const n = x ? lowerOf(x) - 1 : 0;
+  return n > 0 ? { lowerKnown: n, restFrom: x } : {};
+}
+// 畳み込みの1歩で、いちばん上の関数 top の繋ぐ口に、並び x が来た。繋いだら true（書いた実引数の記録は x 1つ。木は書いた順のまま）。中身の見えない並びは、
+// 届く口が2つ以上の時だけここで読み（opaqueInto）、1つなら、後ろに可変長の口があれば頭と残りに分けて受け（opaqueSplit）、無ければ1項で受ける（false を
+// 返して feed へ）。種類の未知な物（関数でありうる、seqU）は分けず、後ろに可変長の口があれば未知で閉じる（opaqueInto）。
+// 関数かもしれない未知の物（fnMaybeOf：`add (tl vs)`）は、届く口の数に依らず、ここから後ろの項ごと未知で閉じる（opaqueInto。知らせは無く、木は書いた葉のまま）：
+// 要素が1つなら関数で、外の適用は合成（法則1）、2つ以上なら値で、外の適用は頭の要素を受けて残りを積む（R35）ので、どちらに読むかは値の段で決まる
+// （`inc (add (tl vs)) 5` は `k1 (add (tl vs)) 5`・`(add (tl vs)) 5` と同じく未知）。外の適用も、関数かもしれなければ外の外へ同じく及ぶ（`inc (inc (add (tl vs)))`）。
+function spliceStep(top, x) {
+  const s = curStage(top);
+  if (!spliceMouth(s)) return false;
+  if ((!x.cat || x.cat === "plain") && !isSpreadNode(x) && fnMaybeOf(x)) {
+    top.log.push({ k: "arg", tree: x, group: s.group });
+    top.groups[s.group].args.push({ tree: x });
+    opaqueInto(top, s, x);
+    return true;
+  }
+  const sp = spliceOf(x);
+  if (!sp) return false;
+  if (sp.opaque && reachOf(top, s) < 2) {
+    if (!splitMouth(s)) {
+      opaqueFedAt(s); // 1項で受ける。残りは後ろに積まれるので、この段の結果も中身の見えない並び（settle）
+      return false;
+    }
+    top.log.push({ k: "arg", tree: x, group: s.group });
+    top.groups[s.group].args.push({ tree: x });
+    // 種類の未知な物（関数でありうる、seqU）は頭と残りに分けず、可変長の口が受けるかも分からないので、後ろを未知で閉じる（opaqueInto と同じ。合成の
+    // `… add h1 vs` の settle の未知の流れと同じ、法則1）。
+    if (x.kind.k !== "A") opaqueInto(top, s, x);
+    else opaqueSplit(top, s, x);
+    return true;
+  }
+  top.log.push({ k: "arg", tree: x, group: s.group });
+  top.groups[s.group].args.push({ tree: x });
+  if (sp.unsized) unsizedInto(top, s, x, sp);
+  else if (sp.opaque) opaqueInto(top, s, x);
+  else spliceInto(top, sp.elems);
+  return true;
+}
+// 繋いだ段で関数の項が閉じたら、積み上げのいちばん上を木にする。余りを積んだ項（spliceInto）は、書いた `(inc 1 2 3)` と同じく長さの見える並び（頭の結果と余りの
+// 要素）なので、木に要素の葉を持たせる（writtenLength・writtenItems が読む。名前で運んでも同じ：`y : inc x3` ⏎ `add y` と `add (inc 1 2 3)`）。長さの見えない器を
+// 書き下して残りを積んだ項（unsizedInto）は、木に印 unsizedSeq を持たせる（外の繋ぐ口が R143 で数える、spliceOf）。
+function spliceDone(stack, top) {
+  if (!entryDone(top)) return;
+  const tree = markSaturated(top, renderEntry(top));
+  if (top.splicedElems && tree && typeof tree === "object") tree.spliceElems = top.splicedElems;
+  if (top.unsizedSeq && tree && typeof tree === "object") tree.unsizedSeq = top.unsizedSeq;
+  stack[stack.length - 1] = tree;
+}
+// 要素を前から、いちばん最初の閉じていない段の口に入れる（書いた `inc add 1 2 3` と同じ流れ）。関数の項が閉じたら、余りは後ろに積む（R35）：項の種類は、
+// いちばん後ろの段の結果と余りの要素を合わせた List の形（書き下しの writeOut と同じ）。結果が値と分からなければ種類の未知な物。
+// 口に入れるのは、この行に書いた要素で書いた所（term）を持つ物ならその木（R64 の知らせの鍵・R91 の長さがその木で見える）、ほかは要素の葉（spliceFrom から
+// 書いた並びが分かり、長さは desc の len）。
+function spliceInto(e, elems) {
+  let i = 0;
+  for (; i < elems.length; i++) {
+    const cur = curStage(e);
+    if (!cur) break;
+    const el = elems[i];
+    putArg(e, cur, el.own && el.elTree && el.elTree.term ? el.elTree : el);
+  }
+  if (i >= elems.length) return;
+  const last = e.stages[e.stages.length - 1];
+  if (!last.result || last.result.k !== "A") {
+    last.result = U();
+    e.groups[last.group].result = last.result;
+    return;
+  }
+  const head = last.result;
+  last.result = withShape({ s: "list", elem: mergeElems([head, ...elems.slice(i).map((t) => t.desc)]) });
+  e.groups[last.group].result = last.result;
+  e.splicedElems = [composeLeaf(head), ...elems.slice(i).map((t) => composeLeaf(t.desc))];
+}
+// 中身の見えない並び x が、届く口が2つ以上の段 s に来た：何個の口を埋めるかは値の段で決まるので、s から後ろの段を種類の未知で閉じる（settle の未知の流れと同じ。
+// 後ろの項は積まれる）。呼び終えたかも、後ろの項を受けたかも分からない（要素が1つなら部分適用）ので、答えに印 saturated を付けず、印 opaqueSeq の中身の見えない
+// 並びでありうる物にする（R136：関数でありうる、markSaturated）。閉じる前に、並びより前に書いた実引数の門を見る（seatGate。並びの要素は下限 lowerOf の数と数える）。
+// x が関数かもしれない未知の物（fnMaybeOf の fm。届く口が1つの所でも spliceStep がここへ回す）なら、x を関数と読んだ時（並びの要素が1つ）も読む：外の段は合成と
+// 同じく x の前に入って後ろの値を先に受け（法則1：`inc (f3 $inc (tl vs)) 5` は `(f3 $inc (tl vs)) (inc 5)`）、口が全部埋まれば x へ流れ込む値の数（flowInto）を
+// 足して x の門を読み直す（fm.gate。要素が2つ以上なら x の中で口が埋まるので、どの長さでも同じ門に当たる：`f3 $inc a b` も `f3 $inc a (inc 5)` も形 $L A A の G7）。
+// この適用も、どの長さでも中の口が全部埋まると分からなければ関数かもしれない物（印 fnMaybe、markSaturated が木に移す）：並びと読んで下限の長さで s から後ろの口が
+// 全部埋まり（fillsAll）、x が関数かもしれないなら、関数と読んでも外の段が埋まって流れ込んだ値で x の口が全部埋まる（fm.fill）時だけ、値と分かる。
+// fill(k)・gate(k) は、さらに外から k 個の値が流れ込んだ時の読み（外の適用・括った頭の後ろの値が読む）。前に書いた実引数は、受ける前の pre で数える。
+function opaqueInto(e, s, x) {
+  const later = laterValues(e);
+  const lower = lowerOf(x);
+  const pre = s.recv.slice();
+  const fm = fnMaybeOf(x);
+  const flow = (k) => flowInto(e, s, later + k, pre);
+  const gate = (k) => {
+    seatGate(e, s, lower + later + k, pre);
+    const m = fm ? flow(k) : 0;
+    if (m > 0) fm.gate(m);
+  };
+  const fill = (k) => {
+    if (!fillsAll(e, s, lower + later + k, pre)) return false;
+    if (!fm) return true;
+    const m = flow(k);
+    return m > 0 && fm.fill(m);
+  };
+  gate(0);
+  argOperand(s, x);
+  s.recv.push(x);
+  e.opaqueRest = true;
+  if (!fill(0)) e.fnMaybe = { fill, gate };
+  settle(e, s, U());
+}
+// 段 s から後ろの段が、口を埋める値 avail 個で全部埋まるか（seatGate と同じ数え：s は前に書いた実引数 pre の後ろの口、後ろの段は前の段の結果1つと流れで受ける。
+// 恒等射の段は単位律で数えずに通し、可変長の口の段は決まった口と可変長の口の1つが埋まれば並びの終わりで閉じる）。口の数の分からない段があれば埋まると分からない。
+function fillsAll(e, s, avail, pre = s.recv) {
+  for (let j = e.stages.indexOf(s); j >= 0 && j < e.stages.length; j++) {
+    const u = e.stages[j];
+    if (isIdFn(u.fn)) continue;
+    const sh = stageShape(u);
+    if (sh.unknown || !u.fn) return false;
+    const need = Math.max((sh.fixed || 0) - (u === s ? pre.length : 1) + (sh.varying ? 1 : 0), 0);
+    if (avail < need) return false;
+    if (sh.varying) return true;
+    avail -= need;
+  }
+  return true;
+}
+// R142：項 x が、関数かもしれない未知の物か。その読み { fill, gate }（opaqueInto の注）か null。中身の見えない並びを受けて閉じた適用で、下限の長さでは中の口が
+// 全部埋まらない物（印 fnMaybe：`add (tl vs)` は要素が1つなら部分適用。`add (tl vs) 5` はどの長さでも値）。出どころ（sourceOf）で見るので、括り・名前の右辺の根も同じ
+// （P1・[r] ≅ r）。恒等射に当てた適用は受けた物（R29・R126 の単位律：`i (add (tl vs))` ≅ `add (tl vs)`）。頭がそれの構築（`(f3 (tl vs)) 5`）は、関数と読めば
+// 後ろに書いた値の項（と穴）を頭が受ける（法則5）ので、その数を足しても頭の口が全部埋まらない時だけ関数かもしれない。値の並び（頭が値）と、括らない `,`・`|`・`;` は
+// 境目で、ここへ来ない（項の種類が未知でない・印が無い）。括りの関数の実体の結果（`gg : [x] ? add (tl vs)` の `gg 1`）は関数かもしれない物でない：返す所の裸の関数は
+// R125 で `!_` なので、実体の結果はどの長さでも関数にならない（印は木の物だけを見る。`inc (gg 1) 5` は A、`(gg 1) 5` は中身の見えない並びを頭に置いた未知）。
+// 辿りは深さで打ち切らず、同じ木に戻ったら止める（x はいつも部分木か名前の右辺の根へ下りる。深く重ねた `i (i (… (add (tl vs))))` も同じ読み）。
+function fnMaybeOf(x, ctx = foldCtx) {
+  let shift = 0;
+  const seen = new Set();
+  while (x) {
+    if (!x.kind || x.kind.k !== "U") return null;
+    const src = sourceOf(x, ctx);
+    const t = src.tree;
+    if (!t || seen.has(t)) return null;
+    seen.add(t);
+    if (src.crossed && ctx && ctx.F) ctx = { F: ctx.F, scope: ctx.F.fileScope };
+    const own = t.fnMaybe || null;
+    if (own) {
+      const fm = own;
+      const n = shift;
+      if (!n) return fm;
+      return fm.fill(n) ? null : { fill: (k) => fm.fill(n + k), gate: (k) => fm.gate(n + k) };
+    }
+    if (t.t === "apply" && isIdHead(t.head) && t.arg && t.arg.t !== "construct") {
+      x = t.arg;
+      continue;
+    }
+    if (t.t !== "construct") return null;
+    const live = liveItems(t.items);
+    if (live.length < 2) return null;
+    const rest = live.slice(1);
+    // 頭が同じ並びで閉じた適用そのもの（`k1 (add (tl vs)) 5` の `k1 (add (tl vs))`）なら、後ろの項は閉じる時に後ろに書いた値の項（laterValues）として
+    // 数えてあるので足さない。括り・名前の頭（`(f3 (tl vs)) 5`）は、括りの中で閉じたので、ここで足す。
+    if (!live[0].fnMaybe) shift += valueCount(rest) + rest.filter(isHoleItem).length;
+    x = live[0];
+  }
+  return null;
+}
+// R142：関数かもしれない未知の物 x が、繋ぐ口でない口（可変長の口が受ける残り・最後の括り・点なしの口・口の数の分からない段）に来た。どの口でも、x を関数と読めば
+// 外の適用は合成（法則1）、値と読めば今の読みなので、木は今のまま（feed）で、この段から後ろの答えの種類を未知にする（印 fnMaybeIn、settle）。x を関数と読んだ時の
+// 門（opaqueInto と同じ）を先に見て、この適用も、どの長さでも中の口が全部埋まると分からなければ関数かもしれない物にする（markSaturated）。恒等射の段は受けた物
+// そのもの（単位律）なので、ここでは読まない（fnMaybeOf が恒等射の適用の中を見る）。
+function fnMaybeFeed(e, x) {
+  const s = curStage(e);
+  if (!s || isIdFn(s.fn) || (x.cat && x.cat !== "plain") || isSpreadNode(x)) return;
+  const fm = fnMaybeOf(x);
+  if (!fm) return;
+  const later = laterValues(e);
+  const lower = lowerOf(x);
+  const pre = s.recv.slice();
+  const flow = (k) => flowInto(e, s, later + k, pre);
+  const gate = (k) => {
+    const m = flow(k);
+    if (m > 0) fm.gate(m);
+  };
+  const fill = (k) => {
+    if (!fillsAll(e, s, lower + later + k, pre)) return false;
+    const m = flow(k);
+    return m > 0 && fm.fill(m);
+  };
+  gate(0);
+  s.fnMaybeIn = true;
+  e.fnMaybeIn = { fill, gate };
+}
+// 畳み込みの i 番目の項 x が関数かもしれない未知の物で、いちばん上が空か値（法則5：`X F Y` は `X (F Y)`）：x を関数と読めば後ろに書いた値の項と穴（穴は穴の規則で口の席を
+// 取る）を受けるので、その数を足して x の門を読み直す（`(f3 $inc (tl vs)) 5` は、要素が1つなら `f3 $inc a 5`、2つ以上なら `f3 $inc a b` で、どちらも形 $L A A の G7。
+// 括らない `f3 $inc (tl vs) 5` と同じ、括りで止めない）。木と種類は今のまま（積んで、後ろの項ごと未知）。
+function fnMaybeHead(st, i, x) {
+  const q = foldSeq;
+  if (!q || q.st !== st) return;
+  const fm = fnMaybeOf(x);
+  if (!fm) return;
+  const after = st.items.slice(i + 1).filter((t) => !isMark(t));
+  const extra = valueCount(after) + after.filter(isHoleItem).length;
+  if (extra > 0) fm.gate(extra);
+}
+// 門を見る実引数の desc か：印のある実引数（R81 で実体を作る。関数の番地 `$inc`・値を読む参照・`!_` と分かる値）と、番地の算術の点・差（R62、readerAtPlain）。
+const gateArg = (d) => monoMarked(d) || plainReaderArg(d);
+// 畳み込みでいま e が受けている並びの、いま読んでいる項より後ろに書いた値の項が、口を埋める数の下限（seatGate）。値の項は1つ、撒く項は流れの数（R51：撒いた流れは、
+// 着いた段の残りの口を書き下しか畳み込みで埋める。数えられない流れと長さ 0 の流れは 0）。書いた `!_`・`!_` と分かる値・穴・関数・種類の未知な項は数えない。
+// e がいちばん上でなければ（入れ子の畳み込みの中）0。
+function laterValues(e) {
+  const q = foldSeq;
+  if (!q || !q.st || q.st.stack[q.st.stack.length - 1] !== e) return 0;
+  return valueCount(q.st.items.slice(q.at + 1));
+}
+// 項の並び items のうち、口を埋める値の項の数（laterValues と同じ数え：値の項は1つ、撒く項は流れの数。書いた `!_`・`!_` と分かる値・穴・関数・種類の未知な項は数えない）。
+function valueCount(items) {
+  let n = 0;
+  for (const t of items) {
+    if (isMark(t) || t.writtenEmpty || isHoleItem(t) || !t.kind || t.kind.k !== "A") continue;
+    if (!isSpreadNode(t)) n++;
+    else if (typeof flowCount(t) === "number") n += flowCount(t);
+  }
+  return n;
+}
+// 並び x の要素の数の下限（seatGate・holeSeatGate の数え、頭と残りに分けた残りの下限 restLower）。並びは頭の要素を1つ以上持つと読む（R143 の書き下しと同じ）。
+// 頭の項が中身の見えない並びの構築（opaqueHeadTree：`(tl vs) 5`）と、長さの見えない器を書き下した並びの後ろに項を積んだ構築（`inc t 5` は頭の項が印 unsizedSeq、
+// 合成の最後の恒等射が受けて閉じた `inc i t 5` は適用が印 unsizedSeq を持つ、idTail）は、頭の1つに後ろに書いた値の項の数（valueCount）を足す：書いた
+// `f3 $inc (tl vs) 5` で後ろの 5 が口を埋めるのと同じく、括った `f3 $inc ((tl vs) 5)`・名前で運んだ `cc : (tl vs) 5` の `f3 $inc cc` でも 5 が口を埋める（P1・[r] ≅ r）。
+// 出どころ（sourceOf）で見るので、括り・恒等射・名前で包んでも同じ。ほかは 1。
+function lowerOf(x, ctx = foldCtx) {
+  const src = sourceOf(x, ctx);
+  let t = src.tree;
+  // 恒等射の尾で閉じた適用は、受けた物（単位律 i X ≅ X。`inc i i t 5` の内の恒等射も通す）で数える。
+  const tail = !!t && t.t === "apply" && !!t.unsizedSeq && isIdHead(t.head);
+  if (tail) while (t && t.t === "apply" && isIdHead(t.head) && t.arg) t = t.arg;
+  if (!t || t.t !== "construct") return 1;
+  const live = liveItems(t.items);
+  if (live.length < 2) return 1;
+  const at = src.crossed && ctx && ctx.F ? { F: ctx.F, scope: ctx.F.fileScope } : ctx;
+  const head = throughOf(live[0]);
+  if (!tail && !(head && head.unsizedSeq) && !opaqueHeadTree(t, at)) return 1;
+  return 1 + valueCount(live.slice(1));
+}
+// 中身の見えない並びか長さの見えない器が、届く口が2つ以上の段 s に来て、s から後ろを閉じる前に（opaqueInto・closeUnsized・settle の中身の見えない流れ）、
+// 並びより前に書いた実引数（部分適用で当てた物・穴の関数の頭に当てた物も）の門を見る。前に書いた実引数の席は並びの長さに依らない（並びの要素はその後ろの口から
+// 入る）。並びは頭の要素を1つ以上持つと読む（R143 の書き下しと同じ）ので、並びを要素1つと見た流れ（いちばん口の埋まらない読み。要素が増えれば埋まる口が増える
+// だけ）で、後ろに書いた値の項と合わせて、s と、合成で後ろの段（前の段の結果1つと流れで受ける。恒等射の段は単位律で数えずに通す、R29・R126）を前から埋めて
+// いく。口が全部埋まる段（可変長の口なら1つ以上受ける段。並びの終わりで閉じて呼ばれる、R41）は必ず呼ばれる（R25）ので、印のある実引数を持てば、並びの要素と後ろの
+// 項の席を印の無い A にした適用を、口が全部埋まった所と同じ門で読む（seatCheck）。当たれば、並びを1項で受けた時と同じ門と名指しで断る（`f3 $inc (tl vs) 5` は
+// `f3` を形 $L A A で呼んだ実体の G7、`bf : a [b] c ? a + c` ⏎ `bf $inc (tl vs) 5` も `bf` を形 $L A A で呼んだ実体の G7、`pf : f3 $inc` ⏎ `inc pf (tl vs) 5` は合成の
+// 後ろの段の G7。入れ子の `pf (inc (tl vs)) 5` と同じ、法則1）。埋まると分からない段で数え終わる（`f3 $inc (tl vs)` は要素が1つなら部分適用で、呼ばれない）。
+// 口の数の分からない段（§3.4）の手前でも止める。avail は口を埋める数：並びの要素の下限（lowerOf。頭の項が中身の見えない並びの構築は後ろに書いた値も数える）と後ろに
+// 書いた値の項（laterValues）の和。括って閉じた適用を外の適用が受けた所（closedStep）は、外から流れ込む値の数を足して読み直す（印 unsizedGate）。
+function seatGate(e, s, avail, pre0 = s.recv) {
+  for (let j = e.stages.indexOf(s); j >= 0 && j < e.stages.length; j++) {
+    const u = e.stages[j];
+    if (isIdFn(u.fn)) continue;
+    const sh = stageShape(u);
+    if (sh.unknown || !u.fn) return;
+    const pre = u === s ? pre0 : [];
+    const inflow = u === s ? 0 : 1;
+    const need = Math.max((sh.fixed || 0) - pre.length - inflow + (sh.varying ? 1 : 0), 0);
+    if (avail < need) return;
+    const fn = u.fn;
+    const held = [...(fn.bound || []), ...pre.map(descOfTree), ...(fn.holeArgs ? fn.holeArgs.filter((t) => !t.holeParam).map(descOfTree) : [])];
+    if (held.some(gateArg)) seatCheck(fn, [...pre, ...Array.from({ length: inflow + need }, () => composeLeaf(A()))]);
+    if (sh.varying) return; // 可変長の口は残りを丸ごと受ける
+    avail -= need;
+  }
+}
+// seatGate の確かめ：口が全部埋まった段（fn に trees を当てた）を、口が全部埋まった所と同じ門で読む。素の関数は R81 の印のある実引数の実体と R60 の Reader の門
+// （plainApplyKind）、穴の関数は頭の素の関数の適用（法則6、doneKind と同じ）、括りの関数は実体（R24・R25）。木と知らせは出さない（R64 の余りの知らせは呼んだ所が
+// 出す）。実体は、本体が門に当たる時だけ呼んだ所と同じ道で断り、当たらなければ呼んだとは数えない（gateProbe、instantiate）。R34 の k < n の関数は最後の括りが
+// 閉じた所（restCloseKind）で読むので見ない。
+function seatCheck(fn, trees) {
+  gateProbe++;
+  try {
+    if (fn.type === "pattern") fn.instantiate(trees.map(argDescOf));
+    else if (fn.type === "plain" && !fn.rest) {
+      if (fn.holeHead) plainApplyKind(fn.holeHead, holeFill(fn, trees));
+      else if (fn.origin !== "hole") plainApplyKind(fn, trees);
+    }
+  } finally {
+    gateProbe--;
+  }
+}
+// seatGate の穴の並び（opaqueHole・unsizedHole、R16・R34）：頭 h の実引数の並び ts の j 番目が中身の見えない並びか長さの見えない器。それより前の実引数と穴は席が
+// 並びの長さに依らない。並びを1つと数えた実引数の数が頭の口の数 n 以上なら、穴の規則は必ず実体を作る（穴が残れば穴の関数の本体、埋まれば適用。R81）か断る
+// （前から n 個の外の穴は G13）ので、並びの要素の席を印の無い A にした並びを、同じ穴の規則で読む（tryHole・holeRefusal・plainApplyKind）。当たれば、その門で断る
+// （`f3 _ $inc (tl vs)` は形 A $L A の実体の G7、`add _ _ _ (tl vs)` は G13）。並びより後ろの実引数と穴は、席が並びの長さで変わるので見ない。並びは要素の下限
+// （lowerOf）の数と数え、括って閉じた適用を外の適用が受けた所（closedStep）は、外から来た項の数 extra を足して読み直す。
+function holeSeatGate(h, ts, j, ctx, extra = 0) {
+  const n = h.kind.fn.n;
+  if (ts.length - 1 + lowerOf(ts[j], ctx) + extra < n) return;
+  const pre = ts.slice(0, j);
+  const fill = Array.from({ length: Math.max(1, n - j) }, () => composeLeaf(A()));
+  const marked = pre.some((t) => !isHoleItem(t) && gateArg(descOfTree(t)));
+  if (!pre.some(isHoleItem)) {
+    if (marked) plainApplyKind(h.kind.fn, [...pre, ...fill].slice(0, n));
+    return;
+  }
+  if (!marked && !pre.slice(n).some(isHoleItem)) return;
+  const chk = [h, ...pre, ...fill];
+  if (tryHole(chk, ctx)) return;
+  const refusal = holeRefusal(chk);
+  if (!refusal) return;
+  // 言い分の実引数の数は書いた並びで言う（`add _ _ _ (tl vs) 5` は書いた5つ、R142 の数え）。書いた並びが同じ門に当たらなければ、確かめた並びの言い分のまま。
+  const written = holeRefusal([h, ...ts]);
+  throw written && written.gate === refusal.gate ? written : refusal;
+}
+// R143：長さの見えない器 x（spliceOf の sp：名指す残りの名前の葉 from と、書き下した関数の綴り via）が、段 s の決まった口に来た。届く口が2つ以上なら、書いた所で
+// `!_`（closeUnsized）。1つなら書き下し：頭の要素で埋め、残り（長さの見えない残り。空かもしれない）は、次に開いている段が可変長の口か口の数の分からない口なら丸ごと
+// 入れ、どの段も閉じれば後ろに積む（項の種類は A のまま）。後ろに積んだ項は、長さの見えない器を書き下した並び（印 unsizedSeq、spliceDone）：`add (inc t)` の add は、
+// 合成の `inc add t` と同じく t の要素が inc の口と add の2つ目の口に届くので R143（法則1。`inc (inc t)`・`add 1 (inc t)` は外の届く口も1つなので書き下しのまま）。
+// 印 unsizedSeq は、名指す残りの名前の葉 from と、書き下した関数を書いた順に並べた綴り via（知らせの言い分は合成の綴り `inc add` と同じになる）。
+function unsizedInto(e, s, x, sp) {
+  if (reachOf(e, s) >= 2) return closeUnsized(e, s, x, sp);
+  const d = descOfTree(x);
+  const es = d && d.k === "A" ? elemsOfContainer(d) : null;
+  putArg(e, s, composeLeaf(es && es.length === 1 ? es[0] : d && d.k === "A" ? A() : U()));
+  const cur = curStage(e);
+  if (cur) {
+    const sh = stageShape(cur);
+    // 合成の後ろが恒等射だけで、その最初の段が残りを受けたら、受けた並びのまま閉じる（単位律）ので、残りに書き下しの印 unsizedRest を持たせる（恒等射の段から段へ
+    // 渡し、最後の段の settle の idTail が項の印 unsizedSeq にする）。
+    const tail = e.stages.slice(e.stages.indexOf(cur)).every((u) => isIdFn(u.fn)) ? { unsizedRest: { from: sp.from, via: unsizedVia(sp, e, s) } } : null;
+    if (sh.unknown || (sh.varying && cur.recv.length >= sh.fixed)) putArg(e, cur, { ...composeLeaf(d && d.k === "A" ? withoutLen(d) : U()), lenUnknown: true, ...restLower(x), ...tail });
+    return;
+  }
+  const last = e.stages[e.stages.length - 1];
+  if (last.result && last.result.k === "A") {
+    last.result = A();
+    e.groups[last.group].result = last.result;
+  }
+  e.unsizedSeq = { from: sp.from, via: unsizedVia(sp, e, s) };
+}
+// 書き下した関数の綴り：x が書き下した並びなら、その via の後ろに、e の段 s から後ろの組の関数（合成の `inc add` の綴りと同じ順、R11）。
+const unsizedVia = (sp, e, s) => [sp && sp.via, ...e.groups.slice(s.group).map((g) => show(g.item))].filter(Boolean).join(" ");
+// R143 の閉じ：段 s に長さの見えない器 x が来て、届く口が2つ以上。この適用を、後ろに書いた項ごと `!_` にする（木は書いた適用を包んだ `(unit …)`。R70 の closeEmpty
+// と同じ出し方、renderEntry）。書いた所で `!_` と分かるので、種類は印 zero の A（R49。値の口と並びの項でも、ほかの `!_` と分かる値と同じく消える：R112・R137、
+// `$[add t]` は R56 で同じ `!_` と分かる値）。後ろの項はこの適用の実引数として書いた順に木に入れ（並びの単位の書いた `!_` は消え、R15・R28。値の口だけの段では
+// `!_` と分かる値も消える、R112・R137）、並びの畳み込みはここで終える（foldSeq.stop、foldItems）。知らせは書いた所ごとに1つ（reportUnsized。書き下した並びなら、
+// 名指すのは中の残りの名前）。閉じる前に、器より前に書いた実引数の門を見る（seatGate：`f3 $inc t 5` は口が必ず埋まるので、実体の G7。器の要素は下限 lowerOf の数）。
+function closeUnsized(e, s, x, sp) {
+  closeOuter(e, s, lowerOf(x));
+  reportUnsized(foldCtx, sp && sp.from ? sp.from : x, unsizedVia(sp, e, s));
+}
+// R143 の閉じの出し方（closeUnsized・closedStep）：門を見てから（seatGate。口を埋める数は、段 s に来た物の要素の下限 lower と後ろに書いた値の項の数）、段 s から後ろを、
+// 後ろに書いた項ごと印 zero の `!_` にする（木は書いた適用を包んだ `(unit …)`、renderEntry）。知らせは呼ぶ側が出す。
+// 段 s に来た物が括って閉じた適用（closedStep。innerGate はその門の読み直し）なら、外の段は合成と同じく閉じの前に入る（法則1：`inc (f3 $inc t) 5` は `(f3 $inc t) (inc 5)`、
+// `add 1 (f3 $inc t) 5` は `(f3 $inc t) (add 1 5)`）ので、後ろの値で外の段の口が全部埋まると分かれば、閉じに流れ込む値の数（flowInto）を足して inner の門を読み直す
+// （`f3 $inc t (inc 5)` と同じ G7。括らない形と同じ答え）。この適用の門の読み直し（印 unsizedGate、renderEntry が `(unit …)` に付ける）は、さらに外から流れ込む値の
+// 数 k を足して同じ門を読む（括りの外の `(i (f3 $inc t)) 5` も G7）。
+function closeOuter(e, s, lower, innerGate = null) {
+  const later = laterValues(e);
+  const seats = laterUnitSeats(e);
+  // k は外から流れ込む値の数、sk は外の後ろに書いた `!_` と分かる値の数（括った頭の閉じ、closedStep）。
+  const gate = (k, sk = 0) => {
+    seatGate(e, s, lower + later + k);
+    const m = innerGate ? flowInto(e, s, later + k, s.recv, seats + sk) : 0;
+    if (m > 0) innerGate(m);
+  };
+  gate(0);
+  e.unsizedGate = gate;
+  const q = foldSeq;
+  // 値の口だけの段（素の関数。部分適用・穴の関数も）が受ける後ろの項では、`!_` と分かる値（R49 の印 zero の物、seqUnitItem）も、値の口でも積んだ所でも消える
+  // （R112・R137。前に書いた `add w t` と同じ木）。括りの口では空の器で席を取りうる（R122）ので残す。
+  const valueOnly = e.stages.slice(e.stages.indexOf(s)).every((u) => !!u.fn && u.fn.type === "plain");
+  e.unsizedValueOnly = valueOnly; // 閉じを括った外の適用（closedStep の頭）も、同じ段の読みで `!_` と分かる値を落とす
+  if (q && q.st && q.st.stack[q.st.stack.length - 1] === e) {
+    for (const t of q.st.items.slice(q.at + 1)) {
+      if (isMark(t) || (valueOnly && seqUnitItem(t))) continue;
+      e.log.push({ k: "arg", tree: t, group: s.group });
+      e.groups[s.group].args.push({ tree: t });
+    }
+    q.stop = true;
+  }
+  const inner = renderEntry(e);
+  for (let j = e.stages.indexOf(s); j < e.stages.length; j++) {
+    const t = e.stages[j];
+    t.done = true;
+    t.result = zeroDesc();
+    e.groups[t.group].result = t.result;
+  }
+  e.unsizedOut = inner;
+}
+// 括って閉じた適用を段 s が受けた所（closeOuter）で、合成と同じく閉じの前に入る段（s から後ろの段）が、後ろに来た値 n 個で口を全部埋めれば、閉じに流れ込む値の数：
+// 最後の段の結果1つと余った値（後ろの段は前の段の結果1つを受ける、seatGate と同じ数え。恒等射の段は単位律で受けた物をそのまま渡すので、恒等射だけなら n 個全部）。
+// 可変長の口の段（R41）は、seatGate と同じく、決まった口と可変長の口の1つを埋めれば並びの終わりで閉じて呼ばれ、残りを丸ごと受けるので、流れ込むのはその段の結果1つ
+// （書いた長さ1 の `n (f3 $inc 1) 5` は `(f3 $inc 1) (n 5)` で、f3 を形 $L A A で呼ぶ）。埋まると分からない（足りない・口の数の分からない段）なら 0。
+// 埋めるのが括りの関数の可変長の口の1つだけの時は、後ろに書いた `!_` と分かる値 seats（laterUnitSeats）も、括りの口で空の器として席を取る（R122）ので、その1つを埋める
+// （書いた `n (f3 $inc 1) w` は `(f3 $inc 1) (n w)` で、f3 を形 $L A … で呼ぶ）。決まった口が残る段（`h : a [~xs]`）では、`!_` と分かる値がどの口の席を取るかが
+// 並びの順で変わるので数えない。
+function flowInto(e, s, n, pre = s.recv, seats = 0) {
+  let need = 0;
+  let fixed = false;
+  for (let j = e.stages.indexOf(s); j >= 0 && j < e.stages.length; j++) {
+    const u = e.stages[j];
+    if (isIdFn(u.fn)) continue;
+    const sh = stageShape(u);
+    if (sh.unknown || !u.fn) return 0;
+    const here = Math.max((sh.fixed || 0) - (u === s ? pre.length : 1) + (sh.varying ? 1 : 0), 0);
+    need += here;
+    fixed = true;
+    if (sh.varying) return n >= need || (need === 1 && here === 1 && !sh.fixed && seats > 0 && u.fn.type === "pattern") ? 1 : 0;
+  }
+  if (n < need) return 0;
+  return fixed ? 1 + n - need : n;
+}
+// 畳み込みでいま e が受けている並びの、いま読んでいる項より後ろに書いた `!_` と分かる値の項（R49 の印 zero の物、seqUnitItem）の数（flowInto の可変長の口の席）。
+function laterUnitSeats(e) {
+  const q = foldSeq;
+  if (!q || !q.st || q.st.stack[q.st.stack.length - 1] !== e) return 0;
+  return q.st.items.slice(q.at + 1).filter(seqUnitItem).length;
+}
+// 括って閉じた適用の門の読み直し（印 unsizedGate）のうち、穴の規則の門（holeSeatGate）を、実体の確かめと同じく呼んだとは数えずに読む（gateProbe、seatCheck と同じ）。
+function probeGate(f) {
+  gateProbe++;
+  try {
+    f();
+  } finally {
+    gateProbe--;
+  }
+}
+// R143 の warning（unsized-container）。書いた所（器を書いた項）ごとに1回：括りの関数の実体ごとに本体を読み直しても、呼ぶ行が何本でも1つ。読まない本体（R25）と
+// 種類を出すだけの段（diag が null）では出さない。名指しするのは残りの名前（括りの中・恒等射に当てた所に書いても、`[i t]` でなく t。sourceOf）。
+function reportUnsized(ctx, x0, fname) {
+  if (!ctx || !ctx.diag || !ctx.F) return;
+  const x = sourceOf(x0, ctx).tree || x0;
+  const key = x.term || x;
+  if (ctx.F.reportedUnsized.has(key)) return;
+  ctx.F.reportedUnsized.add(key);
+  const text = show(x);
+  pushDiag(
+    ctx,
+    "unsized-container",
+    text,
+    `長さの見えない器 \`${text}\` の要素が、\`${fname}\` の2つ以上の決まった口に届くので、この適用は後ろに書いた項ごと \`!_\` になりました。長さの見えない器は括りの口で受けます（\`f3 : [~xs] ? …\` のように仮引数を括りにする。§4 R143）。`
+  );
+}
+// 穴の並び（unsizedHole・closedHole・opaqueHole）の、器より後ろに書いた穴の G13（D の考え：どの長さでも断るなら先に断る）。器（長さの見えない器・中身の見えない並び・
+// 括った閉じ）は1要素以上なので、器より後ろに書いた穴の位置は、器を1要素と数えた位置以上。器をどれも A の葉1つに置いた並び（ほかの器を運ぶ項は繋いだ後の要素、R142）で、
+// 前から n 個の外に穴があって R34 が読まない形（holeMismatch が読まず、g13Of が断る）なら、器がどの長さでも断るので、その並び（長さ1の読み）を穴の規則で読んだ答えと
+// 言い分（実引数の数も、その並びの数）で断る（`add _ t _ 5` は書いた `add _ 1 _ 5` と同じ G13 で、実引数は4つ）。器より前にも穴があれば、どの長さでも G13。器が全部の
+// 穴より前（`add t _ _`・`f3 $inc t _ _`）なら、G13 は長さ1の時で、長さ2以上は器の要素が前から n 個の口を埋め、後ろの穴は R46・Q15 の G7（括らない `_` が関数 `_` の
+// 可変長の口に入る位置。書いた `add 1 2 _ _`）か、器より前の印のある実引数の実体の門（`f3 $inc 1 2 _ _` の G7・`f3 $vs 1 2 _ _` の G21）で断る。読み方は holeMismatch
+// と同じ：穴でない項が全部値なら、前から n 個の値の口に着いた `!_` と分かる値を先に読み直し（emptyArgsAtValue、R94・R105）、その外の `!_` と分かる値は数える
+// （`add _ t w _ 5` は書いた `add _ 1 w _ 5` と同じく 5つ）。単調なのは G13 だけなので、器より後ろに書いた値の門は見ない（`add _ t $inc` の $inc の席は器の長さで変わる。書いた `add _ (add 1 2 3) $inc` は A）。呼ぶ所は、
+// 器の並びの `!_` と分かる値を読み直す前と、器より前に書いた実引数の門（holeSeatGate）より前：書いた並びでも、穴の規則は実体を作る前に断る（`f3 _ $inc t _ _` は
+// 書いた `f3 _ $inc 1 _ _` と同じ G13）。
+function boxHoleG13(h, ts, ctx) {
+  const isBox = (t) => !isHoleItem(t) && (closedUnsized(t) || !!unsizedOf(t, ctx) || !!(spliceOf(t, ctx) || {}).opaque);
+  const one = [h, ...ts.map((t) => (isBox(t) ? composeLeaf(A()) : t))];
+  const chk = spliceHoleItems(one, ctx) || one;
+  const n = h.kind.fn.n;
+  if (!chk.slice(1 + n).some(isHoleItem)) return;
+  if (chk.slice(1).every((t) => isHoleItem(t) || isValueItem(t))) emptyArgsAtValue(h, chk.slice(1, 1 + n));
+  const refusal = g13Of(chk);
+  if (refusal) throw refusal;
+}
+// R143 の穴の並び（R16・R34）：素の関数の頭の実引数に長さの見えない器（残りの名前と、それを書き下した並び、unsizedOf）があり、ほかの穴でない項が全部値なら、器の要素が
+// 届きうる決まった口は、頭の口のうち器より前に書いたほかの値が埋めない口（器の要素は R34 で穴の口にも入る：`add _ 1 2` は `add 2 1`。器より後ろの値は器が短い時に
+// だけ口を埋めるので、届きうる口を減らさない：`add _ t 5` の t は2つ目の口と穴に届く）。2つ以上なら、頭と書いた実引数の並びを `!_` に
+// して知らせる（closeUnsized と同じ）。ほかの値の数は繋いだ後の要素で数える（R142）。`!_` と分かる値（`w`・`zz`・`(1 & inc)`、印 writtenEmpty）は値の口で消える
+// （R112・R105）ので数えず、閉じる前に同じ位置に書いた `!_` と同じに読み直す（emptyArgsAtValue。読み直した並びは消した綴りと同じ）。閉じる前に、器より後ろに書いた穴の
+// G13（boxHoleG13）と、器より前に書いた実引数の門（holeSeatGate）を見る。当たらなければ null（穴の規則が読む）。
+function unsizedHole(items, ctx) {
+  const h = items[0];
+  if (!isPlainHead(h)) return null;
+  const ts = items.slice(1);
+  const us = ts.map((t) => (isHoleItem(t) ? null : unsizedOf(t, ctx)));
+  const j = us.findIndex(Boolean);
+  if (j < 0) return null;
+  let filled = 0;
+  for (let i = 0; i < ts.length; i++) {
+    const t = ts[i];
+    if (isHoleItem(t) || us[i] || t.writtenEmpty) continue;
+    if (!isValueItem(t)) return null; // 関数・未知・撒く項があれば穴の規則の外（今のまま）
+    const sp = spliceOf(t, ctx);
+    if (i < j) filled += sp && sp.n ? sp.n : 1; // 器より後ろの値は数えない（上の注）
+  }
+  if (h.kind.fn.n - filled < 2) return null;
+  boxHoleG13(h, ts, ctx);
+  emptyArgsAtValue(h, ts.filter((t) => !isHoleItem(t)));
+  holeSeatGate(h, ts, j, ctx);
+  reportUnsized(ctx, us[j].from, [us[j].via, show(h)].filter(Boolean).join(" "));
+  const arg = ts.length === 1 ? ts[0] : { t: "construct", items: ts, kind: A() };
+  return { t: "unit", inner: { t: "apply", head: h, arg, kind: { k: "L" } }, kind: zeroDesc(), unsized: true, valueOnly: true, unsizedGate: (k) => probeGate(() => holeSeatGate(h, ts, j, ctx, k)) };
+}
+// R143 の穴の並び（R16・R34）：素の関数の頭の実引数に括って閉じた適用（closedUnsized）があれば、外の適用は頭と書いた実引数の並びごと `!_`（closedStep と同じく、
+// 外の届く口は数えない。木は書いた並びを包んだ `(unit …)` で、穴は書いた `_` のまま）。ほかの `!_` と分かる値（`w`）は値の口で消える（R112・R105）ので、閉じる前に
+// 同じ位置に書いた `!_` と同じに読み直す（emptyArgsAtValue。閉じた括りそのものは読み直さない）。当たらなければ null。
+// 閉じる前に見る門（D の考え：どの長さでも断るなら先に断る）：
+// - 穴・閉じた括り・`!_` と分かる値のほかに関数（種類 L）か撒く項があれば、穴の規則が先に読む（null）。`w` と同じに見るのはこの関数と撒く項の門（G7・G13）だけで、
+//   `add _ inc (add t)` は `add _ inc w` と同じ G7、`add _ (add t) vs~` は `add _ w vs~` と同じ G13。ほかの席の答えは `w` と同じでない：器より後ろに書いた印のある実引数の
+//   `add _ (add t) $inc`・`f3 _ (add t) $inc 5` は、書いた `add _ (add 1 2 3) $inc` が A になるように閉じの長さで席が変わるので、R143 の `!_` のまま。種類の未知な項
+//   （中身の見えない並び）は今のまま閉じる。
+// - 閉じの中の門（closedInnerGate。`add _ (f3 $inc t) 5` は G7）、器より後ろに書いた穴の G13（boxHoleG13。`add _ (add t) _` は G13）、閉じた括りより前に書いた
+//   実引数の門（holeSeatGate：`add _ _ _ (add t)` は G13）の順。
+// 知らせ（Q104 の芯：書いた所ごとに1つ）：閉じの中の t は中の閉じが書いた所で出した。並びに括らずに書いた長さの見えない器（`add _ t (add t)` の前の t）も、閉じに依らず
+// 2つ以上の決まった口に届くなら、その器の warning を出す（unsizedReach。器より前の閉じは1つ以上の席を取るので、`add _ (add t) t` の後ろの t は口に1つしか届かない）。
+function closedHole(items, ctx) {
+  const h = items[0];
+  if (!isPlainHead(h)) return null;
+  const ts = items.slice(1);
+  const j = ts.findIndex(closedUnsized);
+  if (j < 0) return null;
+  const outside = (t) => !isHoleItem(t) && !closedUnsized(t) && !t.writtenEmpty && (isSpreadNode(t) || (!!t.kind && t.kind.k === "L") || (!!t.desc && !!t.desc.spread));
+  if (ts.some(outside)) return null;
+  closedInnerGate(h, ts, ctx);
+  boxHoleG13(h, ts, ctx);
+  emptyArgsAtValue(h, ts.filter((t) => !isHoleItem(t) && !closedUnsized(t)));
+  holeSeatGate(h, ts, j, ctx);
+  ts.forEach((t, i) => {
+    const u = isHoleItem(t) ? null : unsizedOf(t, ctx);
+    if (u && unsizedReach(h, ts, i, ctx) >= 2) reportUnsized(ctx, u.from, [u.via, show(h)].filter(Boolean).join(" "));
+  });
+  const arg = ts.length === 1 ? ts[0] : { t: "construct", items: ts, kind: A() };
+  return { t: "unit", inner: { t: "apply", head: h, arg, kind: { k: "L" } }, kind: zeroDesc(), unsized: true, valueOnly: true, unsizedGate: (k) => probeGate(() => holeSeatGate(h, ts, j, ctx, k)) };
+}
+// 穴の並び ts の i 番目に括らずに書いた長さの見えない器の要素が届きうる、頭 h の決まった口の数（unsizedHole の数えと同じ：器より前に書いた値が埋めない口。穴の口にも
+// 入る、R34）。器より前の値は1つ（器を運ぶ項は繋いだ後の要素の数、R142）、閉じた括り・中身の見えない並び・長さの見えない器はいちばん少なく1つの席を取り、穴と
+// `!_` と分かる値は席を取らない（値の口で消える、R112・R105）。器より後ろの値は器が短い時にだけ口を埋めるので数えない。
+function unsizedReach(h, ts, i, ctx) {
+  let filled = 0;
+  for (const t of ts.slice(0, i)) {
+    if (isHoleItem(t) || isMark(t) || (t.writtenEmpty && !closedUnsized(t))) continue;
+    const sp = closedUnsized(t) ? null : spliceOf(t, ctx);
+    filled += sp && sp.n ? sp.n : 1;
+  }
+  return h.kind.fn.n - filled;
+}
+// 穴の並び（closedHole）の、括った閉じの中の門（D の考え）。閉じ（`(f3 $inc t)`）は、t が短くて中の口が埋まらなければ関数で、埋まれば中の門（器より前に書いた印のある
+// 実引数の席、closeOuter の印 unsizedGate）で読む物。穴の規則が閉じを関数の項に置いた並びを断り（holeSplitsFn）、中の門も中の口が全部埋まる数で断るなら、どの長さでも
+// 断るので、中の門の断りを出す：`add _ (f3 $inc t) 5` は、書いた長さ1 の `add _ (f3 $inc 1) 5` が穴の規則の G7、長さ2 の `add _ (f3 $inc 1 2) 5` が f3 を形 $L A A で
+// 呼んだ実体の G7 なので、その実体の G7。片方が通るなら閉じのまま（`add 5 _ (f3 $inc t)` は、書いた `add 5 _ (f3 $inc 1)` が通る）。中の門は木と知らせを出さない読み
+// （probeGate・seatCheck）。中の口が全部埋まる数は、どの段の口の数よりも多い数（余りは使わない）。
+const FILL_ALL = 1 << 20;
+function closedInnerGate(h, ts, ctx) {
+  if (!holeSplitsFn(h, ts, ctx)) return;
+  for (const t of ts) {
+    const g = closedUnsized(t) ? throughOf(t).unsizedGate : null;
+    if (g) probeGate(() => g(FILL_ALL));
+  }
+}
+// 穴の規則が、括った閉じを関数の項に置いた並びを断るか：閉じは頭の口を埋めず（後ろに合成される）、最初の穴は頭の段の口に入るので、そこで頭の口が2つ以上残れば
+// 穴の読みと恒等射の読みが割れて G7（holeStep、R46）。最初の穴より前に、値の項（器を運ぶ項は繋いだ後の要素の数、R142）・`!_` と分かる値（値の口で消える）・閉じの
+// ほかの項（種類の未知な項・長さの見えない器）があれば、口の数えが決まらないので断ると言わない。
+function holeSplitsFn(h, ts, ctx) {
+  const k = ts.findIndex(isHoleItem);
+  if (k < 0) return false;
+  let filled = 0;
+  for (const t of ts.slice(0, k)) {
+    if (closedUnsized(t) || isMark(t) || t.writtenEmpty) continue;
+    if (!isValueItem(t) || unsizedOf(t, ctx)) return false;
+    const sp = spliceOf(t, ctx);
+    if (sp && sp.opaque) return false;
+    filled += sp && sp.n ? sp.n : 1;
+  }
+  return h.kind.fn.n - filled >= 2;
+}
+// R142 の穴の並び（R16・R34）：素の関数の頭の実引数に中身の見えない並び（spliceOf の opaque）があり、ほかの穴でない項が全部値なら、並びの要素が届きうる決まった口は、
+// unsizedHole と同じく頭の口のうち並びより前に書いたほかの値が埋めない口（穴の口も入る。`!_` と分かる値は数えず、閉じる前に読み直す）。2つ以上なら、何個の口を埋めるか（穴が残って関数か、
+// 埋まって値か）は値の段で決まるので、書いた適用の木（穴は書いた `_` のまま）を種類の未知で返す（leftover-lambda も saturated も付けない）。外の繋ぐ口には中身の見えない
+// 並びでありうる物（印 opaqueSeq、markSaturated の opaqueRest と同じ：`add (add _ (tl vs))` は合成の `tl (add _) add` と同じく外の add の2つの口へ届きうる）。閉じる前に、
+// 並びより前に書いた実引数の門を見る（holeSeatGate）。当たらなければ null（穴の規則が読む）。
+function opaqueHole(items, ctx) {
+  const h = items[0];
+  if (!isPlainHead(h)) return null;
+  const ts = items.slice(1);
+  const sps = ts.map((t) => (isHoleItem(t) ? null : spliceOf(t, ctx)));
+  const j = sps.findIndex((sp) => !!sp && !!sp.opaque);
+  if (j < 0) return null;
+  let filled = 0;
+  for (let i = 0; i < ts.length; i++) {
+    if (isHoleItem(ts[i]) || (sps[i] && sps[i].opaque) || ts[i].writtenEmpty) continue;
+    if (!isValueItem(ts[i])) return null; // 関数・未知・撒く項があれば穴の規則の外（今のまま）
+    if (i < j) filled += sps[i] && sps[i].n ? sps[i].n : 1; // 並びより後ろの値は、並びが短い時にだけ口を埋める（unsizedHole と同じ）
+  }
+  if (h.kind.fn.n - filled < 2) return null;
+  boxHoleG13(h, ts, ctx);
+  emptyArgsAtValue(h, ts.filter((t) => !isHoleItem(t)));
+  holeSeatGate(h, ts, j, ctx);
+  // 下限の長さ（中身の見えない並びは lowerOf の数、長さの見える器は要素の数）で値の項が頭の口の数に足りなければ、穴か開いた口が残るので関数かもしれない物
+  // （印 fnMaybe、opaqueInto の注。`add _ (tl vs)` は要素が1つなら穴の関数、`add _ (tl vs) 5` はどの長さでも値）。外から k 個の値が来れば穴の関数がそれを受ける。
+  const n = h.kind.fn.n;
+  const vals = ts.reduce((c, t, i) => (isHoleItem(t) || t.writtenEmpty ? c : c + (sps[i] && sps[i].opaque ? lowerOf(t, ctx) : sps[i] && sps[i].n ? sps[i].n : 1)), 0);
+  const fnMaybe = vals < n ? { fill: (k) => vals + k >= n, gate: (k) => probeGate(() => holeSeatGate(h, ts, j, ctx, k)) } : null;
+  return { t: "apply", head: h, arg: ts.length === 1 ? ts[0] : { t: "construct", items: ts, kind: U() }, kind: U(), opaqueSeq: true, ...(fnMaybe ? { fnMaybe } : {}) };
+}
+// 手順2 の穴の並び（R16・R34・R89）で、器を運ぶ項を繋いだ後の要素に開いた並び（k は繋いだ後の要素で数える、R142）。開く物が無ければ null。
+// 頭は素の関数と括りの関数（名前の定義か `?` の括り）。既定値のある関数の頭は §5 Q126 で開かない。
+function spliceHoleItems(items, ctx) {
+  const h = items[0];
+  const fn = h && h.cat === "plain" && h.kind && h.kind.k === "L" && (h.isLambdaName || h.isQBracket) ? h.kind.fn : null;
+  if (!fn || !(isPlainHead(h) || fn.type === "pattern")) return null;
+  let opened = false;
+  const out = [h];
+  for (const t of items.slice(1)) {
+    const sp = isHoleItem(t) ? null : spliceOf(t, ctx);
+    if (sp && sp.elems) {
+      out.push(...sp.elems);
+      opened = true;
+    } else out.push(t);
+  }
+  return opened ? out : null;
+}
+// 穴の木の中で、同じ器から開いた要素が前から全部並んだ所を、書いた器の葉に戻す（木は書いた綴りで描く）。欠けた所は要素の木で描く。
+function collapseSplice(items) {
+  const out = [];
+  for (let i = 0; i < items.length; ) {
+    const t = items[i];
+    if (t && t.spliceFrom && t.spliceIdx === 0) {
+      let ok = true;
+      for (let j = 0; j < t.spliceN; j++) {
+        const u = items[i + j];
+        if (!u || u.spliceFrom !== t.spliceFrom || u.spliceIdx !== j) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        out.push(t.spliceFrom);
+        i += t.spliceN;
+        continue;
+      }
+    }
+    out.push(t && t.spliceFrom && t.elTree ? t.elTree : t);
+    i++;
+  }
+  return out;
+}
+function unspliceTree(tree) {
+  if (!tree || typeof tree !== "object") return tree;
+  if (tree.t === "hole") return { ...tree, body: unspliceTree(tree.body) };
+  if (tree.t === "apply") {
+    const a = tree.arg;
+    if (a && a.t === "construct") {
+      const items = collapseSplice(a.items.map(unspliceTree));
+      return { ...tree, arg: items.length === 1 ? items[0] : { ...a, items } };
+    }
+    if (a && a.spliceFrom) return { ...tree, arg: a.spliceN === 1 ? a.spliceFrom : a.elTree || a };
+    return tree;
+  }
+  if (tree.t === "construct") return { ...tree, items: collapseSplice(tree.items.map(unspliceTree)) };
+  return tree;
+}
+
 // 撒く項 t の流れの要素の数（classifySpread が葉に付けた数）。数えられなければ null。
 function flowCount(t) {
   if (!isSpreadNode(t)) return null;
@@ -10111,6 +11596,24 @@ function entryFn(e) {
 // （口の数の決まった段は foldStep で、口が可変長の段は並びの終わりの closeEntry で閉じた所）。
 // `?` の関数は本体の返す所の裸の関数を `!_` にする（R125）ので、呼び終えた答えは関数でない（mayBeFunction）。
 function markSaturated(e, tree) {
+  // 届く口が2つ以上の所で中身の見えない並びを受けて後ろを未知で閉じた項（R142、opaqueInto・settle の opaqueRest）は、呼び終えたかも、後ろに書いた項を受けたか
+  // 積んだかも値の段で決まるので、印 saturated を付けず、外の繋ぐ口には中身の見えない並び（印 opaqueSeq、spliceOf の opaqueSeqTree）。
+  // 下限の長さで中の口が全部埋まらない物は、関数かもしれない物の読み（印 fnMaybe、opaqueInto・settle）も木に持たせる（外の繋ぐ口と括った頭の後ろが fnMaybeOf で読む）。
+  if (e.opaqueRest) {
+    if (tree && typeof tree === "object") {
+      tree.opaqueSeq = true;
+      if (e.fnMaybe) tree.fnMaybe = e.fnMaybe;
+    }
+    return tree;
+  }
+  // 繋ぐ口でない口に関数かもしれない物を受けた項（fnMaybeFeed）も、呼び終えたかが値の段で決まるので印 saturated を付けず、どの長さでも口が埋まると分からなければ
+  // 関数かもしれない物の読みを木に持たせる。
+  if (e.fnMaybeIn) {
+    if (tree && typeof tree === "object" && !e.fnMaybeIn.fill(0)) tree.fnMaybe = e.fnMaybeIn;
+    return tree;
+  }
+  // 中身の見えない並びを頭と残りに分けて受けた項（opaqueSplit）は、並びが空なら呼び終えないので印 saturated を付けない（R136：関数でありうる）。
+  if (e.opaqueSplit) return tree;
   const last = e.stages[e.stages.length - 1];
   const t = last && last.fn && last.fn.type;
   if ((t === "plain" || t === "pattern") && tree && typeof tree === "object" && tree.t !== "unit") tree.saturated = true;
@@ -10161,6 +11664,9 @@ function mayBeFunction(item) {
 function renderEntry(e) {
   // 空の流れで閉じた関数の項（R70、closeEmpty）は、余ったラムダを `(unit …)` で包んだ `!_`。
   if (e.emptyOut) return { t: "unit", inner: e.emptyOut, kind: A() };
+  // 長さの見えない器で閉じた適用（R143、closeUnsized）も、後ろに書いた項ごとの書いた適用を `(unit …)` で包んだ `!_`（書いた所で `!_` と分かる値なので印 zero）。
+  // 門の読み直し（closeOuter の印 unsizedGate）は、括った外の適用が受けた所（closedStep）で読む。
+  if (e.unsizedOut) return { t: "unit", inner: e.unsizedOut, kind: zeroDesc(), unsized: true, ...(e.unsizedValueOnly ? { valueOnly: true } : {}), ...(e.unsizedGate ? { unsizedGate: e.unsizedGate } : {}) };
   const done = entryDone(e);
   const kind = done ? e.stages[e.stages.length - 1].result : { k: "L", fn: entryFn(e) };
   // 2026-10-26 の R28 の書き直しの前は、並びの最後の「終わり」の `_`（印 endMark。前の綴り）を、最後の組の実引数の後ろに書いていた（`add 3 _` は
@@ -10524,6 +12030,7 @@ export function resolve(source) {
     namedLambdas: new Map(),
     valueMemo: new Map(),
     valueCounts: new Map(), // 値の定義 → 右辺の器の数（nameKindOf・valueCountOf）
+    flatDefs: new Set(), // 右辺が書いた数の葉だけの並置の値の定義（nameKindOf・flatDefOf）
     stringCounts: new Map(), // 値の定義 → 右辺の文字列の文字の数（nameKindOf・stringCountOf。撒いた流れの数だけが読む）
     bodyMemo: new Map(),
     stack: [],
@@ -10538,8 +12045,10 @@ export function resolve(source) {
     reportedBare: new Set(),
     // `$` が関数以外を持ち上げた（R100）warning を出した、書いた `$` の項（reportLift）。
     reportedLift: new Set(),
-    // 括りの名前の無い要素（R64）の information を出した、括りに入った最初の実引数の書いた所（noteExcess）。
+    // 括りの名前の無い要素（R64）の information を出した、括りに入った最初の実引数の書いた所（noteExcess・excessKey）。
     reportedExcess: new Set(),
+    // 長さの見えない器（R143）の warning を出した、器を書いた項（reportUnsized）。
+    reportedUnsized: new Set(),
     // 括りの関数の実体（R24・R25）：鍵 → 実体、書いた `?` → 範囲の鍵 → その `?` を通って呼んだ実体（recordCall）、
     // 根の種類の仮置きの記録、木を解いている途中の実体、定義の行の `?` の木（最後に実体で埋める）、実体の本体の
     // 診断の出し先。
