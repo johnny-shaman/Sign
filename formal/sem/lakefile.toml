@@ -1,0 +1,10 @@
+name = "SignSem"
+version = "0.1.0"
+defaultTargets = ["SignSem", "signsem"]
+
+[[lean_lib]]
+name = "SignSem"
+
+[[lean_exe]]
+name = "signsem"
+root = "Main"
