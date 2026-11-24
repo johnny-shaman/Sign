@@ -9,7 +9,8 @@ alpha1/javascript が扱う文字列は ECMA-262 の String 型（§6.1.4）で�
 - 対の無いサロゲート（対になっていない 0xD800〜0xDFFF の単位）も、ほかの単位と同じ1つの値で、U+FFFD に替えない。
 - Lean の String と Char を通さない。String は対の無いサロゲートを持てず、`Char.ofNat 0xD800` は `'\0'` になる。だから
   `ToString JStr` と `Coe JStr String` は置かない（`s!` に JStr を入れると組めない。文は JStr の `++` で組む）。String から JStr へは
-  `ofString` で、`Coe String JStr` があるので字面の文字列はそのまま JStr の所に書ける。JStr から String へは `toStringPhi` だけ。
+  `ofString` で、`Coe String JStr` があるので字面の文字列はそのまま JStr の所に書ける。JStr から String へは、失わない `toString?`
+  （対の無いサロゲートがあれば断る）だけ。
 - 公理：ここの定義は Classical.choice に依らない（`#print axioms` は SignSem/Axioms.lean で固める）。Lean 4.36 の UInt16 の `==` は
   choice に依るので、`instBEqUInt16Decide` で置き換える。UInt16 の `<`・`≤`（`UInt16.decLt`・`UInt16.decLe`）はそのままで公理なし。
 - import は Init だけ。
@@ -298,22 +299,22 @@ where
         else go (k + 1) (acc.push u) r
 
 /--
-Lean の String に直す（φ）：対は BMP の外の字1つに、対の無いサロゲートは U+FFFD に、ほかの単位はその字に。Lean の Json.parse が
-`\ud800` を読むのと同じ替え方。JS の答えを Lean の Json の値で比べる間だけの道具で、使ってよいのは SignSem/Json.lean だけ
-（段の file は使わない）。
+Lean の String に失わずに直す：対は BMP の外の字1つに、ほかの単位はその字に。対の無いサロゲートが1つでもあれば `none`（String は
+それを持てないので、替えずに断る）。使い道は、`jsonStringify` を通した文（対の無いサロゲートは escape になっていて、断ることは無い）と
+知らせの文を出すことだけ。燃料は単位の数で、1回で1単位以上進むので尽きない。
 -/
-def toStringPhi (s : JStr) : String := go 0 "" s.size
+def toString? (s : JStr) : Option String := go 0 "" s.size
 where
-  go (k : Nat) (acc : String) : Nat → String
-    | 0 => acc
+  go (k : Nat) (acc : String) : Nat → Option String
+    | 0 => some acc
     | r + 1 =>
       match s.get? k with
-      | none => acc
+      | none => some acc
       | some u =>
         if pairAt s k then
           let v := s.getD (k + 1) 0
           go (k + 2) (acc.push (Char.ofNat (0x10000 + (u.toNat - 0xD800) * 0x400 + (v.toNat - 0xDC00)))) r
-        else if isSurrogate u then go (k + 1) (acc.push (Char.ofNat 0xFFFD)) r
+        else if isSurrogate u then none
         else go (k + 1) (acc.push (Char.ofNat u.toNat)) r
 
 /-! ## 確かめ（期待は node v24.16.0 で取った値） -/
@@ -385,9 +386,14 @@ where
   lookup ⟨#[0xD800]⟩ [(⟨#[0xFFFD]⟩, 1), (⟨#[0xD800]⟩, 2)] == some 2
 -- 対の無いサロゲート
 #guard hasLone ⟨#[0x78, 0xD83D, 0xDE00, 0xDC00]⟩ && !hasLone "x😀" && hasLone ⟨#[0xDE00, 0xD83D]⟩
--- φ：対は字1つに、対の無いサロゲートは U+FFFD に
-#guard decide (toStringPhi ⟨#[0x78, 0xD83D, 0xDE00, 0xDC00]⟩ = "x😀�")
-#guard (ofString (toStringPhi "é😀<")) == ("é😀<" : JStr)
+-- 失わない直し：対の無いサロゲート（逆さの対も）があれば断り、無ければ往復で戻る
+#guard (toString? ⟨#[0x78, 0xD83D, 0xDE00]⟩).map (fun t => decide (t = "x😀")) == some true
+#guard (toString? ⟨#[0x78, 0xD83D, 0xDE00, 0xDC00]⟩).isNone && (toString? ⟨#[0xDE00, 0xD83D]⟩).isNone &&
+  (toString? ⟨#[0xD800]⟩).isNone
+#guard (toString? "é😀<�").map ofString == some ("é😀<�" : JStr) && (toString? empty).map ofString == some empty
+-- JSON.stringify の出力は対の無いサロゲートを持たないので、失わずに直せる
+#guard (toString? (jsonStringify ⟨#[0xD800, 0xD83D, 0xDE00, 0xDC00]⟩)).map (fun t => decide (t = "\"\\ud800😀\\udc00\"")) ==
+  some true
 
 end JStr
 

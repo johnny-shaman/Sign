@@ -1,10 +1,11 @@
 import SignSem.Front
 import SignSem.JStr
+import SignSem.JV
 
 /-!
 # 公理の確かめ
 
-前段の入口と JS の文字列の道具が、どの公理に依るかを `#print axioms` の出力ごと固める。`lake build` がこの file を組む度に
+前段の入口と JS の文字列の道具と JSON の読み手が、どの公理に依るかを `#print axioms` の出力ごと固める。`lake build` がこの file を組む度に
 照らし、出力が1字でも変われば組み立てが止まる。
 
 - 的は Classical.choice に依らないこと（formal/sem/README.md の `#print axioms` の項）。Lean 4.36 では String・Int・UInt16 の
@@ -44,3 +45,13 @@ import SignSem.JStr
 /-- info: 'SignSem.JStr.jsonStringify' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms SignSem.JStr.jsonStringify
+
+/-- info: 'SignSem.JStr.toString?' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SignSem.JStr.toString?
+
+/-! JS の値としての JSON の読み手（`JV.parse` は燃料で止まる普通の定義なので、`#print axioms` は中身を辿る）。 -/
+
+/-- info: 'SignSem.JV.parse' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms SignSem.JV.parse

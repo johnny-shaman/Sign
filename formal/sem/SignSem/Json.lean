@@ -1,169 +1,165 @@
-import Lean.Data.Json
 import SignSem.Syntax
+import SignSem.JV
 
 /-!
 # 構文の木と JSON
 
-formal/check/sem の道具が alpha1 から書き出す JSON（stages.jsonl）と、`SignSem.Syntax` の木を行き来する。
+formal/check/sem の道具が alpha1 から書き出す JSON（stages.jsonl）と、`SignSem.Syntax` の木を行き来する。JSON の値は JS の値としての
+JSON（`JV`、SignSem/JV.lean）。
 
 - 行の木の形は rowsjson.mjs の exportRows と同じ（core.raw を落とし、行の根に `line`）。
 - 語の行の形は `{at, line, q, w}`、囲みの語は `{tag, rows}`（道具の dump.mjs）。
-
-JS の文字列（`JStr`）と Lean の Json の文字列（Lean の String）の間の替え方 φ は、この file にだけ置く。
-
-- 入る側：Lean の `Json.parse` は、対の無いサロゲートの escape（`\ud800` など）を U+FFFD に替えて読む（これが φ）。読んだ String を
-  `JStr.ofString` で単位の並びにする（`JStr.fromJson`）。だから JSON から来た JStr に対の無いサロゲートは無い。
-- 出る側：JStr を `JStr.toStringPhi` で String にして `Json.str` に置く（`JStr.toJson`）。対の無いサロゲートは U+FFFD になり、
-  ほかの単位と対はそのまま字になる。
-- `JStr.toStringPhi` を呼ぶのはこの file だけ。ほかの file が JStr を Json にする時は `JStr.toJson` を使う。
+- 文字列の欄は JS の文字列（`JStr`）のまま `JV.str` に入り、そのまま出る。対の無いサロゲートも1つの単位のままで、ほかの字に替えない。
+- 数の欄（行・位置・段）は 0 以上の整数（`JV.num`）。値の無い欄は、行の木の `line` は鍵ごと書かず、ほかは `null`（道具の書き方と同じ）。
+- 物は `JV.mkObj` で作る（鍵は `JStr.lt` の順に並ぶ）。ここでは鍵をその順に書いておくので、並べ替えは走らない。
 
 ここは道具なので `partial def` で書く（中身の性質は証明しない）。
 -/
 
 namespace SignSem
-open Lean
 
-/-- JStr を Json の文字列に（出る側の φ：`JStr.toStringPhi`）。 -/
-def JStr.toJson (s : JStr) : Json := Json.str s.toStringPhi
+/-- JStr を JSON の文字列に。 -/
+@[inline] def JStr.toJson (s : JStr) : JV := .str s
 
-/-- Json の文字列を JStr に（Lean の `Json.parse` が φ を当てた後の String を `JStr.ofString` で）。文字列でなければ断り。 -/
-def JStr.fromJson (j : Json) : Except String JStr := JStr.ofString <$> j.getStr?
+/-- JSON の文字列を JStr に（文字列でなければ断り）。 -/
+@[inline] def JStr.fromJson (j : JV) : Except String JStr := j.getStr?
 
-/-- JStr の並びを Json の配列に（`JStr.toJson` を要素ごとに）。 -/
-def JStr.listToJson (xs : List JStr) : Json := Json.arr (xs.map JStr.toJson).toArray
+/-- JStr の並びを JSON の配列に。 -/
+def JStr.listToJson (xs : List JStr) : JV := .arr (xs.map JStr.toJson).toArray
 
-/-- Json の配列を JStr の並びに（`JStr.fromJson` を要素ごとに）。 -/
-def JStr.listFromJson (j : Json) : Except String (List JStr) := do
+/-- JSON の配列を JStr の並びに（要素が文字列でなければ断り）。 -/
+def JStr.listFromJson (j : JV) : Except String (List JStr) := do
   let a ← j.getArr?
   a.toList.mapM JStr.fromJson
 
-private def optJson {α} (f : α → Json) : Option α → Json
-  | none => Json.null
+private def optJson {α} (f : α → JV) : Option α → JV
+  | none => .null
   | some a => f a
 
-def Enc.tag : Enc → String
+/-- 行の木の根の `line` の欄（値が無ければ鍵ごと書かない）。 -/
+private def lineField (line : Option Nat) : List (JStr × JV) :=
+  match line with
+  | some l => [("line", JV.ofNat l)]
+  | none => []
+
+def Enc.tag : Enc → JStr
   | .bracket => "bracket"
   | .abs => "abs"
   | .norm => "norm"
   | .indent => "indent"
 
-def Enc.ofTag? : String → Option Enc
-  | "bracket" => some .bracket
-  | "abs" => some .abs
-  | "norm" => some .norm
-  | "indent" => some .indent
-  | _ => none
+def Enc.ofTag? (t : JStr) : Option Enc :=
+  if t == "bracket" then some .bracket
+  else if t == "abs" then some .abs
+  else if t == "norm" then some .norm
+  else if t == "indent" then some .indent
+  else none
 
 mutual
 
-partial def Row.toJson : Row → Json
+partial def Row.toJson : Row → JV
   | .seq terms line =>
-    Json.mkObj <| [("type", Json.str "seq"), ("terms", Json.arr (terms.map Term.toJson).toArray)] ++
-      (match line with | some l => [("line", Lean.toJson l)] | none => [])
+    JV.mkObj <| lineField line ++ ([("terms", .arr (terms.map Term.toJson).toArray), ("type", .str "seq")] : List (JStr × JV))
   | .op sym stage left right line =>
-    Json.mkObj <| [("type", Json.str "op"), ("sym", sym.toJson), ("stage", Lean.toJson stage),
-      ("left", optJson Row.toJson left), ("right", optJson Row.toJson right)] ++
-      (match line with | some l => [("line", Lean.toJson l)] | none => [])
+    JV.mkObj <| ([("left", optJson Row.toJson left)] : List (JStr × JV)) ++ lineField line ++
+      ([("right", optJson Row.toJson right), ("stage", JV.ofNat stage), ("sym", sym.toJson), ("type", .str "op")] : List (JStr × JV))
 
-partial def Term.toJson : Term → Json
+partial def Term.toJson : Term → JV
   | .atom pre core post =>
-    Json.mkObj [("type", Json.str "atom"), ("pre", JStr.listToJson pre), ("core", Core.toJson core),
-      ("post", JStr.listToJson post)]
+    JV.mkObj [("core", Core.toJson core), ("post", JStr.listToJson post), ("pre", JStr.listToJson pre), ("type", .str "atom")]
   | .infix sym stage left right =>
-    Json.mkObj [("type", Json.str "infix"), ("sym", sym.toJson), ("stage", Lean.toJson stage),
-      ("left", optJson Term.toJson left), ("right", optJson Term.toJson right)]
+    JV.mkObj [("left", optJson Term.toJson left), ("right", optJson Term.toJson right), ("stage", JV.ofNat stage),
+      ("sym", sym.toJson), ("type", .str "infix")]
 
-partial def Core.toJson : Core → Json
-  | .name s => Json.mkObj [("c", Json.str "name"), ("name", s.toJson)]
-  | .lit t => Json.mkObj [("c", Json.str "lit"), ("text", t.toJson)]
+partial def Core.toJson : Core → JV
+  | .name s => JV.mkObj [("c", .str "name"), ("name", s.toJson)]
+  | .lit t => JV.mkObj [("c", .str "lit"), ("text", t.toJson)]
   | .unit nId nVoid =>
-    Json.mkObj <| [("c", Json.str "unit")] ++ (if nId then [("nId", Json.bool true)] else []) ++
-      (if nVoid then [("nVoid", Json.bool true)] else [])
-  | .enc k rows => Json.mkObj [("c", Json.str k.tag), ("rows", Json.arr (rows.map Row.toJson).toArray)]
+    JV.mkObj <| ([("c", .str "unit")] : List (JStr × JV)) ++
+      ((if nId then [("nId", .bool true)] else []) : List (JStr × JV)) ++
+      ((if nVoid then [("nVoid", .bool true)] else []) : List (JStr × JV))
+  | .enc k rows => JV.mkObj [("c", .str k.tag), ("rows", .arr (rows.map Row.toJson).toArray)]
 
 end
 
-private def optField (j : Json) (k : String) : Option Json :=
+private def optField (j : JV) (k : JStr) : Option JV :=
   match j.getObjVal? k with
-  | .ok Json.null => none
+  | .ok .null => none
   | .ok v => some v
   | .error _ => none
 
 mutual
 
-partial def Row.fromJson (j : Json) : Except String Row := do
+partial def Row.fromJson (j : JV) : Except String Row := do
   let ty ← (← j.getObjVal? "type").getStr?
-  let line := (optField j "line").bind (fun l => (l.getNat?).toOption)
-  match ty with
-  | "seq" =>
+  let line := (optField j "line").bind (fun l => l.getNat?.toOption)
+  if ty == "seq" then
     let ts ← (← j.getObjVal? "terms").getArr?
     return .seq (← ts.toList.mapM Term.fromJson) line
-  | "op" =>
+  else if ty == "op" then
     let sym ← JStr.fromJson (← j.getObjVal? "sym")
     let stage ← (← j.getObjVal? "stage").getNat?
     let left ← (optField j "left").mapM Row.fromJson
     let right ← (optField j "right").mapM Row.fromJson
     return .op sym stage left right line
-  | t => throw s!"行の木の type が分からない: {t}"
+  else throw ("行の木の type が分からない: " ++ ty.quote)
 
-partial def Term.fromJson (j : Json) : Except String Term := do
+partial def Term.fromJson (j : JV) : Except String Term := do
   let ty ← (← j.getObjVal? "type").getStr?
-  match ty with
-  | "atom" =>
+  if ty == "atom" then
     let pre ← JStr.listFromJson (← j.getObjVal? "pre")
     let post ← JStr.listFromJson (← j.getObjVal? "post")
     return .atom pre (← Core.fromJson (← j.getObjVal? "core")) post
-  | "infix" =>
+  else if ty == "infix" then
     let sym ← JStr.fromJson (← j.getObjVal? "sym")
     let stage ← (← j.getObjVal? "stage").getNat?
     let left ← (optField j "left").mapM Term.fromJson
     let right ← (optField j "right").mapM Term.fromJson
     return .infix sym stage left right
-  | t => throw s!"項の type が分からない: {t}"
+  else throw ("項の type が分からない: " ++ ty.quote)
 
-partial def Core.fromJson (j : Json) : Except String Core := do
+partial def Core.fromJson (j : JV) : Except String Core := do
   let c ← (← j.getObjVal? "c").getStr?
-  match c with
-  | "name" => return .name (← JStr.fromJson (← j.getObjVal? "name"))
-  | "lit" => return .lit (← JStr.fromJson (← j.getObjVal? "text"))
-  | "unit" =>
-    let flag (k : String) : Bool := match optField j k with | some (Json.bool b) => b | _ => false
+  if c == "name" then return .name (← JStr.fromJson (← j.getObjVal? "name"))
+  else if c == "lit" then return .lit (← JStr.fromJson (← j.getObjVal? "text"))
+  else if c == "unit" then
+    let flag (k : JStr) : Bool := match optField j k with | some (.bool b) => b | _ => false
     return .unit (flag "nId") (flag "nVoid")
-  | t =>
-    match Enc.ofTag? t with
+  else
+    match Enc.ofTag? c with
     | some k =>
       let rs ← (← j.getObjVal? "rows").getArr?
       return .enc k (← rs.toList.mapM Row.fromJson)
-    | none => throw s!"核の c が分からない: {t}"
+    | none => throw ("核の c が分からない: " ++ c.quote)
 
 end
 
 mutual
 
-partial def Word.toJson : Word → Json
+partial def Word.toJson : Word → JV
   | .str s => s.toJson
-  | .blk tag rows => Json.mkObj [("tag", tag.toJson), ("rows", Json.arr (rows.map WRow.toJson).toArray)]
+  | .blk tag rows => JV.mkObj [("rows", .arr (rows.map WRow.toJson).toArray), ("tag", tag.toJson)]
 
-partial def WRow.toJson : WRow → Json
+partial def WRow.toJson : WRow → JV
   | .mk start line qs words =>
-    Json.mkObj [("at", Lean.toJson start), ("line", optJson Lean.toJson line), ("q", Lean.toJson qs),
-      ("w", Json.arr (words.map Word.toJson).toArray)]
+    JV.mkObj [("at", JV.ofNat start), ("line", optJson JV.ofNat line), ("q", .arr (qs.map JV.ofNat).toArray),
+      ("w", .arr (words.map Word.toJson).toArray)]
 
 end
 
 mutual
 
-partial def Word.fromJson (j : Json) : Except String Word :=
+partial def Word.fromJson (j : JV) : Except String Word :=
   match j with
-  | Json.str s => return .str (JStr.ofString s)
+  | .str s => return .str s
   | _ => do
     let tag ← JStr.fromJson (← j.getObjVal? "tag")
     let rs ← (← j.getObjVal? "rows").getArr?
     return .blk tag (← rs.toList.mapM WRow.fromJson)
 
-partial def WRow.fromJson (j : Json) : Except String WRow := do
+partial def WRow.fromJson (j : JV) : Except String WRow := do
   let start ← (← j.getObjVal? "at").getNat?
-  let line := (optField j "line").bind (fun l => (l.getNat?).toOption)
+  let line := (optField j "line").bind (fun l => l.getNat?.toOption)
   let qs ← (← (← j.getObjVal? "q").getArr?).toList.mapM (·.getNat?)
   let ws ← (← j.getObjVal? "w").getArr?
   return .mk start line qs (← ws.toList.mapM Word.fromJson)
@@ -171,24 +167,49 @@ partial def WRow.fromJson (j : Json) : Except String WRow := do
 end
 
 /-- 断りの JSON（dump.mjs の `err`）：`{name, reason, line, message}`。無い欄は null。 -/
-def FrontErr.toJson (e : FrontErr) : Json :=
-  Json.mkObj [("name", e.name.toJson), ("reason", optJson JStr.toJson e.reason),
-    ("line", optJson Lean.toJson e.line), ("message", e.message.toJson)]
+def FrontErr.toJson (e : FrontErr) : JV :=
+  JV.mkObj [("line", optJson JV.ofNat e.line), ("message", e.message.toJson), ("name", e.name.toJson),
+    ("reason", optJson JStr.toJson e.reason)]
 
-def FrontErr.fromJson (j : Json) : Except String FrontErr := do
+def FrontErr.fromJson (j : JV) : Except String FrontErr := do
   let name ← JStr.fromJson (← j.getObjVal? "name")
   let reason := (optField j "reason").bind (fun r => (JStr.fromJson r).toOption)
-  let line := (optField j "line").bind (fun l => (l.getNat?).toOption)
+  let line := (optField j "line").bind (fun l => l.getNat?.toOption)
   let message := ((optField j "message").bind (fun m => (JStr.fromJson m).toOption)).getD JStr.empty
   return { name, reason, line, message }
 
 /-- 前処理の結果の JSON（dump.mjs の `b1`）：`{text, lineAt}`。 -/
-def Pre.toJson (p : Pre) : Json :=
-  Json.mkObj [("text", p.text.toJson), ("lineAt", Lean.toJson p.lineAt)]
+def Pre.toJson (p : Pre) : JV :=
+  JV.mkObj [("lineAt", .arr (p.lineAt.map JV.ofNat)), ("text", p.text.toJson)]
 
-def Pre.fromJson (j : Json) : Except String Pre := do
+def Pre.fromJson (j : JV) : Except String Pre := do
   let text ← JStr.fromJson (← j.getObjVal? "text")
   let la ← (← j.getObjVal? "lineAt").getArr?
   return { text, lineAt := ← la.mapM (·.getNat?) }
+
+/-! ## 確かめ：書いた物は鍵の順に並んでいて（`mkObj` の並べ替えが走らない）、読み直すと同じ木に戻る -/
+
+private def sorted? : JV → Bool
+  | .obj kvs => JV.strictlySorted kvs
+  | _ => false
+
+private def lone : JStr := ⟨#[0x78, 0xD83D, 0xDC00, 0xDE00]⟩
+
+#guard sorted? (Row.toJson (.seq [] (some 3))) && sorted? (Row.toJson (.seq [] none)) &&
+  sorted? (Row.toJson (.op ":" 2 none none (some 1))) && sorted? (Row.toJson (.op ":" 2 none none none))
+#guard sorted? (Term.toJson (.atom [] (.unit true true) [])) && sorted? (Term.toJson (.infix "+" 14 none none)) &&
+  sorted? (Core.toJson (.unit true true)) && sorted? (Core.toJson (.name "x")) && sorted? (Core.toJson (.lit "5")) &&
+  sorted? (Core.toJson (.enc .abs []))
+#guard sorted? (WRow.toJson (.mk 0 (some 1) [2] [.blk "\"BRACKET_\"" []])) && sorted? (Word.toJson (.blk "t" [])) &&
+  sorted? (FrontErr.toJson { name := "SyntaxError", reason := none, line := some 1, message := lone }) &&
+  sorted? (Pre.toJson { text := lone, lineAt := #[1, 1, 1, 1, 1] })
+-- 対の無いサロゲートも1つの単位のまま出て、読むと戻る
+#guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2] })).toOption.map (·.text) == some lone
+#guard match FrontErr.fromJson (FrontErr.toJson { name := "SyntaxError", reason := some lone, line := none, message := lone }) with
+  | .ok e => e.reason == some lone && e.message == lone && e.line.isNone
+  | .error _ => false
+#guard (JV.parse (Row.toJson (.op lone 2 (some (.seq [.atom [lone] (.lit lone) [] , .infix "+" 14 none none] none)) none (some 4))).compress.toUTF8).toOption.bind
+  (fun j => (Row.fromJson j).toOption.map Row.toJson) ==
+  some (Row.toJson (.op lone 2 (some (.seq [.atom [lone] (.lit lone) [], .infix "+" 14 none none] none)) none (some 4)))
 
 end SignSem

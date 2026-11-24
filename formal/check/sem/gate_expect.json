@@ -1,535 +1,552 @@
 {
  "lexrev_hand": {
-  "lines": 174,
-  "lossy": 10,
+  "lines": 190,
+  "loneIn": 16,
+  "loneOut": 10,
   "pre": {
-   "run": 174,
-   "ok": 81,
-   "err": 93,
+   "run": 190,
+   "ok": 95,
+   "err": 95,
    "excluded": [],
-   "digest": "9db1f6515f2fef2f"
+   "digest": "1a1874c9c69d4114"
   },
   "peg": {
-   "run": 81,
-   "ok": 30,
-   "err": 51,
+   "run": 95,
+   "ok": 37,
+   "err": 58,
    "excluded": [],
-   "digest": "6c21a8db1bdc4555"
+   "digest": "c54288ad74be2038"
   },
   "tree": {
-   "run": 30,
-   "ok": 20,
+   "run": 37,
+   "ok": 27,
    "err": 10,
    "excluded": [],
-   "digest": "edb0666e6f7d5875"
+   "digest": "f49cc9936651bede"
   },
   "front": {
-   "run": 174,
-   "ok": 20,
-   "err": 154,
+   "run": 190,
+   "ok": 27,
+   "err": 163,
    "excluded": [],
-   "digest": "3d1e0028b41e5caf"
+   "digest": "4b8f1c864b910c4a"
   },
   "dumpExcused": []
  },
  "peg": {
   "lines": 36,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 36,
    "ok": 36,
    "err": 0,
    "excluded": [],
-   "digest": "da562bb52685bb81"
+   "digest": "8da6712a5e64b23b"
   },
   "peg": {
    "run": 36,
    "ok": 19,
    "err": 17,
    "excluded": [],
-   "digest": "84c29054db7269f6"
+   "digest": "02e74ac3a67e46b8"
   },
   "tree": {
    "run": 19,
    "ok": 16,
    "err": 3,
    "excluded": [],
-   "digest": "3d56d9f9d6e08bc2"
+   "digest": "b08de8fd8b866754"
   },
   "front": {
    "run": 36,
    "ok": 16,
    "err": 20,
    "excluded": [],
-   "digest": "c9bfa51b127b7025"
+   "digest": "1cda93c8c1941769"
   },
   "dumpExcused": []
  },
  "pegrev": {
   "lines": 189,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 189,
    "ok": 189,
    "err": 0,
    "excluded": [],
-   "digest": "ecb5d59793a77dfb"
+   "digest": "a71b8aa25dc70343"
   },
   "peg": {
    "run": 189,
    "ok": 107,
    "err": 82,
    "excluded": [],
-   "digest": "20b62898053234d6"
+   "digest": "f70b451251b25216"
   },
   "tree": {
    "run": 107,
    "ok": 82,
    "err": 25,
    "excluded": [],
-   "digest": "9f059e1edcdc6ab1"
+   "digest": "d338139ac1d3cc38"
   },
   "front": {
    "run": 189,
    "ok": 82,
    "err": 107,
    "excluded": [],
-   "digest": "b99b0acd6c50c0b7"
+   "digest": "5f4f73c2db99aed0"
   },
   "dumpExcused": []
  },
  "pegrev_astral": {
   "lines": 7,
-  "lossy": 4,
+  "loneIn": 0,
+  "loneOut": 4,
   "pre": {
    "run": 7,
    "ok": 7,
    "err": 0,
    "excluded": [],
-   "digest": "dc25dd7b8d19783d"
+   "digest": "afa3c27fba2b5d93"
   },
   "peg": {
    "run": 7,
    "ok": 3,
    "err": 4,
    "excluded": [],
-   "digest": "3748dd101da14584"
+   "digest": "405fc2caaca7c49a"
   },
   "tree": {
    "run": 3,
    "ok": 3,
    "err": 0,
    "excluded": [],
-   "digest": "6d5ec9f0a590b677"
+   "digest": "b529fac8d93facb4"
   },
   "front": {
    "run": 7,
    "ok": 3,
    "err": 4,
    "excluded": [],
-   "digest": "9ed7c30c1ece770d"
+   "digest": "55698ae2d228e081"
   },
   "dumpExcused": []
  },
  "tree": {
   "lines": 162,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 162,
    "ok": 162,
    "err": 0,
    "excluded": [],
-   "digest": "07869a006952d672"
+   "digest": "7f5994592be5d63c"
   },
   "peg": {
    "run": 162,
    "ok": 157,
    "err": 5,
    "excluded": [],
-   "digest": "573c4dc7cb598f2d"
+   "digest": "0042daed3a64c483"
   },
   "tree": {
    "run": 157,
    "ok": 54,
    "err": 103,
    "excluded": [],
-   "digest": "0d0b2164b827c46c"
+   "digest": "13ac172328ad185c"
   },
   "front": {
    "run": 162,
    "ok": 54,
    "err": 108,
    "excluded": [],
-   "digest": "671aab807b0dfd09"
+   "digest": "3c3866ebd81d18c8"
   },
   "dumpExcused": []
  },
  "treerev": {
   "lines": 134,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 134,
    "ok": 134,
    "err": 0,
    "excluded": [],
-   "digest": "6abbeecabf6b7b23"
+   "digest": "967ecf7ec2be4faf"
   },
   "peg": {
    "run": 134,
    "ok": 127,
    "err": 7,
    "excluded": [],
-   "digest": "733938dca849c657"
+   "digest": "4dd75156cb4b9204"
   },
   "tree": {
    "run": 127,
    "ok": 53,
    "err": 74,
    "excluded": [],
-   "digest": "bf9016ba112c0272"
+   "digest": "bc07aa633da35aa5"
   },
   "front": {
    "run": 134,
    "ok": 53,
    "err": 81,
    "excluded": [],
-   "digest": "e1aaa4f608d0230f"
+   "digest": "30e35743a6e1ba63"
   },
   "dumpExcused": []
  },
  "treerev_big": {
   "lines": 26,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 26,
    "ok": 26,
    "err": 0,
    "excluded": [],
-   "digest": "04c2f11f55598ab2"
+   "digest": "7f33e21635edea7d"
   },
   "peg": {
    "run": 26,
    "ok": 26,
    "err": 0,
    "excluded": [],
-   "digest": "d5e2760e3a61fc33"
+   "digest": "b8481d461abb99a3"
   },
   "tree": {
    "run": 26,
    "ok": 22,
    "err": 4,
    "excluded": [],
-   "digest": "17f1f834d9b95624"
+   "digest": "2a0b60723c80d369"
   },
   "front": {
    "run": 26,
    "ok": 22,
    "err": 4,
    "excluded": [],
-   "digest": "17f1f834d9b95624"
+   "digest": "2a0b60723c80d369"
   },
   "dumpExcused": []
  },
  "lex": {
   "lines": 30138,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 30138,
    "ok": 10074,
    "err": 20064,
    "excluded": [],
-   "digest": "953369acb990ac2b"
+   "digest": "ea87f1fb61fd47d8"
   },
   "peg": {
    "run": 10074,
    "ok": 2565,
    "err": 7509,
    "excluded": [],
-   "digest": "53517a29c4606634"
+   "digest": "bf9e1d1beaa47bd6"
   },
   "tree": {
    "run": 2565,
    "ok": 448,
    "err": 2117,
    "excluded": [],
-   "digest": "5fb073e62d5ffc10"
+   "digest": "925e9c5ef6d32864"
   },
   "front": {
    "run": 30138,
    "ok": 448,
    "err": 29690,
    "excluded": [],
-   "digest": "083268865e15f3cb"
+   "digest": "ec2ce989b9f6d5c0"
   },
   "dumpExcused": []
  },
  "lexrev_frames": {
   "lines": 65392,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 65392,
    "ok": 3913,
    "err": 61479,
    "excluded": [],
-   "digest": "f57c638743487534"
+   "digest": "c71840b353bc55cf"
   },
   "peg": {
    "run": 3913,
    "ok": 134,
    "err": 3779,
    "excluded": [],
-   "digest": "7dfaf7bf6613e1d8"
+   "digest": "7aca072aa2d96c95"
   },
   "tree": {
    "run": 134,
    "ok": 85,
    "err": 49,
    "excluded": [],
-   "digest": "5b5becb933f531a5"
+   "digest": "b42cae2f6d348c67"
   },
   "front": {
    "run": 65392,
    "ok": 85,
    "err": 65307,
    "excluded": [],
-   "digest": "a39f85347b50d73a"
+   "digest": "53f987006a0658a2"
   },
   "dumpExcused": []
  },
  "pegrev_rand": {
   "lines": 40000,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 40000,
    "ok": 29080,
    "err": 10920,
    "excluded": [],
-   "digest": "63131c9784096978"
+   "digest": "aec7b0ef7b367484"
   },
   "peg": {
    "run": 29080,
    "ok": 7943,
    "err": 21137,
    "excluded": [],
-   "digest": "004524e22a0fa399"
+   "digest": "19c41e8097d0cd7e"
   },
   "tree": {
    "run": 7943,
    "ok": 2405,
    "err": 5538,
    "excluded": [],
-   "digest": "26ea360d3294f4c5"
+   "digest": "9a9a06f95c0f20a5"
   },
   "front": {
    "run": 40000,
    "ok": 2405,
    "err": 37595,
    "excluded": [],
-   "digest": "e10f1d8b3bc5226e"
+   "digest": "663d9a18ac97ad62"
   },
   "dumpExcused": []
  },
  "pegrev_randastral": {
   "lines": 10000,
-  "lossy": 155,
+  "loneIn": 1,
+  "loneOut": 154,
   "pre": {
    "run": 10000,
    "ok": 7310,
    "err": 2690,
    "excluded": [],
-   "digest": "5d737b9d3eeeefc6"
+   "digest": "cab9fc38681a3043"
   },
   "peg": {
    "run": 7310,
    "ok": 2058,
    "err": 5252,
    "excluded": [],
-   "digest": "bf3e9e5b6ba9de86"
+   "digest": "e1dbf7fa7b803387"
   },
   "tree": {
    "run": 2058,
    "ok": 645,
    "err": 1413,
    "excluded": [],
-   "digest": "109f088db0d7a44f"
+   "digest": "0b11b4008d46c62d"
   },
   "front": {
    "run": 10000,
    "ok": 645,
    "err": 9355,
    "excluded": [],
-   "digest": "0cc69d10d3029e5a"
+   "digest": "16e838abb5752714"
   },
   "dumpExcused": []
  },
  "treerev_fuzz": {
   "lines": 30000,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 30000,
    "ok": 30000,
    "err": 0,
    "excluded": [],
-   "digest": "eb91f5c1a630a19a"
+   "digest": "2c00dd7e0d8d83a1"
   },
   "peg": {
    "run": 30000,
    "ok": 30000,
    "err": 0,
    "excluded": [],
-   "digest": "6efe074e870b6c0a"
+   "digest": "28971054de74f4a5"
   },
   "tree": {
    "run": 30000,
    "ok": 13838,
    "err": 16162,
    "excluded": [],
-   "digest": "32b5f4412fbadb9f"
+   "digest": "a3bb4e5b4f3d218e"
   },
   "front": {
    "run": 30000,
    "ok": 13838,
    "err": 16162,
    "excluded": [],
-   "digest": "32b5f4412fbadb9f"
+   "digest": "a3bb4e5b4f3d218e"
   },
   "dumpExcused": []
  },
  "treerev_fuzz2": {
   "lines": 60000,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 60000,
    "ok": 60000,
    "err": 0,
    "excluded": [],
-   "digest": "de5eb01944b9c291"
+   "digest": "445208ab544b0da7"
   },
   "peg": {
    "run": 60000,
    "ok": 60000,
    "err": 0,
    "excluded": [],
-   "digest": "fa9d47f3051be7c6"
+   "digest": "8857de491776bbea"
   },
   "tree": {
    "run": 60000,
    "ok": 32371,
    "err": 27629,
    "excluded": [],
-   "digest": "7050bb44096419a8"
+   "digest": "cc9e5e66c456620a"
   },
   "front": {
    "run": 60000,
    "ok": 32371,
    "err": 27629,
    "excluded": [],
-   "digest": "7050bb44096419a8"
+   "digest": "cc9e5e66c456620a"
   },
   "dumpExcused": []
  },
  "lexrev_chars": {
   "lines": 453673,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 453673,
    "ok": 347149,
    "err": 106524,
    "excluded": [],
-   "digest": "cb65138a60b6fffa"
+   "digest": "d6c124780f04fa9d"
   },
   "peg": {
    "run": 347149,
    "ok": 115050,
    "err": 232099,
    "excluded": [],
-   "digest": "772511c481e9484a"
+   "digest": "d10d9548d3255b6c"
   },
   "tree": {
    "run": 115050,
    "ok": 43343,
    "err": 71707,
    "excluded": [],
-   "digest": "d36a3a57b8d15790"
+   "digest": "fc6863cbf9db518b"
   },
   "front": {
    "run": 453673,
    "ok": 43343,
    "err": 410330,
    "excluded": [],
-   "digest": "4201b9425133bca6"
+   "digest": "2312ea561a73b2d1"
   },
   "dumpExcused": []
  },
  "lexrev_lines": {
   "lines": 558174,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 558174,
    "ok": 266355,
    "err": 291819,
    "excluded": [],
-   "digest": "734bc054dd96734b"
+   "digest": "408e0cb37a632258"
   },
   "peg": {
    "run": 266355,
    "ok": 68303,
    "err": 198052,
    "excluded": [],
-   "digest": "1a15e81467509677"
+   "digest": "1ec6e6aaded27494"
   },
   "tree": {
    "run": 68303,
    "ok": 21370,
    "err": 46933,
    "excluded": [],
-   "digest": "41f0cb28d6e975fa"
+   "digest": "caa93c039a141561"
   },
   "front": {
    "run": 558174,
    "ok": 21370,
    "err": 536804,
    "excluded": [],
-   "digest": "dc5e4249a7e7c708"
+   "digest": "5ffc526f86953e10"
   },
   "dumpExcused": []
  },
  "lexrev_astral": {
   "lines": 982759,
-  "lossy": 265849,
+  "loneIn": 0,
+  "loneOut": 265849,
   "pre": {
    "run": 982759,
    "ok": 549061,
    "err": 433698,
    "excluded": [],
-   "digest": "a849ecfc2acc933e"
+   "digest": "4bdc8db2c3dc8897"
   },
   "peg": {
    "run": 549061,
    "ok": 72780,
    "err": 476281,
    "excluded": [],
-   "digest": "062bda4c59eb6b88"
+   "digest": "8f6d1bd0c67d6d9d"
   },
   "tree": {
    "run": 72780,
    "ok": 33826,
    "err": 38954,
    "excluded": [],
-   "digest": "d5e844486febe27b"
+   "digest": "c6d424e3d97073ee"
   },
   "front": {
    "run": 982759,
    "ok": 33826,
    "err": 948933,
    "excluded": [],
-   "digest": "238df7a8628655a3"
+   "digest": "f1e6945646ee1c34"
   },
   "dumpExcused": []
  },
  "peg_fuzz": {
   "lines": 155903,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 0,
    "ok": 0,
@@ -542,7 +559,7 @@
    "ok": 37915,
    "err": 117988,
    "excluded": [],
-   "digest": "b7bd2171f7676c95"
+   "digest": "417fffe351cf19b9"
   },
   "tree": {
    "run": 0,
@@ -561,7 +578,8 @@
  },
  "peg_rawfuzz": {
   "lines": 150000,
-  "lossy": 51699,
+  "loneIn": 31998,
+  "loneOut": 19701,
   "pre": {
    "run": 0,
    "ok": 0,
@@ -574,7 +592,7 @@
    "ok": 13512,
    "err": 136488,
    "excluded": [],
-   "digest": "19eda28f274382e8"
+   "digest": "89a5055892d49d07"
   },
   "tree": {
    "run": 0,
@@ -593,7 +611,8 @@
  },
  "peg_rawfuzz2": {
   "lines": 100000,
-  "lossy": 26159,
+  "loneIn": 21854,
+  "loneOut": 4305,
   "pre": {
    "run": 0,
    "ok": 0,
@@ -606,7 +625,7 @@
    "ok": 13520,
    "err": 86480,
    "excluded": [],
-   "digest": "62db4ea6437d12c9"
+   "digest": "7df64e3e52e0ba28"
   },
   "tree": {
    "run": 0,
@@ -625,13 +644,14 @@
  },
  "main": {
   "lines": 354751,
-  "lossy": 0,
+  "loneIn": 0,
+  "loneOut": 0,
   "pre": {
    "run": 354751,
    "ok": 354628,
    "err": 123,
    "excluded": [],
-   "digest": "22768efb224c9fff"
+   "digest": "2b0ee0528e222e80"
   },
   "peg": {
    "run": 354627,
@@ -640,14 +660,14 @@
    "excluded": [
     1193
    ],
-   "digest": "fadd466abd08f951"
+   "digest": "964917ec65545ee7"
   },
   "tree": {
    "run": 354619,
    "ok": 354572,
    "err": 47,
    "excluded": [],
-   "digest": "f400544616cb99b1"
+   "digest": "f900f23818b48cec"
   },
   "front": {
    "run": 354750,
@@ -656,7 +676,7 @@
    "excluded": [
     1193
    ],
-   "digest": "16d2b9a9505cd517"
+   "digest": "cc9b8922e3b65a27"
   },
   "dumpExcused": [
    1193

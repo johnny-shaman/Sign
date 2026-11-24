@@ -1,5 +1,5 @@
 // lex の点検（lex-review）で足す源。node gen_lexrev.mjs [out の dir]（既定 out/sem、相対の道は out/sem から解く）
-//   lexrev_hand.jsonl   ：手で書いた枝の例（JS の被覆で 0 回だった枝・境目の字・BMP の外の字）
+//   lexrev_hand.jsonl   ：手で書いた枝の例（JS の被覆で 0 回だった枝・境目の字・BMP の外の字・源の対の無いサロゲート）
 //   lexrev_chars.jsonl  ：字の並びの総当たり（2つの字の組で、長さ 5 まで・長さ 4 まで）
 //   lexrev_lines.jsonl  ：行の型の総当たり（TAB の数 × 行の中身、3行まで）
 //   lexrev_frames.jsonl ：括りの中の `?` の行（R135）の形の総当たりと乱数
@@ -21,6 +21,8 @@ const write = (name, from, list) => {
 
 // ---- 手で書いた例 ----
 const E = "\u{1F600}";
+// 対の無いサロゲート（上の半分・下の半分。JS の文字列は UTF-16 の単位の並びで、対の無い単位も1つの単位として持てる）
+const H = "\ud83d", L = "\ude00", H2 = "\ud800", L2 = "\udc00", H3 = "\udbff", L3 = "\udfff";
 const hand = [
   // questionBeforeBracket の `\` の枝（:447）と、`?` の数え方
   "s : \\a [m :\n\t\ty\n\t? y\n]",
@@ -141,6 +143,23 @@ const hand = [
   "a!!!b", "a!!!=b", "a!!==b", "\"a\\\"", "\"\\\"", "``x", "`x``y`", "x`y", "a\\", "\\\\", "a\\\\:b", "a ~+~- b", "a=:=b",
   "<<<", ">>=", "a;;;b", "&&&", "a===b==c", "x\\n y", "a====b", "a!===b", "a!!!!b", "\"\"\"", "\"a\"b\"", "\"\\\\\"\\\"",
   "\"a\\\u2028\\\"\"", "\"a\\\u2029\"", "\"\\\u2028\"\"", "a'b'c", "a\\'b", "\"a:b\":c", "`a:b`:c", "a\\\"b\"c",
+  // \u6e90\u306e\u5bfe\u306e\u7121\u3044\u30b5\u30ed\u30b2\u30fc\u30c8\uff1a\u524d\u51e6\u7406\u306e text\u3001\u6587\u6cd5\u306e\u8a9e\u3001\u6728\u306e\u8449\u30781\u3064\u306e\u5358\u4f4d\u306e\u307e\u307e\u6e21\u308b\uff08\u5b57\u306e\u307e\u307e\u30fb\u62ec\u308a\u306e\u4e2d\u30fb\u7d9a\u304d\u306e\u884c\u30fb\u6ce8\u30fb\u65ad\u308a\u306e found\uff09
+  `x : \`${H}\``,
+  `x : \`a${L}b\``,
+  `x : a${H}`,
+  `\`${L2}\` x\ny : 1`,
+  `x : ${H}`,
+  `x : [1 ${H2}]`,
+  `f : x ? x + \`${L}${H}\`\ny : f 1`,
+  `x : "${H}${E}" + "${E}${L}"`,
+  `x : "a${L}"\ny : "${H}"`,
+  `${H} : 1`,
+  `s : [m :\n\t\t\`${L}\`\n\t? \`${H}\`\n]`,
+  `\`${H} comment\`\nx : 1`,
+  `x : \`${L}`,
+  `x : 1 +\n \`${L}\` + 2`,
+  `x : "${H}\\${L}"`,
+  `x : \`${L3}${H3}\``,
 ];
 write("lexrev_hand.jsonl", "lexrev_hand", hand);
 

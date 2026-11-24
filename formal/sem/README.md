@@ -7,15 +7,18 @@ alpha1 の実装（`alpha1/javascript/`）の挙動を、Lean 4 の全域の関�
 
 | file | 写す物 |
 |---|---|
+| `SignSem/JStr.lean` | JS の文字列（`JStr`、UTF-16 の符号単位の並び）と、その道具（`slice`・`trim`・`JSON.stringify` など） |
 | `SignSem/Syntax.lean` | 行の木（`Row`・`Term`・`Core`）、文法の語の行（`WRow`・`Word`）、前処理の答え（`Pre`）、断り（`FrontErr`） |
+| `SignSem/JV.lean` | JS の値としての JSON（`JV`）と、その読み手 `JV.parse`（UTF-8 のバイトから。文字列は `JStr` のまま） |
 | `SignSem/Json.lean` | 上の型の JSON（`formal/check/sem/dump.mjs` が書く stages と同じ形） |
 | `SignSem/Lex.lean` | `Lex.preprocess`：lexer.js の preprocessWithLines |
 | `SignSem/Peg.lean` | `Peg.parse`：sign.pegjs から peggy が作る構文解析器 |
 | `SignSem/Tree.lean` | `Tree.rows`：resolve.js の tokenize・makeCore・parseRow（ファイルの行ごと） |
 | `SignSem/Front.lean` | `Front.front`：上の3つをつないだ物（resolve.js の resolve() の頭） |
-| `Main.lean` | `signsem check`：JS の答えに段ごとに当てる道具 |
+| `SignSem/Axioms.lean` | 入口と道具の `#print axioms` の出力を固める（変われば組み立てが止まる） |
+| `Main.lean` | `signsem check`：JS の答えに段ごとに当てる道具（`JV` の値で、文字列は UTF-16 の単位ごとに比べる）。`bench` は `JV.parse` の速さを測る |
 
-- 段の file は `partial def` を使わない（使うのは `Json.lean` と `Main.lean` だけ）。構造で止まらない所は燃料を引数にする。燃料が切れた所と、写しの前提が崩れた所は、名前 `InternalError` の断りを返す。
+- 段の file は `partial def` を使わない（使うのは `Json.lean`・`JV.lean`（読み手の `JV.parse` のほか）・`Main.lean` だけ）。構造で止まらない所は燃料を引数にする。燃料が切れた所と、写しの前提が崩れた所は、名前 `InternalError` の断りを返す。
 - `#print axioms SignSem.Front.front` は `[propext, Quot.sound]`（`Classical.choice` を使わない）。Lean 4.36 の `String.toList` などは choice に頼るので、字は自前の UTF-8 の読みで取る。
 - 位置は Unicode の符号位置で数える（文法は中で UTF-16 の単位で読み、符号位置に直す）。
 - Lean の String は対の無いサロゲートを持てない。JS の答えに対の無いサロゲートが出る所（peggy の断りの文の found が対の片方の時など）では U+FFFD を返す。入力（源・text）にある時は、U+FFFD に替えた入力での答えを返す（JS の答えと同じとは限らない。比べの意味は `Main.lean` の頭）。
