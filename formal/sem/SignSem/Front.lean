@@ -17,8 +17,8 @@ JS のスタックの溢れ（resolve.js の stackRefusal、括り 2 万段な�
 
 namespace SignSem.Front
 
-/-- 源 → 行の木（resolve.js:12012-12025 の frontEnd と行ごとの parseRow）。 -/
-def front (source : String) : Except FrontErr (List Row) := do
+/-- 源 → 行の木（resolve.js:12012-12025 の frontEnd と行ごとの parseRow）。源は JS の文字列（`JStr`、UTF-16 の符号単位の並び）。 -/
+def front (source : JStr) : Except FrontErr (List Row) := do
   let pre ← Lex.preprocess source
   let words ← Peg.parse pre
   Tree.rows words

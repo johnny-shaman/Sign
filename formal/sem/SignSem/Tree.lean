@@ -15,6 +15,19 @@ resolve() の頭（resolve.js:12008-12025）と同じく、ファイルの行ご
 - 行の木の根（ファイルの行と、囲みの中の行）の `line` は、その語の行の `WRow.line`（rowTreeLine、resolve.js:201・:561）。
 - 断りの `line` は withLine（resolve.js:270）と同じく、いちばん内で先に付いた行を残す。
 - JS のスタックの溢れ（stackRefusal）は写さない（燃料と構造の再帰で止まる）。
+- 語の行の位置（`WRow` の `start`・`qs`）は読まない。
+
+文字列（語・中置の記号・前置と後置の印・名前・字面・囲みの印・断りの欄と文）はどれも `JStr`（JS の文字列。UTF-16 の符号単位の
+並びで、対の無いサロゲートも1つの単位のまま）。
+
+- 等しさは `==`（`JStr.beq`、単位ごと。JS の `===`）。表の鍵の引き当ても同じ `==` で見る。
+- 長さ・切り出し・頭と末尾の単位は符号単位で数える（`size`・`slice`・`isAt`。JS の `.length`・`slice`・`w[k]`）。
+- resolve.js の正規表現（PREFIX_MARK・POSTFIX_MARK・OPERATOR_WORD、resolve.js:412-414）は `u` の印が無いので、符号単位ごとに当たる。
+  写しも単位で見る。
+- 文は JStr の `++`・`JStr.join`・`JStr.intercalate` で組み、`JSON.stringify(s)` は `JStr.jsonStringify`。字面の文字列は
+  `Coe String JStr` で JStr の所にそのまま書く。
+- 公理：`==` は `JStr.beq` と UInt16 の `instBEqUInt16Decide`（JStr.lean）で、Classical.choice に依らない（SignSem/Axioms.lean が
+  `Tree.rows` の `#print axioms` を固める）。
 
 止まること：語の行と語の再帰（parseRow・parseRows・tokenize・makeCore）と、木の再帰は構造の再帰。
 parseLow・parseSegment・parseHigh は位置を進める再帰で構造では言えないので、燃料（`6 * 字句の数 + 5`、parseRow の注）を引数にする。
@@ -22,39 +35,6 @@ parseLow・parseSegment・parseHigh は位置を進める再帰で構造では�
 
 namespace SignSem.Tree
 open SignSem
-
-/-! ## 文字列の道具
-
-Lean 4.36 の `String` の `==`（順序の包みの BEq）と `toList`・`length` などの字の読み方は `Classical.choice` に頼る。
-ここでは等しさを `DecidableEq String`（`String.decEq`）で、字は UTF-8 のバイト（`String.toByteArray`）から読む。 -/
-
-/-- 文字列が等しいか（JS の `===`）。 -/
-def strEq (a b : String) : Bool := decide (a = b)
-
-/-- 文字列の UTF-8 のバイト。 -/
-def bytesOf (s : String) : List Nat := s.toByteArray.data.toList.map UInt8.toNat
-
-/-- 正しい UTF-8 のバイトの並びを字の並びに読む（`String.toList` と同じ物を、バイトから）。 -/
-def utf8Decode : List Nat → List Char
-  | [] => []
-  | b0 :: rest =>
-    if b0 < 0x80 then Char.ofNat b0 :: utf8Decode rest
-    else if b0 < 0xE0 then
-      match rest with
-      | b1 :: rest' => Char.ofNat ((b0 % 32) * 64 + b1 % 64) :: utf8Decode rest'
-      | [] => []
-    else if b0 < 0xF0 then
-      match rest with
-      | b1 :: b2 :: rest' => Char.ofNat ((b0 % 16) * 4096 + (b1 % 64) * 64 + b2 % 64) :: utf8Decode rest'
-      | _ => []
-    else
-      match rest with
-      | b1 :: b2 :: b3 :: rest' =>
-        Char.ofNat ((b0 % 8) * 262144 + (b1 % 64) * 4096 + (b2 % 64) * 64 + b3 % 64) :: utf8Decode rest'
-      | _ => []
-
-/-- 文字列の字の並び（`String.toList` の代わり）。 -/
-def charsOf (s : String) : List Char := utf8Decode (bytesOf s)
 
 /-! ## 演算子の表（operator_table.js） -/
 
@@ -68,15 +48,16 @@ inductive Position where
 
 /-- 表の1行（operator_table.js:153-166 の OPERATOR_DICT の要素：precedence・symbol と元の行の欄）。`assoc` が無ければ左。 -/
 structure OpDef where
-  symbol : String
+  symbol : JStr
   precedence : Nat
   position : Position
-  name : String
-  assoc : Option String := none
-  removed : Option String := none
+  name : JStr
+  assoc : Option JStr := none
+  removed : Option JStr := none
   deriving Repr, Inhabited
 
-/-- 段ごとの演算子（operator_table.js:14 の OPERATOR_BY_PRECEDENCE）。段の番号は配列の添字＋1 で、空の段 10・17 は行が無い。 -/
+/-- 段ごとの演算子（operator_table.js:14 の OPERATOR_BY_PRECEDENCE）。段の番号は配列の添字＋1 で、空の段 10・17 は行が無い。
+記号の `"\\n"` は `\` と `n` の2単位（operator_table.js:16 の `'\\n'`）、`"\t"` は TAB の1単位、`"\\"` は `\` の1単位。 -/
 def OPERATOR_BY_PRECEDENCE : List (List OpDef) :=
   [ -- 1
     [ { symbol := "\\n", precedence := 1, position := .infix, name := "newline" },
@@ -166,16 +147,16 @@ def OPERATOR_BY_PRECEDENCE : List (List OpDef) :=
     -- 28
     [ { symbol := "\\", precedence := 28, position := .prefix, name := "escape" } ] ]
 
-/-- 記号の行の並び（operator_table.js:142-166 の OPERATOR_DICT[symbol]。段の順に入れたまま）。 -/
-def OPERATOR_DICT (symbol : String) : List OpDef :=
-  (OPERATOR_BY_PRECEDENCE.flatten).filter (fun d => strEq d.symbol symbol)
+/-- 記号の行の並び（operator_table.js:142-166 の OPERATOR_DICT[symbol]。段の順に入れたまま）。鍵は単位ごとの `==` で引く。 -/
+def OPERATOR_DICT (symbol : JStr) : List OpDef :=
+  (OPERATOR_BY_PRECEDENCE.flatten).filter (fun d => d.symbol == symbol)
 
 /-- 中置の行（resolve.js:478・:715 の `(OPERATOR_DICT[w] || []).find((d) => d.position === "infix")`）。 -/
-def infixDef? (symbol : String) : Option OpDef :=
+def infixDef? (symbol : JStr) : Option OpDef :=
   (OPERATOR_DICT symbol).find? (·.position == .infix)
 
 /-- 結合の向き（resolve.js:714 assocOf）。表に無いか `assoc` が無ければ `"left"`。 -/
-def assocOf (sym : String) : String :=
+def assocOf (sym : JStr) : JStr :=
   match infixDef? sym with
   | some d => d.assoc.getD "left"
   | none => "left"
@@ -184,24 +165,24 @@ def assocOf (sym : String) : String :=
 
 /-- 核（resolve.js:444 makeCore の返す物）。囲みは中の行の木（もう `Row` に移した物）と、書いた語の行（`core.raw` の `w[1]`）を持つ。 -/
 inductive PCore where
-  | name (s : String)
-  | lit (text : String)
+  | name (s : JStr)
+  | lit (text : JStr)
   | unit (nId nVoid : Bool)
   | enc (k : Enc) (rows : List Row) (raw : List WRow)
 
 /-- 項（resolve.js:472 tokenize の atom と :549 parseHigh の infix）。 -/
 inductive PTerm where
-  | atom (pre : List String) (core : PCore) (post : List String)
-  | infix (sym : String) (stage : Nat) (left right : Option PTerm)
+  | atom (pre : List JStr) (core : PCore) (post : List JStr)
+  | infix (sym : JStr) (stage : Nat) (left right : Option PTerm)
 
 /-- 行の木（resolve.js:529 parseLow の op と :544 parseSegment の seq）。`line` は parseRow が根にだけ付ける（rowTreeLine）。 -/
 inductive PRow where
   | seq (terms : List PTerm) (line : Option Nat)
-  | op (sym : String) (stage : Nat) (left right : Option PRow) (line : Option Nat)
+  | op (sym : JStr) (stage : Nat) (left right : Option PRow) (line : Option Nat)
 
 /-- 字句（resolve.js:472 tokenize の `{t:"op", sym, stage, assoc}` と `{t:"atom", term}`）。 -/
 inductive Tok where
-  | op (sym : String) (stage : Nat) (assoc : String)
+  | op (sym : JStr) (stage : Nat) (assoc : JStr)
   | atom (term : PTerm)
 
 /-- 核を出す形へ（rowsjson.mjs の exportRows が `core.raw` を落とすのと同じ）。 -/
@@ -236,11 +217,11 @@ end
 /-! ## 断り -/
 
 /-- 木にできない形の断り（resolve.js:388 shapeError）。`spec` は出す物に無いので持たない。行は後から withLine で付ける。 -/
-def shapeError (reason message : String) : FrontErr :=
+def shapeError (reason message : JStr) : FrontErr :=
   { name := "OperationError", reason := some reason, line := none, message := message }
 
 /-- 写しの中の、起きないはずの所（燃料が尽きた所など）。JS に対応する断りは無い。 -/
-def internalError (message : String) : FrontErr :=
+def internalError (message : JStr) : FrontErr :=
   { name := "InternalError", reason := none, line := none, message := message }
 
 /-- 断りに行を持たせる（resolve.js:270 withLine）。先に持たせた行（いちばん内の行）を残す。行が無ければそのまま。 -/
@@ -256,97 +237,69 @@ def withLine (e : FrontErr) (line : Option Nat) : FrontErr :=
 def rowRefusal (e : FrontErr) (line : Option Nat) : FrontErr :=
   withLine e line
 
-/-- 文字列の JSON の綴り（JS の `JSON.stringify(s)`。囲みの印を読めない断りの文で使う）。 -/
-def jsonQuote (s : String) : String :=
-  "\"" ++ String.join ((charsOf s).map esc) ++ "\""
-where
-  hex (n : Nat) : Char :=
-    if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
-  esc (c : Char) : String :=
-    if c == '"' then "\\\""
-    else if c == '\\' then "\\\\"
-    else if c.toNat == 8 then "\\b"
-    else if c.toNat == 12 then "\\f"
-    else if c == '\n' then "\\n"
-    else if c == '\r' then "\\r"
-    else if c == '\t' then "\\t"
-    else if c.toNat < 32 then String.ofList ['\\', 'u', '0', '0', hex (c.toNat / 16), hex (c.toNat % 16)]
-    else String.singleton c
-
 /-! ## 語の見分け方（resolve.js:412-418） -/
 
-/-- 前置の印（resolve.js:412 PREFIX_MARK `/^(###|##|#|-|~|!!|!|\$|@)_$/`）なら、末尾の `_` を外した物（`w.slice(0, -1)`）。 -/
-def prefixMark? (w : String) : Option String :=
-  match w with
-  | "###_" => some "###"
-  | "##_" => some "##"
-  | "#_" => some "#"
-  | "-_" => some "-"
-  | "~_" => some "~"
-  | "!!_" => some "!!"
-  | "!_" => some "!"
-  | "$_" => some "$"
-  | "@_" => some "@"
-  | _ => none
+/-- 前置の印の語（resolve.js:412 PREFIX_MARK `/^(###|##|#|-|~|!!|!|\$|@)_$/` に当たる語の全部）。 -/
+def PREFIX_MARK_WORDS : List JStr := ["###_", "##_", "#_", "-_", "~_", "!!_", "!_", "$_", "@_"]
 
-/-- 後置の印（resolve.js:413 POSTFIX_MARK `/^_[!~@]$/`）なら、頭の `_` を外した物（`w.slice(1)`）。 -/
-def postfixMark? (w : String) : Option String :=
-  match w with
-  | "_!" => some "!"
-  | "_~" => some "~"
-  | "_@" => some "@"
-  | _ => none
+/-- 後置の印の語（resolve.js:413 POSTFIX_MARK `/^_[!~@]$/` に当たる語の全部）。 -/
+def POSTFIX_MARK_WORDS : List JStr := ["_!", "_~", "_@"]
 
-/-- 語の前置の印（文字列の語だけ）。 -/
-def prefixWord? : Word → Option String
+/-- 前置の印（PREFIX_MARK）なら、末尾の `_` の1単位を外した物（`w.slice(0, -1)`）。 -/
+def prefixMark? (w : JStr) : Option JStr :=
+  if PREFIX_MARK_WORDS.any (· == w) then some (w.slice 0 (w.size - 1)) else none
+
+/-- 後置の印（POSTFIX_MARK）なら、頭の `_` の1単位を外した物（`w.slice(1)`）。 -/
+def postfixMark? (w : JStr) : Option JStr :=
+  if POSTFIX_MARK_WORDS.any (· == w) then some (w.sliceFrom 1) else none
+
+/-- 語の前置の印（文字列の語だけ。JS の `typeof w === "string" && PREFIX_MARK.test(w)`）。 -/
+def prefixWord? : Word → Option JStr
   | .str s => prefixMark? s
   | .blk _ _ => none
 
 /-- 語の後置の印（文字列の語だけ）。 -/
-def postfixWord? : Word → Option String
+def postfixWord? : Word → Option JStr
   | .str s => postfixMark? s
   | .blk _ _ => none
 
-/-- resolve.js:414 OPERATOR_WORD の文字 `[!"#$%&'\-=^~|@;+:*,<>/?]`。 -/
-def isOperatorChar (c : Char) : Bool :=
-  ['!', '"', '#', '$', '%', '&', '\'', '-', '=', '^', '~', '|', '@', ';', '+', ':', '*', ',', '<', '>', '/', '?'].contains c
+/-- resolve.js:414 OPERATOR_WORD の字の組 `[!"#$%&'\-=^~|@;+:*,<>/?]` の単位（22 個、どれも ASCII）。 -/
+def OPERATOR_UNITS : Array UInt16 := ("!\"#$%&'-=^~|@;+:*,<>/?" : JStr).units
 
-/-- 文字列が OPERATOR_WORD（resolve.js:414 `/^[…]+$/`）に当たるか：空でなく、字が全部 isOperatorChar。 -/
-def isOperatorWord (s : String) : Bool :=
-  let cs := charsOf s
-  !cs.isEmpty && cs.all isOperatorChar
+/-- 単位が OPERATOR_WORD の字の組に入るか。 -/
+def isOperatorChar (u : UInt16) : Bool := OPERATOR_UNITS.contains u
+
+/-- 文字列が OPERATOR_WORD（resolve.js:414 `/^[…]+$/`）に当たるか：空でなく、単位が全部 isOperatorChar。
+`u` の印が無い正規表現なので字の組は単位ごとに当たり、サロゲートの単位（対の半分も、対の無い物も）は組に無いので当たらない。 -/
+def isOperatorWord (s : JStr) : Bool :=
+  !s.isEmpty && s.units.all isOperatorChar
 
 /-- 中置の語か（resolve.js:416 isInfixWord）。 -/
 def isInfixWord : Word → Bool
   | .str s => isOperatorWord s
   | .blk _ _ => false
 
-/-- 名前の語（resolve.js:415 isNameWord：長さが 2 を超え、`<` で始まり `>` で終わる）なら、`<>` を外した物（`w.slice(1, -1)`）。
-源に BMP の外の字は無い（formal/check/sem/README.md）が、`<`・`>` で囲まれた語では UTF-16 の長さが 2 を超えることと符号位置の数が 2 を超えることは同じ。 -/
-def nameWord? (s : String) : Option String :=
-  -- `<`（0x3C）と `>`（0x3E）は1バイトの字で、ほかの字のバイトの中には出ない。両端がそれなら、字の数が 2 を超えることはバイトの数が 2 を超えることと同じ。
-  let bs := bytesOf s
-  if bs.length > 2 && bs.head? == some 0x3C && bs.getLast? == some 0x3E then
-    some (String.ofList (utf8Decode (bs.drop 1).dropLast))
+/-- 名前の語（resolve.js:415 isNameWord：`w.length > 2 && w[0] === "<" && w[w.length - 1] === ">"`）なら、`<>` を外した物
+（`w.slice(1, -1)`）。長さと位置は符号単位で、JS のとおり（`<😀>` は長さ 4 で、中身は対の2単位）。 -/
+def nameWord? (s : JStr) : Option JStr :=
+  if s.size > 2 && s.isAt 0 0x3C && s.isAt (s.size - 1) 0x3E then some (s.slice 1 (s.size - 1)) else none
+
+/-- 囲みの印（resolve.js:418 BLOCK_TAG の鍵。引用符ごとの綴り）。 -/
+def blockTag? (tag : JStr) : Option Enc :=
+  if tag == "\"BRACKET_\"" then some .bracket
+  else if tag == "\"ABS_\"" then some .abs
+  else if tag == "\"NORM_\"" then some .norm
+  else if tag == "\"INDENT_\"" then some .indent
   else none
 
-/-- 囲みの印（resolve.js:418 BLOCK_TAG）。 -/
-def blockTag? (tag : String) : Option Enc :=
-  match tag with
-  | "\"BRACKET_\"" => some .bracket
-  | "\"ABS_\"" => some .abs
-  | "\"NORM_\"" => some .norm
-  | "\"INDENT_\"" => some .indent
-  | _ => none
-
 /-- 点なしの席の前置の語（resolve.js:428 SEAT_PREFIX_WORDS）。 -/
-def SEAT_PREFIX_WORDS (w : String) : Bool :=
-  strEq w "-_" || strEq w "!_" || strEq w "!!_"
+def SEAT_PREFIX_WORDS (w : JStr) : Bool :=
+  w == "-_" || w == "!_" || w == "!!_"
 
 /-- 語が文字列 `s` か（JS の `w === s`。囲みの語は当たらない）。 -/
-def wordIs (w : Word) (s : String) : Bool :=
+def wordIs (w : Word) (s : JStr) : Bool :=
   match w with
-  | .str t => strEq t s
+  | .str t => t == s
   | .blk _ _ => false
 
 /-- 括りの1行の語の並びが点なしの席か（resolve.js:430 isSeatRow）：前置 `-`・`!`・`!!` の1つと `_`、か `_` と後置 `!`。後ろの `,` 1つは見ない。 -/
@@ -363,7 +316,7 @@ def isSeatRow (ws : List Word) : Bool :=
 /-! ## 書いたとおりの綴り（resolve.js:723-790） -/
 
 /-- 囲みの綴りの外側（resolve.js:754 writeBlockIn の switch）。字下げのブロックと知らない印は `{…}`。 -/
-def encWrap (k : Option Enc) (inner : String) : String :=
+def encWrap (k : Option Enc) (inner : JStr) : JStr :=
   match k with
   | some .bracket => "[" ++ inner ++ "]"
   | some .abs => "|" ++ inner ++ "|"
@@ -371,83 +324,83 @@ def encWrap (k : Option Enc) (inner : String) : String :=
   | _ => "{" ++ inner ++ "}"
 
 /-- 語を綴った部分の並びの仕上げ（resolve.js:741-746）：行末の `,` は前の語に付ける（貪欲の印）。 -/
-def finishParts (parts : Array String) : String :=
+def finishParts (parts : Array JStr) : JStr :=
   let parts :=
     match parts.back? with
     | some last =>
-      if parts.size ≥ 2 && strEq last "," then
+      if parts.size ≥ 2 && last == "," then
         let p := parts.pop
         match p.back? with
         | some l => p.pop.push (l ++ ",")
         | none => p
       else parts
     | none => parts
-  " ".intercalate parts.toList
+  JStr.intercalate " " parts.toList
 
 mutual
 /-- resolve.js:723 writeRow の語のループ（`parts` と `pending`）。前置の印は次の部分に、後置の印は前の部分に付ける。 -/
-def writeWords : List Word → Array String → String → Array String
+def writeWords : List Word → Array JStr → JStr → Array JStr
   | [], parts, _ => parts
   | .blk tag rows :: rest, parts, pending =>
-    writeWords rest (parts.push (pending ++ writeBlock tag rows)) ""
+    writeWords rest (parts.push (pending ++ writeBlock tag rows)) JStr.empty
   | .str w :: rest, parts, pending =>
     match prefixMark? w with
     | some m => writeWords rest parts (pending ++ m)
     | none =>
       match postfixMark? w, parts.back? with
       | some m, some l => writeWords rest (parts.pop.push (l ++ m)) pending
-      | _, _ => writeWords rest (parts.push (pending ++ (nameWord? w).getD w)) ""
-/-- 書いた括り・囲みの綴り（resolve.js:749 writeBlock・:754 writeBlockIn）。中の行は ` ⏎ ` で繋ぐ。 -/
-def writeBlock (tag : String) (rows : List WRow) : String :=
-  encWrap (blockTag? tag) (" ⏎ ".intercalate (writeRowList rows))
+      | _, _ => writeWords rest (parts.push (pending ++ (nameWord? w).getD w)) JStr.empty
+/-- 書いた括り・囲みの綴り（resolve.js:749 writeBlock・:754 writeBlockIn）。中の行は ` ⏎ `（U+23CE は1単位）で繋ぐ。 -/
+def writeBlock (tag : JStr) (rows : List WRow) : JStr :=
+  encWrap (blockTag? tag) (JStr.intercalate " ⏎ " (writeRowList rows))
 /-- 中の行ごとの綴り（writeBlockIn の `b[1].map(writeRow)`）。 -/
-def writeRowList : List WRow → List String
+def writeRowList : List WRow → List JStr
   | [] => []
   | r :: rs => writeWRow r :: writeRowList rs
 /-- 語の行の綴り（resolve.js:723 writeRow）。 -/
-def writeWRow : WRow → String
-  | .mk _ _ _ words => finishParts (writeWords words #[] "")
+def writeWRow : WRow → JStr
+  | .mk _ _ _ words => finishParts (writeWords words #[] JStr.empty)
 end
 
 /-- 語の並びの書いたとおりの綴り（resolve.js:723 writeRow）。 -/
-def writeRow (words : List Word) : String :=
-  finishParts (writeWords words #[] "")
+def writeRow (words : List Word) : JStr :=
+  finishParts (writeWords words #[] JStr.empty)
 
 /-- 核の綴り（resolve.js:768 writeCore）。前段の囲みは書いた語（`core.raw`）から綴る（`core.written` は前段では付かない）。 -/
-def writeCore : PCore → String
+def writeCore : PCore → JStr
   | .name s => s
   | .lit t => t
   | .unit _ _ => "_"
-  | .enc k _ raw => encWrap (some k) (" ⏎ ".intercalate (writeRowList raw))
+  | .enc k _ raw => encWrap (some k) (JStr.intercalate " ⏎ " (writeRowList raw))
 
 /-- 空でない物を空白で繋ぐ（`[…].filter((s) => s !== "").join(" ")`）。 -/
-def joinNonEmpty (xs : List String) : String :=
-  " ".intercalate (xs.filter (fun s => !s.isEmpty))
+def joinNonEmpty (xs : List JStr) : JStr :=
+  JStr.intercalate " " (xs.filter (fun s => !s.isEmpty))
 
 mutual
 /-- 項の綴り（resolve.js:777 writeTerm）。内部の印を綴りへ戻す：id は足した前置 `!` を外し、手で書いた void は外した `!` を戻す。 -/
-def writeTerm : PTerm → String
+def writeTerm : PTerm → JStr
   | .infix sym _ l r => joinNonEmpty [writeTermOpt l, sym, writeTermOpt r]
   | .atom pre core post =>
-    let pre' := match core with
+    let pre' : List JStr := match core with
       | .unit true _ => pre.dropLast
-      | .unit _ true => pre ++ ["!"]
+      | .unit _ true => pre ++ [("!" : JStr)]
       | _ => pre
-    String.join pre' ++ writeCore core ++ String.join post
+    JStr.join pre' ++ writeCore core ++ JStr.join post
 /-- 欠けうる項の綴り（`writeTerm(null)` は `""`）。 -/
-def writeTermOpt : Option PTerm → String
-  | none => ""
+def writeTermOpt : Option PTerm → JStr
+  | none => JStr.empty
   | some t => writeTerm t
 end
 
 mutual
 /-- 行の木の綴り（resolve.js:785 writeTree）。 -/
-def writeTree : PRow → String
-  | .seq terms _ => " ".intercalate (terms.map writeTerm)
+def writeTree : PRow → JStr
+  | .seq terms _ => JStr.intercalate " " (terms.map writeTerm)
   | .op sym _ l r _ => joinNonEmpty [writeTreeOpt l, sym, writeTreeOpt r]
 /-- 欠けうる行の木の綴り（`writeTree(null)` は `""`）。 -/
-def writeTreeOpt : Option PRow → String
-  | none => ""
+def writeTreeOpt : Option PRow → JStr
+  | none => JStr.empty
   | some t => writeTree t
 end
 
@@ -506,7 +459,7 @@ end
 
 mutual
 /-- 項の中の、被演算子の欠けた中置（resolve.js:610 missingInfix）。記号と、左が欠けたか。 -/
-def missingInfix : PTerm → Option (String × Bool)
+def missingInfix : PTerm → Option (JStr × Bool)
   | .atom _ _ _ => none
   | .infix sym _ l r =>
     if l.isNone || r.isNone then some (sym, l.isNone)
@@ -515,7 +468,7 @@ def missingInfix : PTerm → Option (String × Bool)
       | some hit => some hit
       | none => missingInfixOpt r
 /-- 欠けうる項（null は null）。 -/
-def missingInfixOpt : Option PTerm → Option (String × Bool)
+def missingInfixOpt : Option PTerm → Option (JStr × Bool)
   | none => none
   | some t => missingInfix t
 end
@@ -523,42 +476,42 @@ end
 /-! ## 比べの連鎖と結合の向き（resolve.js:634-718） -/
 
 /-- 段13 の比べ（resolve.js:667 COMPARE_HIGH）。 -/
-def COMPARE_HIGH (s : String) : Bool :=
-  strEq s "<" || strEq s "<=" || strEq s "=" || strEq s ">=" || strEq s ">" || strEq s "!="
+def COMPARE_HIGH (s : JStr) : Bool :=
+  s == "<" || s == "<=" || s == "=" || s == ">=" || s == ">" || s == "!="
 
 /-- 段8 の比べ（resolve.js:668 COMPARE_LOW）。 -/
-def COMPARE_LOW (s : String) : Bool :=
-  strEq s "==" || strEq s "!=="
+def COMPARE_LOW (s : JStr) : Bool :=
+  s == "==" || s == "!=="
 
 mutual
 /-- 段13 の比べの左の背骨の記号（resolve.js:697 chainSyms の `high`）。 -/
-def highSyms : PTerm → List String
+def highSyms : PTerm → List JStr
   | .infix sym _ l _ => if COMPARE_HIGH sym then sym :: highSymsOpt l else []
   | .atom _ _ _ => []
 /-- 欠けうる項（null は何も足さない）。 -/
-def highSymsOpt : Option PTerm → List String
+def highSymsOpt : Option PTerm → List JStr
   | none => []
   | some t => highSyms t
 end
 
 /-- 比べの項1つだけの並びの、その項の背骨（chainSyms の `high(only(s))`）。 -/
-def highOnly : Option PRow → List String
+def highOnly : Option PRow → List JStr
   | some (.seq [t] _) => highSyms t
   | _ => []
 
 mutual
 /-- 段8 の比べの左の背骨（resolve.js:697 chainSyms の op の枝）：記号ごとに右の辺の比べの背骨も数え、終わりの左の辺の背骨も数える。 -/
-def lowSyms : PRow → List String
+def lowSyms : PRow → List JStr
   | t@(.op sym _ l r _) => if COMPARE_LOW sym then sym :: (highOnly r ++ lowSymsOpt l) else highOnly (some t)
   | t@(.seq _ _) => highOnly (some t)
 /-- 欠けうる行の木（`high(only(null))` は何も足さない）。 -/
-def lowSymsOpt : Option PRow → List String
+def lowSymsOpt : Option PRow → List JStr
   | none => []
   | some t => lowSyms t
 end
 
 /-- 比べの連鎖の記号の並び（resolve.js:697 chainSyms）。項なら段13 の背骨、行の木なら段8 の背骨。 -/
-def chainSyms : Sum PTerm PRow → List String
+def chainSyms : Sum PTerm PRow → List JStr
   | .inl t => highSyms t
   | .inr t => lowSyms t
 
@@ -566,20 +519,20 @@ def chainSyms : Sum PTerm PRow → List String
 def refuseChain (t : Sum PTerm PRow) (line : Option Nat) : Except FrontErr Unit :=
   let syms := chainSyms t
   if syms.length < 2 then pure ()
-  else if syms.all (strEq · "=") || syms.all (strEq · "==") then pure ()
+  else if syms.all (· == "=") || syms.all (· == "==") then pure ()
   else
-    let up := fun (s : String) => strEq s "<" || strEq s "<="
-    let down := fun (s : String) => strEq s ">" || strEq s ">="
+    let up := fun (s : JStr) => s == "<" || s == "<="
+    let down := fun (s : JStr) => s == ">" || s == ">="
     if syms.length == 2 && (syms.all up || syms.all down) then pure ()
     else
-      let s0 := syms.head?.getD ""
-      let why :=
-        if syms.all up || syms.all down then toString (syms.length + 1) ++ "項です（範囲の連鎖は3項までです）"
+      let s0 : JStr := syms.head?.getD JStr.empty
+      let why : JStr :=
+        if syms.all up || syms.all down then JStr.ofNat (syms.length + 1) ++ "項です（範囲の連鎖は3項までです）"
         else if syms.all (fun s => up s || down s) then "向きが揃っていません"
-        else if syms.all (strEq · "!=") || syms.all (strEq · "!==") then
+        else if syms.all (· == "!=") || syms.all (· == "!==") then
           "`" ++ s0 ++ "` の連鎖です（`" ++ s0 ++ "` は推移的でないので、`1 " ++ s0 ++ " 2 " ++ s0 ++ " 1` は隣どうしが全部違っても両端が等しくなります）"
         else "種類の違う比べを混ぜています"
-      let shown := match t with
+      let shown : JStr := match t with
         | .inl u => writeTerm u
         | .inr u => writeTree u
       throw (rowRefusal (shapeError "compare-chain"
@@ -595,12 +548,12 @@ def visitTerm (line : Option Nat) : PTerm → Except FrontErr Unit
     visitChild line sym stage l
     visitChild line sym stage r
 /-- visitTerm の `for (const child of [term.left, term.right])` の1回。 -/
-def visitChild (line : Option Nat) (sym : String) (stage : Nat) : Option PTerm → Except FrontErr Unit
+def visitChild (line : Option Nat) (sym : JStr) (stage : Nat) : Option PTerm → Except FrontErr Unit
   | none => pure ()
   | some c => do
     match c with
     | .infix csym cstage _ _ =>
-      if cstage == stage && !strEq (assocOf csym) (assocOf sym) then
+      if cstage == stage && !(assocOf csym == assocOf sym) then
         throw (rowRefusal (shapeError "infix-mixed-assoc"
           ("同じ段で結合の向きが違う中置（`" ++ csym ++ "` と `" ++ sym ++ "`）が続いています。括りで分けて書きます。")) line)
     | .atom _ _ _ => pure ()
@@ -655,7 +608,7 @@ def parseLowLoop (toks : Array Tok) : Nat → Nat → Option PRow → Nat → Ex
     match toks[pos]? with
     | some (.op sym stage assoc) =>
       if stage ≤ 9 && stage ≥ minStage then do
-        let (right, pos) ← parseLow toks fuel (if strEq assoc "right" then stage else stage + 1) (pos + 1)
+        let (right, pos) ← parseLow toks fuel (if assoc == "right" then stage else stage + 1) (pos + 1)
         parseLowLoop toks fuel minStage (some (.op sym stage left right none)) pos
       else pure (left, pos)
     | _ => pure (left, pos)
@@ -690,7 +643,7 @@ def parseHighLoop (toks : Array Tok) : Nat → Nat → Option PTerm → Nat → 
     match toks[pos]? with
     | some (.op sym stage assoc) =>
       if stage ≥ 12 && stage ≥ minStage then do
-        let next := if strEq assoc "right" then stage else stage + 1
+        let next := if assoc == "right" then stage else stage + 1
         let pos := pos + 1
         let readRight := match toks[pos]? with
           | some (.atom _) => true
@@ -709,25 +662,25 @@ end
 - `post pre core ps`：核を読み、後置の印を集めている。 -/
 inductive TokSt where
   | idle
-  | pre (marks : Array String)
-  | post (pre : Array String) (core : PCore) (marks : Array String)
+  | pre (marks : Array JStr)
+  | post (pre : Array JStr) (core : PCore) (marks : Array JStr)
 
 /-- 項を閉じる（resolve.js:491-502 tokenize の綴りから意味への写し、R138）。点なしの席でない行の核 `_` で、いちばん内側の前置が `!` の物は
 void（その `!` を外して印 nVoid）、ほかの核 `_` は id（いちばん内側に `!` を足して印 nId）。 -/
-def closeAtom (seat : Bool) (pre : Array String) (core : PCore) (post : Array String) : PTerm :=
+def closeAtom (seat : Bool) (pre : Array JStr) (core : PCore) (post : Array JStr) : PTerm :=
   match core with
   | .unit _ _ =>
     if seat then .atom pre.toList core post.toList
     else
       match pre.back? with
       | some l =>
-        if strEq l "!" then .atom pre.pop.toList (.unit false true) post.toList
+        if l == "!" then .atom pre.pop.toList (.unit false true) post.toList
         else .atom (pre.push "!").toList (.unit true false) post.toList
       | none => .atom (pre.push "!").toList (.unit true false) post.toList
   | _ => .atom pre.toList core post.toList
 
 /-- 中置の語の字句（resolve.js:477-482）。表に無ければ operator-unknown、廃止なら operator-removed。 -/
-def infixTok (w : String) : Except FrontErr Tok :=
+def infixTok (w : JStr) : Except FrontErr Tok :=
   match infixDef? w with
   | none => throw (shapeError "operator-unknown" ("`" ++ w ++ "` は中置の演算子として表にありません。"))
   | some d =>
@@ -736,8 +689,8 @@ def infixTok (w : String) : Except FrontErr Tok :=
     | none => pure (.op w d.precedence (d.assoc.getD "left"))
 
 /-- 文字列の語の核（resolve.js:466-468 makeCore の後ろ）：`_` は単位、`<x>` は名前、ほかは字面。 -/
-def strCore (w : String) : PCore :=
-  if strEq w "_" then .unit false false
+def strCore (w : JStr) : PCore :=
+  if w == "_" then .unit false false
   else match nameWord? w with
     | some n => .name n
     | none => .lit w
@@ -748,7 +701,7 @@ mutual
 燃料：字句の数を n とすると、parseLow・parseLowLoop・parseSegment・parseSegmentLoop・parseHigh・parseHighLoop の呼ばれる数の和は
 `4 + 5·(段1〜9 の中置の字句の数) + 3·(項の字句の数) + 6·(段12〜22 の中置の字句の数) ≤ 6n + 4`（parseLow は段1〜9 の中置ごとに1回と初めの1回、
 parseSegment も同じ数、ループは1回ごとに字句を1つ読む、並びの項は字句を1つ以上読む）。呼び出しの鎖の長さはこの和を超えないので、`6n + 5` で尽きない
-（例の集まり 354,751 本と足した 162 本で、燃料の断り（InternalError）は 0）。 -/
+（例の集まり 354,751 本と足した 162 本で、燃料の断り（InternalError）は 0）。燃料は字句の数で数え、語の綴りの長さ（単位の数）には依らない。 -/
 def parseRow (inBracket seat : Bool) : WRow → Except FrontErr PRow
   | .mk _ line _ words => do
     -- resolve.js:515-520：tokenize の断りは、この行が（括りの中の行が先に持っていなければ）行を持つ
@@ -775,10 +728,11 @@ def parseRow (inBracket seat : Bool) : WRow → Except FrontErr PRow
       | some (terms, idx, term) =>
         match missingInfix term with
         | some (sym, leftMissing) =>
-          let side := if leftMissing then "左" else "右"
+          let side : JStr := if leftMissing then "左" else "右"
           let sec := writeTerm term
-          let near := if idx == 0 then "後ろ" else if idx == terms.length - 1 then "前" else "前と後ろ"
-          let tail := if idx == 0 && (terms.drop 1).all isUnitTerm then "点なしなら `!_` を書かずに `[" ++ sec ++ "]` と書きます。" else ""
+          let near : JStr := if idx == 0 then "後ろ" else if idx == terms.length - 1 then "前" else "前と後ろ"
+          let tail : JStr :=
+            if idx == 0 && (terms.drop 1).all isUnitTerm then "点なしなら `!_` を書かずに `[" ++ sec ++ "]` と書きます。" else JStr.empty
           throw (rowRefusal (shapeError "infix-missing-operand"
             ("点なしの被演算子は1項に限ります（§2）。括りの行 `" ++ writeRow words ++ "` は、区間 `" ++ sec ++ "` の" ++ near ++
               "にも項が並ぶので点なしの形ではなく、中置 `" ++ sym ++ "` の" ++ side ++
@@ -807,7 +761,7 @@ def tokenize (seat : Bool) : List Word → TokSt → Array Tok → Except FrontE
     | .post pre core ps, some m => tokenize seat rest (.post pre core (ps.push m)) acc
     | st, _ =>
       -- 前の項を閉じる（後置の印が続かない所）
-      let closed : Option (Array String) × Array Tok := match st with
+      let closed : Option (Array JStr) × Array Tok := match st with
         | .post pre core ps => (none, acc.push (.atom (closeAtom seat pre core ps)))
         | .pre ms => (some ms, acc)
         | .idle => (none, acc)
@@ -823,7 +777,7 @@ def tokenize (seat : Bool) : List Word → TokSt → Array Tok → Except FrontE
       | none =>
         -- 項の始まり：中置の語か、前置の印か、核
         if isInfixWord w then do
-          let tok ← infixTok (match w with | .str s => s | .blk _ _ => "")
+          let tok ← infixTok (match w with | .str s => s | .blk _ _ => JStr.empty)
           tokenize seat rest .idle (acc.push tok)
         else
           match prefixWord? w with
@@ -836,7 +790,7 @@ def makeCore : Word → Except FrontErr PCore
   | .str w => pure (strCore w)
   | .blk tag rows => do
     match blockTag? tag with
-    | none => throw (shapeError "front-end-shape" ("前段の囲みの印を読めません: " ++ jsonQuote tag))
+    | none => throw (shapeError "front-end-shape" ("前段の囲みの印を読めません: " ++ JStr.jsonStringify tag))
     | some c =>
       let isB := c == .bracket
       -- resolve.js:450：1行の括りが点なしの席なら、その行の `_` は綴りのまま読む（seatRows）
@@ -848,8 +802,9 @@ def makeCore : Word → Except FrontErr PCore
       if isB then
         match prows with
         | [r0@(.op sym _ l r _)] =>
-          if (strEq sym ":" || strEq sym "?") && (l.isNone || r.isNone) then
-            let how := if strEq sym "?" then "関数なら左に仮引数、右に本体を書きます（`[z ? z]`）" else "欄なら左に名前、右に値を書きます（`[k : 5]`）"
+          if (sym == ":" || sym == "?") && (l.isNone || r.isNone) then
+            let how : JStr :=
+              if sym == "?" then "関数なら左に仮引数、右に本体を書きます（`[z ? z]`）" else "欄なら左に名前、右に値を書きます（`[k : 5]`）"
             throw (shapeError "pointfree-tree-notation"
               ("括り `[" ++ writeTree r0 ++ "]` は、片側の欠けた `" ++ sym ++ "` の点なし（木を書く記法の `[" ++ sym ++
                 "]`）です。alpha1 では作らない（§2、§5 Q19）ので、読む段で止めます（§4 R119。前は並びの中で G7）。" ++ how ++ "。"))

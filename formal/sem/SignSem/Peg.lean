@@ -9,7 +9,7 @@ alpha1 の前段の2つ目（B2）。peggy 4.2.0（alpha1/javascript/node_module
 
 - 入口は `parse : Pre → Except FrontErr (List WRow)`。返す行は Program の結果（sign.pegjs:57）で、行ごとに
   start は Expression の offset()（sign.pegjs:74 の rowAt）、line は `Pre.lineAt[start]`、qs は `?` の語の位置（sign.pegjs:76-79 の qAt）。
-  位置は下の「位置」のとおり符号位置の番号に直す。
+  位置は下の「文字列と位置」のとおり符号位置の番号に直す。
 - 断りは JS の throw の写しで、name は `"SyntaxError"`、reason は無し。line は frontEnd（resolve.js:250-252）と同じく
   断りの位置（location.start.offset）の `Pre.lineAt`。
 - 写した JS は、sign.pegjs の規則と、peggy が作る parser の source（`peggy.generate(文法, {output: "source", format: "es"})`、
@@ -20,17 +20,18 @@ alpha1 の前段の2つ目（B2）。peggy 4.2.0（alpha1/javascript/node_module
   互いに呼ばない規則（字だけを読む物）を先に、互いに呼ぶ規則（Program・Line・Expression・TermAt・Term・Prefixes・Core・Block・
   Expressions・prefix）を後の mutual に置いた。
 
-## 位置
+## 文字列と位置
 
-解析は JS と同じく UTF-16 の符号単位の上で行う（`In.units`、JS の `input.charCodeAt(k)`）。字の組の判定（`input.charAt(pos)` を正規表現に当てる）も
+文字列は JS の文字列（`JStr`、UTF-16 の符号単位の並び）のまま持つ。解析は JS と同じく `Pre.text` の符号単位の上で行う（`In.units` の
+k 番目が JS の `input.charCodeAt(k)`）。字の組の判定（`input.charAt(pos)` を正規表現に当てる。この文法の正規表現に u の旗は無い）も
 1単位ずつなので、BMP の外の字はサロゲートの片方ずつを見る（`\😀` の `\` は前の半分だけを取り、後ろの半分で止まる）。
-返す位置（WRow の start・qs）は `Pre` と同じ Unicode の符号位置の番号に直し（`In.cpOf`）、行は `Pre.lineAt` をその番号で引く。
-対の後ろの半分を指す位置（断りの位置だけがそうなる）はその字の番号にする（前処理の lineAt は対の中で変わらない）。
+返す文字列（`$( … )` の字の取り出し、語、断りの文）も符号単位から直に作るので、対の無いサロゲートは対の無いまま出る（断りの文の
+found が対の片方の時、`Pre.text` に対の無いサロゲートがある時）。断りの文の期待の並べ（`descriptions.sort()`）は符号単位の辞書式（`JStr.lt`）。
 
-Lean の String は対にならないサロゲートを持てない。JS の答えに対にならないサロゲートが出る所（断りの文の found が対の片方の時）は、
-そのサロゲートを U+FFFD に置き換えた物を返す（JS の文字列を Unicode の文字列に直す時の置き換えで、Lean の `Json.parse` が
-`"\ud83d"` を読んだ物とも同じ）。JS の `Pre.text` そのものに対にならないサロゲートがある時は、写しが受けるのは U+FFFD に
-置き換えた text で、返すのはその text での答え（比べの意味は Main.lean の頭）。
+返す位置（WRow の start・qs）は `Pre` と同じ Unicode の符号位置の番号に直し（`In.cpOf`）、行は `Pre.lineAt` をその番号で引く。
+符号位置は、上の半分の直後に下の半分がある2単位を1つ、ほかの単位（対の無いサロゲートも）を1つずつ数える（dump.mjs:70-94 の cpMaps）。
+対の後ろの半分を指す位置（断りの位置だけがそうなる）はその字の番号にする（前処理の lineAt は対の中で変わらない）。
+この直し（`cpTable`・`In.cpOf`・`In.cp`）は、stages の位置を符号単位のまま書く段（計画の S5）で除く。
 
 ## 止まること
 
@@ -42,8 +43,10 @@ Lean の String は対にならないサロゲートを持てない。JS の答�
 
 ## 公理
 
-`#print axioms SignSem.Peg.parse` は `[propext]` だけ（Classical.choice は出ない）。Lean 4.36 の `String.toList`・`String.length`・
-String の `==` が Classical.choice に依るので、字は `String.toUTF8` から戻し（`chars`）、文字列の比べは `strEq` にした。
+`#print axioms SignSem.Peg.parse` は `[propext]` だけ（Classical.choice は出ない。SignSem/Axioms.lean で固める）。Lean 4.36 の
+String の `==`・`String.toList`・`String.length` は Classical.choice に依るので、Lean の String は字面と `internalError` の文を
+`JStr` にする所（`Coe String JStr` の `JStr.ofString`、公理なし）でだけ使い、比べには使わない。文字列は JStr の `==`（単位ごと、
+公理なし）と `JStr.lt` で、符号単位は Nat の `==`・`≤` で比べる。
 
 ## 確かめ（2026-11-24）
 
@@ -58,80 +61,30 @@ String の `==` が Classical.choice に依るので、字は `String.toUTF8` �
 
 namespace SignSem.Peg
 
-/-! ## 字の道具
-
-Lean 4.36 の `String.toList`・`String.length`・String の `==`（BEq）は Classical.choice に依る（UTF-8 の読みの証明が使う）。
-module では使わず、字はバイト列（`String.toUTF8`、公理なし）から自分で戻し、比べは `instDecidableEqString`（公理なし）で決める。
--/
-
-/-- 文字列の同じか（`instDecidableEqString` による。JS の `===`）。 -/
-def strEq (a b : String) : Bool := if a = b then true else false
-
-/-- バイト列の j 番目（外なら 0）。 -/
-def byteAt (b : ByteArray) (j : Nat) : Nat := if h : j < b.size then b[j].toNat else 0
-
-/--
-UTF-8 のバイト列を字に戻す繰り返し。String は正しい UTF-8 なので、頭のバイトで長さを決めて繋ぐだけでよい。k は燃料で、1回で1バイト以上
-進むので、バイトの数あれば尽きない（尽きたらそこまでを返す）。
--/
-def utf8DecodeAux (b : ByteArray) (i : Nat) (acc : Array Char) : Nat → Array Char
-  | 0 => acc
-  | k + 1 =>
-    if i < b.size then
-      let c0 := byteAt b i
-      if c0 < 0x80 then utf8DecodeAux b (i + 1) (acc.push (Char.ofNat c0)) k
-      else if c0 < 0xE0 then
-        utf8DecodeAux b (i + 2) (acc.push (Char.ofNat ((c0 % 0x20) * 0x40 + byteAt b (i + 1) % 0x40))) k
-      else if c0 < 0xF0 then
-        utf8DecodeAux b (i + 3)
-          (acc.push (Char.ofNat ((c0 % 0x10) * 0x1000 + (byteAt b (i + 1) % 0x40) * 0x40 + byteAt b (i + 2) % 0x40))) k
-      else
-        utf8DecodeAux b (i + 4)
-          (acc.push (Char.ofNat ((c0 % 0x08) * 0x40000 + (byteAt b (i + 1) % 0x40) * 0x1000 +
-            (byteAt b (i + 2) % 0x40) * 0x40 + byteAt b (i + 3) % 0x40))) k
-    else acc
-
-/-- 文字列の字（符号位置）の並び（`String.toList` と同じ物を、公理なしで）。 -/
-def chars (s : String) : Array Char := utf8DecodeAux s.toUTF8 0 #[] s.toUTF8.size
-
-/-- 1字の UTF-16 の符号単位（BMP の字は1つ、外の字はサロゲートの対）。 -/
-def charUnits (c : Char) : List Nat :=
-  let n := c.toNat
-  if n < 0x10000 then [n] else
-    let m := n - 0x10000
-    [0xD800 + m / 0x400, 0xDC00 + m % 0x400]
-
-/-- JS の文字列（UTF-16 の符号単位の並び）。`input.charCodeAt(k)` の k 番目。 -/
-def utf16Of (cs : Array Char) : Array Nat :=
-  cs.foldl (fun acc c => (charUnits c).foldl (fun a u => a.push u) acc) #[]
+/-! ## 字の道具 -/
 
 /--
 符号単位の位置 → 字（符号位置）の番号。k 番目の字の単位（対なら2つとも）に k を置き、最後に字の数を置く（大きさは単位の数 + 1）。
-dump.mjs の位置の直し（cpMaps の toCp）と同じで、対の後ろの半分はその字の番号にする。
+字は、上の半分の直後に下の半分がある2単位（`JStr.pairAt`）を1つ、ほかの単位（対の無いサロゲートも）を1つと数える。dump.mjs の
+位置の直し（cpMaps の toCp、dump.mjs:70-94）と同じ数え方で、対の後ろの半分（toCp では -1）はその字の番号にする。燃料は単位の数 + 1 で、
+1回で1単位以上進むので尽きない。stages の位置を符号単位のまま書く段（計画の S5）で除く。
 -/
-def cpTable (cs : Array Char) : Array Nat :=
-  let r := cs.foldl (fun (acc : Array Nat × Nat) c =>
-    ((charUnits c).foldl (fun a _ => a.push acc.2) acc.1, acc.2 + 1)) (#[], 0)
-  r.1.push r.2
-
-/-- サロゲートの単位か。 -/
-def isSurrogate (u : Nat) : Bool := 0xD800 ≤ u && u ≤ 0xDFFF
-
-/-- 符号単位1つを字に（JS の `input.charAt(k)` の1字）。対にならないサロゲートは U+FFFD（頭の注の「位置」）。 -/
-def unitChar (u : Nat) : Char := if isSurrogate u then '�' else Char.ofNat u
-
-/-- 符号単位の並びを字に戻す（対は1字に、対にならないサロゲートは U+FFFD に）。 -/
-def unitsToChars : List Nat → List Char
-  | [] => []
-  | [u] => [unitChar u]
-  | u :: v :: rest =>
-    if 0xD800 ≤ u && u ≤ 0xDBFF && 0xDC00 ≤ v && v ≤ 0xDFFF then
-      Char.ofNat (0x10000 + (u - 0xD800) * 0x400 + (v - 0xDC00)) :: unitsToChars rest
-    else unitChar u :: unitsToChars (v :: rest)
+def cpTable (s : JStr) : Array Nat := go 0 0 #[] (s.size + 1)
+where
+  go (k cp : Nat) (acc : Array Nat) : Nat → Array Nat
+    | 0 => acc.push cp
+    | r + 1 =>
+      if k < s.size then
+        if s.pairAt k then go (k + 2) (cp + 1) ((acc.push cp).push cp) r
+        else go (k + 1) (cp + 1) (acc.push cp) r
+      else acc.push cp
 
 /-! ## 期待（peggy の expectation） -/
 
-/-- 字の組の部分（generate-js.js:1231-1233 の peg$classExpectation の parts の要素）。1字か、`a-z` の範囲（JS の `[lo, hi]`）。 -/
+/--
+字の組の部分（generate-js.js:1231-1233 の peg$classExpectation の parts の要素）。1字か、`a-z` の範囲（JS の `[lo, hi]`）。
+この文法の組の字はどれも ASCII なので、JS の1字の文字列 `c` の `charCodeAt(0)` は `c.toNat`。
+-/
 inductive CPart where
   | ch (c : Char)
   | range (lo hi : Char)
@@ -139,10 +92,10 @@ inductive CPart where
 
 /--
 期待（generate-js.js:1227-1241 の peg$literalExpectation・peg$classExpectation・peg$anyExpectation・peg$endExpectation）。
-`other`（expected() の物）はこの文法では作らない。literal の text は字の並びで持つ（読みにも説明にも使う）。
+`other`（expected() の物）はこの文法では作らない。literal の text は JS の文字列（読みにも説明にも使う）。
 -/
 inductive Expect where
-  | literal (text : List Char)
+  | literal (text : JStr)
   | cls (parts : List CPart) (inverted : Bool)
   | any
   | endOfInput
@@ -150,7 +103,7 @@ inductive Expect where
 
 /--
 字の組の判定（生成物の `peg$rN.test(input.charAt(peg$currPos))`、正規表現は parts と同じ物から作られる）。u は符号単位
-（正規表現に u の旗が無いので、JS も1単位ずつ比べる。この文法の組の字はどれも ASCII）。
+（正規表現に u の旗が無いので、JS も1単位ずつ比べる）。
 -/
 def CPart.has (u : Nat) : CPart → Bool
   | .ch d => u == d.toNat
@@ -162,17 +115,17 @@ def clsTest (parts : List CPart) (inverted : Bool) (u : Nat) : Bool :=
 /-! 生成物の期待の定数（parser_gen の peg$e0〜peg$e41、生成物:221-262）。番号は生成物と同じ。 -/
 
 /-- 生成物:221 `peg$e0 = peg$literalExpectation(" ", false)` -/
-def e0 : Expect := .literal [' ']
+def e0 : Expect := .literal " "
 /-- 生成物:222 -/
-def e1 : Expect := .literal ['\x02']
+def e1 : Expect := .literal "\x02"
 /-- 生成物:223（`_e` の `" " / EOL` は peggy が字の組 `[\r ]` に畳む） -/
 def e2 : Expect := .cls [.ch '\r', .ch ' '] false
 /-- 生成物:224 -/
-def e3 : Expect := .literal ['\r']
+def e3 : Expect := .literal "\r"
 /-- 生成物:225（EOF の `.`。いつも先読みの中なので記録されない） -/
 def e4 : Expect := .any
 /-- 生成物:226 -/
-def e5 : Expect := .literal ['`']
+def e5 : Expect := .literal "`"
 /-- 生成物:227 -/
 def e6 : Expect := .cls [.ch '\r', .ch '\n', .ch '`'] true
 /-- 生成物:228 -/
@@ -180,65 +133,65 @@ def e7 : Expect := .cls [.ch '@', .ch '~', .ch '!', .ch ' '] false
 /-- 生成物:229 -/
 def e8 : Expect := .cls [.ch '\r', .ch '\n'] true
 /-- 生成物:230 -/
-def e9 : Expect := .literal ['[']
+def e9 : Expect := .literal "["
 /-- 生成物:231 -/
-def e10 : Expect := .literal [']']
+def e10 : Expect := .literal "]"
 /-- 生成物:232 -/
-def e11 : Expect := .literal ['{']
+def e11 : Expect := .literal "{"
 /-- 生成物:233 -/
-def e12 : Expect := .literal ['}']
+def e12 : Expect := .literal "}"
 /-- 生成物:234 -/
-def e13 : Expect := .literal ['(']
+def e13 : Expect := .literal "("
 /-- 生成物:235 -/
-def e14 : Expect := .literal [')']
+def e14 : Expect := .literal ")"
 /-- 生成物:236 -/
-def e15 : Expect := .literal ['|', '|']
+def e15 : Expect := .literal "||"
 /-- 生成物:237（`"]" / "}" / ")" / "\x03"` を peggy が字の組に畳む） -/
 def e16 : Expect := .cls [.ch '\x03', .ch ')', .ch ']', .ch '}'] false
 /-- 生成物:238 -/
-def e17 : Expect := .literal ['|']
+def e17 : Expect := .literal "|"
 /-- 生成物:239 -/
-def e18 : Expect := .literal ['\x03']
+def e18 : Expect := .literal "\x03"
 /-- 生成物:240 -/
 def e19 : Expect := .cls [.ch '`', .ch '\r', .ch '\n'] true
 /-- 生成物:241 -/
-def e20 : Expect := .literal ['\\']
+def e20 : Expect := .literal "\\"
 /-- 生成物:242 -/
 def e21 : Expect := .cls [.ch '\r'] true
 /-- 生成物:243 -/
-def e22 : Expect := .literal ['-']
+def e22 : Expect := .literal "-"
 /-- 生成物:244 -/
 def e23 : Expect := .cls [.range '0' '9'] false
 /-- 生成物:245 -/
-def e24 : Expect := .literal ['.']
+def e24 : Expect := .literal "."
 /-- 生成物:246 -/
-def e25 : Expect := .literal ['x']
+def e25 : Expect := .literal "x"
 /-- 生成物:247 -/
-def e26 : Expect := .literal ['0', 'r']
+def e26 : Expect := .literal "0r"
 /-- 生成物:248 -/
-def e27 : Expect := .literal ['0', 'b']
+def e27 : Expect := .literal "0b"
 /-- 生成物:249（`"0" / "1"` を peggy が字の組に畳む） -/
 def e28 : Expect := .cls [.range '0' '1'] false
 /-- 生成物:250 -/
-def e29 : Expect := .literal ['u']
+def e29 : Expect := .literal "u"
 /-- 生成物:251 -/
 def e30 : Expect := .cls [.range 'a' 'z', .range 'A' 'Z'] false
 /-- 生成物:252 -/
 def e31 : Expect := .cls [.range 'a' 'z', .range 'A' 'Z', .range '0' '9', .ch '_'] false
 /-- 生成物:253 -/
-def e32 : Expect := .literal ['_']
+def e32 : Expect := .literal "_"
 /-- 生成物:254 -/
 def e33 : Expect := .cls [.range '0' '9', .range 'a' 'f', .range 'A' 'F'] false
 /-- 生成物:255 -/
-def e34 : Expect := .literal ['#', '#', '#']
+def e34 : Expect := .literal "###"
 /-- 生成物:256 -/
-def e35 : Expect := .literal ['#', '#']
+def e35 : Expect := .literal "##"
 /-- 生成物:257 -/
-def e36 : Expect := .literal ['#']
+def e36 : Expect := .literal "#"
 /-- 生成物:258 -/
-def e37 : Expect := .literal ['~']
+def e37 : Expect := .literal "~"
 /-- 生成物:259 -/
-def e38 : Expect := .literal ['!', '!']
+def e38 : Expect := .literal "!!"
 /-- 生成物:260（prefix の `"!" / "$" / "@"` を peggy が字の組に畳む） -/
 def e39 : Expect := .cls [.ch '!', .ch '$', .ch '@'] false
 /-- 生成物:261（postfix の `"!" / "~" / "@"`） -/
@@ -250,95 +203,89 @@ def e41 : Expect :=
 
 /-! ## 断りの文（peg$SyntaxError.buildMessage、generate-js.js:974-1072） -/
 
-/-- hex(ch)（generate-js.js:1003-1005）：符号を16進の大文字で。 -/
-def hexUpper (n : Nat) : String := String.ofList ((Nat.toDigits 16 n).map Char.toUpper)
-
-/-- literalEscape・classEscape の終わりの2つ（generate-js.js:1015-1016・1029-1030）：制御の字を `\x0H`・`\xHH` に。 -/
-def ctlEscape (c : Char) : String :=
-  let n := c.toNat
-  if n ≤ 0x0F then "\\x0" ++ hexUpper n
-  else if n ≤ 0x1F || (0x7F ≤ n && n ≤ 0x9F) then "\\x" ++ hexUpper n
-  else c.toString
+/-- hex(ch)（generate-js.js:1003-1005）：符号単位 `ch.charCodeAt(0)` を16進の大文字で（`toString(16).toUpperCase()`）。 -/
+def hexUpper (n : Nat) : JStr := ⟨(Nat.toDigits 16 n).foldl (fun acc c => acc.push (JStr.unitOf c.toUpper)) #[]⟩
 
 /--
-literalEscape（generate-js.js:1007-1017）の1字ぶん。JS は文字列全体に置き換えを順に当てるが、前の置き換えが出す字（`\`・`"`・`0`・英字）は
-後の置き換えに当たらないので、1字ずつ当てるのと同じ。
+literalEscape・classEscape の終わりの2つ（generate-js.js:1015-1016・1029-1030）：制御の単位を `\x0H`・`\xHH` に。
+ほかの単位（対の片方も）は、その1単位の文字列のまま。
 -/
-def literalEscapeChar (c : Char) : String :=
-  if c == '\\' then "\\\\"
-  else if c == '"' then "\\\""
-  else if c == '\x00' then "\\0"
-  else if c == '\t' then "\\t"
-  else if c == '\n' then "\\n"
-  else if c == '\r' then "\\r"
-  else ctlEscape c
+def ctlEscape (u : Nat) : JStr :=
+  if u ≤ 0x0F then "\\x0" ++ hexUpper u
+  else if u ≤ 0x1F || (0x7F ≤ u && u ≤ 0x9F) then "\\x" ++ hexUpper u
+  else JStr.fromCharCode u
+
+/--
+literalEscape（generate-js.js:1007-1017）の1単位ぶん。JS は文字列全体に置き換えを順に当てる（正規表現に u の旗は無く、1単位ずつ当たる）が、
+前の置き換えが出す字（`\`・`"`・`0`・英字）は後の置き換えに当たらないので、1単位ずつ当てるのと同じ。
+-/
+def literalEscapeUnit (u : Nat) : JStr :=
+  if u == '\\'.toNat then "\\\\"
+  else if u == '"'.toNat then "\\\""
+  else if u == 0x00 then "\\0"
+  else if u == '\t'.toNat then "\\t"
+  else if u == '\n'.toNat then "\\n"
+  else if u == '\r'.toNat then "\\r"
+  else ctlEscape u
 
 /-- literalEscape（generate-js.js:1007-1017）。 -/
-def literalEscape (s : List Char) : String := String.join (s.map literalEscapeChar)
+def literalEscape (s : JStr) : JStr := s.units.foldl (fun acc u => acc ++ literalEscapeUnit u.toNat) JStr.empty
 
-/-- classEscape（generate-js.js:1019-1031）の1字ぶん。 -/
-def classEscapeChar (c : Char) : String :=
-  if c == '\\' then "\\\\"
-  else if c == ']' then "\\]"
-  else if c == '^' then "\\^"
-  else if c == '-' then "\\-"
-  else if c == '\x00' then "\\0"
-  else if c == '\t' then "\\t"
-  else if c == '\n' then "\\n"
-  else if c == '\r' then "\\r"
-  else ctlEscape c
+/-- classEscape（generate-js.js:1019-1031）の1単位ぶん。 -/
+def classEscapeUnit (u : Nat) : JStr :=
+  if u == '\\'.toNat then "\\\\"
+  else if u == ']'.toNat then "\\]"
+  else if u == '^'.toNat then "\\^"
+  else if u == '-'.toNat then "\\-"
+  else if u == 0x00 then "\\0"
+  else if u == '\t'.toNat then "\\t"
+  else if u == '\n'.toNat then "\\n"
+  else if u == '\r'.toNat then "\\r"
+  else ctlEscape u
 
 /-- DESCRIBE_EXPECTATION_FNS（generate-js.js:975-1000）と describeExpectation（generate-js.js:1033-1035）。 -/
-def describeExpectation : Expect → String
+def describeExpectation : Expect → JStr
   | .literal t => "\"" ++ literalEscape t ++ "\""
   | .cls parts inv =>
-    let part : CPart → String
-      | .ch c => classEscapeChar c
-      | .range lo hi => classEscapeChar lo ++ "-" ++ classEscapeChar hi
-    "[" ++ (if inv then "^" else "") ++ String.join (parts.map part) ++ "]"
+    let part : CPart → JStr
+      | .ch c => classEscapeUnit c.toNat
+      | .range lo hi => classEscapeUnit lo.toNat ++ "-" ++ classEscapeUnit hi.toNat
+    ("[" : JStr) ++ (if inv then ("^" : JStr) else JStr.empty) ++ JStr.join (parts.map part) ++ "]"
   | .any => "any character"
   | .endOfInput => "end of input"
 
-/-- JS の文字列の符号単位（UTF-16）。`descriptions.sort()` は符号単位で比べる。 -/
-def utf16Units (s : String) : List Nat :=
-  (chars s).toList.flatMap charUnits
-
-/-- 符号単位の並びの辞書順の `<`（JS の既定の sort の比べ）。 -/
-def unitsLt : List Nat → List Nat → Bool
-  | [], [] => false
-  | [], _ :: _ => true
-  | _ :: _, [] => false
-  | a :: as, b :: bs => if a < b then true else if b < a then false else unitsLt as bs
-
-/-- 並べた所へ1つ入れる。同じ物があれば入れない（`descriptions.sort()` の後の重複の除き、generate-js.js:1041-1052 と同じ結果）。 -/
-def insertUniq (d : String) : List String → List String
+/--
+並べた所へ1つ入れる。同じ物があれば入れない（`descriptions.sort()` の後の重複の除き、generate-js.js:1041-1052 と同じ結果）。
+並べは JS の既定の sort の比べ（符号単位の辞書式、`JStr.lt`）、同じかは `!==` の逆（単位ごとに同じか、JStr の `==`）。
+-/
+def insertUniq (d : JStr) : List JStr → List JStr
   | [] => [d]
   | x :: xs =>
-    if strEq d x then x :: xs
-    else if unitsLt (utf16Units d) (utf16Units x) then d :: x :: xs
+    if d == x then x :: xs
+    else if JStr.lt d x then d :: x :: xs
     else x :: insertUniq d xs
 
 /-- `descriptions.slice(0, -1).join(", ") + ", or " + 最後`（generate-js.js:1061-1063）。空の時は JS と同じく `", or undefined"`。 -/
-def joinOr : List String → String
+def joinOr : List JStr → JStr
   | [] => ", or undefined"
   | [d] => ", or " ++ d
-  | ds => String.intercalate ", " ds.dropLast ++ ", or " ++ ds.getLastD ""
+  | ds => JStr.intercalate ", " ds.dropLast ++ ", or " ++ ds.getLastD JStr.empty
 
 /-- describeExpected（generate-js.js:1037-1065）。 -/
-def describeExpected (expected : List Expect) : String :=
+def describeExpected (expected : List Expect) : JStr :=
   let ds := expected.foldl (fun acc e => insertUniq (describeExpectation e) acc) []
   match ds with
   | [d] => d
   | [d0, d1] => d0 ++ " or " ++ d1
   | _ => joinOr ds
 
-/-- describeFound（generate-js.js:1067-1069）。found は `input.charAt(peg$maxFailPos)`（1字）か null。 -/
-def describeFound : Option Char → String
-  | some c => "\"" ++ literalEscapeChar c ++ "\""
+/-- describeFound（generate-js.js:1067-1069）。found は `input.charAt(peg$maxFailPos)`（符号単位1つ。対の片方ならその片方のまま）か null。 -/
+def describeFound : Option Nat → JStr
+  | some u => "\"" ++ literalEscapeUnit u ++ "\""
   | none => "end of input"
 
 /-- buildMessage（generate-js.js:1071）。 -/
-def buildMessage (expected : List Expect) (found : Option Char) : String :=
+def buildMessage (expected : List Expect) (found : Option Nat) : JStr :=
   "Expected " ++ describeExpected expected ++ " but " ++ describeFound found ++ " found."
 
 /-! ## 状態と道具 -/
@@ -359,11 +306,13 @@ structure St where
 /--
 解析の入力。
 
-- `units`：JS の `input`（UTF-16 の符号単位の並び）。位置（peg$currPos）はこの番号。
+- `text`：JS の `input`（`Pre.text`）。`$( … )` の字はここから切り出す。
+- `units`：`text` の符号単位の値（`input.charCodeAt(k)` の表）。位置（peg$currPos）はこの番号。
 - `cpOf`：符号単位の位置（0〜単位の数）→ 字（符号位置）の番号（`cpTable`）。返す位置と行を引くのに使う。
 - `lineAt`：字の番号から元の行を引く表（Pre.lineAt）。
 -/
 structure In where
+  text : JStr
   units : Array Nat
   cpOf : Array Nat
   lineAt : Array Nat
@@ -402,23 +351,21 @@ def silent {α : Type} (m : M α) : M α := do
   return r
 
 /--
-`input.substr(pos, n) === text`（generate-js.js:671-688、MATCH_STRING。1字の時の `charCodeAt` も同じ）。text の字を符号単位にして比べ、
-合えば読み終わりの位置（ACCEPT_STRING・ACCEPT_N の `peg$currPos += n`、n は text の符号単位の数）を返す。
+`input.substr(pos, n) === text`（generate-js.js:671-688、MATCH_STRING。1字の時の `charCodeAt` も同じ）。text の符号単位を順に比べ、
+合えば読み終わりの位置（ACCEPT_STRING・ACCEPT_N の `peg$currPos += n`、n は text の符号単位の数）を返す。燃料は text の残りの単位の数。
 -/
-def litAt (us : Array Nat) (pos : Nat) : List Char → Option Nat
-  | [] => some pos
-  | c :: rest =>
-    match charUnits c with
-    | [u] => if us[pos]? == some u then litAt us (pos + 1) rest else none
-    | [u, v] => if us[pos]? == some u && us[pos + 1]? == some v then litAt us (pos + 2) rest else none
-    | _ => none
+def litAt (us : Array Nat) (t : JStr) (pos : Nat) : Option Nat := go 0 t.size
+where
+  go (k : Nat) : Nat → Option Nat
+    | 0 => some (pos + k)
+    | r + 1 => if us[pos + k]? == some (t.getD k 0).toNat then go (k + 1) r else none
 
 /-- 字そのまま（literal）の一致。合えば読み進め（ACCEPT_STRING・ACCEPT_N）、合わなければ期待を記録する。 -/
 def lit (i : In) (e : Expect) : M Bool := do
   let s ← get
   match e with
   | .literal t =>
-    match litAt i.units s.pos t with
+    match litAt i.units t s.pos with
     | some p =>
       set { s with pos := p }
       return true
@@ -447,13 +394,13 @@ def cls (i : In) (e : Expect) : M (Option Nat) := do
 /-- 字の組の一致を Bool で。 -/
 def clsB (i : In) (e : Expect) : M Bool := do return (← cls i e).isSome
 
-/-- `x*`（生成物の `while (s !== peg$FAILED)`）。x は1回で1字以上を読む物に限る。k は燃料。 -/
+/-- `x*`（生成物の `while (s !== peg$FAILED)`）。x は1回で1単位以上を読む物に限る。k は燃料。 -/
 def starAux (step : M Bool) : Nat → M Unit
   | 0 => throw (internalError "star")
   | k + 1 => do
     if ← step then starAux step k else return ()
 
-/-- `x*`：燃料は残りの字の数 + 1（1回で1字以上読むので、それより多くは回らない）。 -/
+/-- `x*`：燃料は残りの符号単位の数 + 1（1回で1単位以上読むので、それより多くは回らない）。 -/
 def star (i : In) (step : M Bool) : M Unit := do
   starAux step (i.units.size - (← getPos) + 1)
 
@@ -465,8 +412,11 @@ def plus (i : In) (step : M Bool) : M Bool := do
   else
     return false
 
-/-- `$( … )` の字（generate-js.js:612、op.TEXT の `input.substring(s0, peg$currPos)`）。符号単位の a〜b を字に戻す（`unitsToChars`）。 -/
-def text (i : In) (a b : Nat) : String := String.ofList (unitsToChars (i.units.extract a b).toList)
+/--
+`$( … )` の字（generate-js.js:612、op.TEXT の `input.substring(s0, peg$currPos)`）。符号単位の a〜b をそのまま切り出す
+（呼ぶ所ではいつも a ≤ b で、substring の a・b の入れ替えは起きない）。
+-/
+def text (i : In) (a b : Nat) : JStr := i.text.slice a b
 
 /-! ## 字だけを読む規則（互いに呼ばない） -/
 
@@ -535,7 +485,7 @@ def parsecomment (i : In) : M Bool := do
 def parseHex (i : In) : M Bool := clsB i e33
 
 /-- string（sign.pegjs:172、生成物:1432-1488）：`$("`" [^`\r\n]* "`")`。 -/
-def parsestring (i : In) : M (Option String) := do
+def parsestring (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← lit i e5 then
     star i (clsB i e19)
@@ -546,7 +496,7 @@ def parsestring (i : In) : M (Option String) := do
   return none
 
 /-- charactor（sign.pegjs:176、生成物:1490-1528）：`$("\\" [^\r])`。 -/
-def parsecharactor (i : In) : M (Option String) := do
+def parsecharactor (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← lit i e20 then
     if ← clsB i e21 then return some (text i s0 (← getPos))
@@ -556,7 +506,7 @@ def parsecharactor (i : In) : M (Option String) := do
   return none
 
 /-- number（sign.pegjs:177、生成物:1530-1609）：`$("-"? [0-9]+ "."? [0-9]*)`。 -/
-def parsenumber (i : In) : M (Option String) := do
+def parsenumber (i : In) : M (Option JStr) := do
   let s0 ← getPos
   let _ ← lit i e22
   if ← plus i (clsB i e23) then
@@ -567,7 +517,7 @@ def parsenumber (i : In) : M (Option String) := do
   return none
 
 /-- address（sign.pegjs:178、生成物:1611-1679）：`$([0-9]+ "x" Hex+)`。 -/
-def parseaddress (i : In) : M (Option String) := do
+def parseaddress (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← plus i (clsB i e23) then
     if ← lit i e25 then
@@ -580,7 +530,7 @@ def parseaddress (i : In) : M (Option String) := do
   return none
 
 /-- register（sign.pegjs:179、生成物:1681-1772）：`$("0r" Hex+) / $("0b" ("0" / "1")+)`。 -/
-def parseregister (i : In) : M (Option String) := do
+def parseregister (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← lit i e26 then
     if ← plus i (parseHex i) then return some (text i s0 (← getPos))
@@ -595,7 +545,7 @@ def parseregister (i : In) : M (Option String) := do
   return none
 
 /-- unicode（sign.pegjs:180、生成物:1774-1842）：`$([0-9]+ "u" Hex+)`。 -/
-def parseunicode (i : In) : M (Option String) := do
+def parseunicode (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← plus i (clsB i e23) then
     if ← lit i e29 then
@@ -608,7 +558,7 @@ def parseunicode (i : In) : M (Option String) := do
   return none
 
 /-- identifier（sign.pegjs:182、生成物:1844-1944）：`$([a-zA-Z][a-zA-Z0-9_]*) / $("_" [a-zA-Z0-9_]+)` を `<…>` で包む。 -/
-def parseidentifier (i : In) : M (Option String) := do
+def parseidentifier (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← clsB i e30 then
     star i (clsB i e31)
@@ -622,11 +572,11 @@ def parseidentifier (i : In) : M (Option String) := do
   return none
 
 /-- unit（sign.pegjs:186、生成物:1960-1972）：`"_"`。 -/
-def parseunit (i : In) : M (Option String) := do
+def parseunit (i : In) : M (Option JStr) := do
   if ← lit i e32 then return some "_" else return none
 
 /-- Atom（sign.pegjs:169-170、生成物:1403-1430）：string / charactor / address / register / unicode / number / identifier / unit。 -/
-def parseAtom (i : In) : M (Option String) := do
+def parseAtom (i : In) : M (Option JStr) := do
   if let some a ← parsestring i then return some a
   if let some a ← parsecharactor i then return some a
   if let some a ← parseaddress i then return some a
@@ -636,12 +586,12 @@ def parseAtom (i : In) : M (Option String) := do
   if let some a ← parseidentifier i then return some a
   parseunit i
 
-/-- postfix（sign.pegjs:192-193、生成物:2077-2089）：`"!" / "~" / "@"`（peggy が字の組 `[!@~]` に畳む）。 -/
-def parsepostfix (i : In) : M (Option String) := do
-  return (← cls i e40).map fun u => (unitChar u).toString
+/-- postfix（sign.pegjs:192-193、生成物:2077-2089）：`"!" / "~" / "@"`（peggy が字の組 `[!@~]` に畳み、`input.charAt(peg$currPos)` を返す）。 -/
+def parsepostfix (i : In) : M (Option JStr) := do
+  return (← cls i e40).map JStr.fromCharCode
 
-/-- Postfixes の `postfix*` の繰り返し（生成物:952-967 の while）。k は燃料（残りの字の数 + 1）。 -/
-def parsePostfixesAux (i : In) (acc : Array String) : Nat → M (List String)
+/-- Postfixes の `postfix*` の繰り返し（生成物:952-967 の while）。k は燃料（残りの符号単位の数 + 1）。 -/
+def parsePostfixesAux (i : In) (acc : Array JStr) : Nat → M (List JStr)
   | 0 => throw (internalError "Postfixes")
   | k + 1 => do
     match ← parsepostfix i with
@@ -649,32 +599,32 @@ def parsePostfixesAux (i : In) (acc : Array String) : Nat → M (List String)
     | none => return acc.toList
 
 /-- Postfixes（sign.pegjs:116-117、生成物:952-967）：`postfix*` の頭に `_` を付ける。 -/
-def parsePostfixes (i : In) : M (List String) := do
+def parsePostfixes (i : In) : M (List JStr) := do
   parsePostfixesAux i #[] (i.units.size - (← getPos) + 1)
 
 /-- operator（sign.pegjs:195-196、生成物:2091-2124）：`$[!"#$%&'\-=^~\|@;+:*,<>/?]+`。 -/
-def parseoperator (i : In) : M (Option String) := do
+def parseoperator (i : In) : M (Option JStr) := do
   let s0 ← getPos
   if ← plus i (clsB i e41) then return some (text i s0 (← getPos))
   return none
 
 /-- 括りの印（sign.pegjs:128-160 の返す物の頭）。 -/
-def tagBracket : String := "\"BRACKET_\""
-def tagNorm : String := "\"NORM_\""
-def tagAbs : String := "\"ABS_\""
-def tagIndent : String := "\"INDENT_\""
+def tagBracket : JStr := "\"BRACKET_\""
+def tagNorm : JStr := "\"NORM_\""
+def tagAbs : JStr := "\"ABS_\""
+def tagIndent : JStr := "\"INDENT_\""
 
 /-- 行に `":"` の語があるか（sign.pegjs:9 の `line.includes(":")`）。 -/
 def rowHasColon : WRow → Bool
   | .mk _ _ _ ws => ws.any fun w => match w with
-    | .str s => strEq s ":"
+    | .str s => s == (":" : JStr)
     | .blk _ _ => false
 
 /--
 refuseDefineInEnclosure（sign.pegjs:8-12）。囲みの中の行に `:` の語があれば error() で止める。error() の位置（生成物:365-371）は
 peg$savedPos（囲みの書き始め、`start`）で、断りの line はそこの lineAt。
 -/
-def refuseDefineInEnclosure (i : In) (exprs : List WRow) (name : String) (start : Nat) : M Unit :=
+def refuseDefineInEnclosure (i : In) (exprs : List WRow) (name : JStr) (start : Nat) : M Unit :=
   if exprs.any rowHasColon then
     throw { name := "SyntaxError", reason := none, line := i.lineU start,
             message := name ++ " の囲みの中には定義（`:`）を置けません。`:` は名前を付ける定義で値を返さないので、" ++ name ++
@@ -697,8 +647,8 @@ def parseBlockEmpty (i : In) (eo ec : Expect) : M (Option Word) := do
 
 /-- Term の返す物（sign.pegjs:93-107）。`op` は operator の字、`tm` は前置・核・後置（前置は `p_`、後置は `_p`）。 -/
 inductive TermR where
-  | op (s : String)
-  | tm (pre : List String) (core : Word) (post : List String)
+  | op (s : JStr)
+  | tm (pre : List JStr) (core : Word) (post : List JStr)
 
 /-- Expression の `items.map((x) => x[0]).flat()`（sign.pegjs:72）の1項ぶん。Term の返す物（文字列、`[core]`、`[...pre, core, ...post]`）を1段ほどいた物。 -/
 def TermR.words : TermR → List Word
@@ -707,7 +657,7 @@ def TermR.words : TermR → List Word
 
 /-- `x[0] === "?"`（sign.pegjs:77）：項が `?` の字そのものか。 -/
 def TermR.isQ : TermR → Bool
-  | .op s => strEq s "?"
+  | .op s => s == ("?" : JStr)
   | .tm _ _ _ => false
 
 mutual
@@ -822,15 +772,15 @@ def parseTerm (i : In) (fuel : Nat) : M (Option TermR) :=
       return (← parseoperator i).map TermR.op
 
 /-- Prefixes（sign.pegjs:111-112、生成物:935-950）：`prefix*` の末尾に `_` を付ける。 -/
-def parsePrefixes (i : In) (fuel : Nat) : M (List String) :=
+def parsePrefixes (i : In) (fuel : Nat) : M (List JStr) :=
   match fuel with
   | 0 => throw (internalError "Prefixes")
   | f + 1 => do
     let ps ← parsePrefixesLoop i f #[]
-    return ps.toList.map (· ++ "_")
+    return ps.toList.map fun p => p ++ "_"
 
 /-- Prefixes の `prefix*`（生成物:940-944 の while）。 -/
-def parsePrefixesLoop (i : In) (fuel : Nat) (acc : Array String) : M (Array String) :=
+def parsePrefixesLoop (i : In) (fuel : Nat) (acc : Array JStr) : M (Array JStr) :=
   match fuel with
   | 0 => throw (internalError "Prefixes")
   | f + 1 => do
@@ -976,8 +926,9 @@ def parseExpressionsTail (i : In) (fuel : Nat) (acc : Array WRow) : M (Array WRo
 /--
 prefix（sign.pegjs:189-190、生成物:1974-2075）：`"###" / "##" / "#" / $("-" &(Block / identifier / unit)) / "~" / "!!" / "!" / "$" / "@"`。
 `-` の後の先読みは Block の action も走らせる（中の refuseDefineInEnclosure の error() は先読みの中でも止める）。
+最後の `"!" / "$" / "@"` は peggy が字の組 `[!$@]` に畳み、`input.charAt(peg$currPos)` を返す。
 -/
-def parseprefix (i : In) (fuel : Nat) : M (Option String) :=
+def parseprefix (i : In) (fuel : Nat) : M (Option JStr) :=
   match fuel with
   | 0 => throw (internalError "prefix")
   | f + 1 => do
@@ -1002,7 +953,7 @@ def parseprefix (i : In) (fuel : Nat) : M (Option String) :=
       setPos s1
     if ← lit i e37 then return some "~"
     if ← lit i e38 then return some "!!"
-    return (← cls i e39).map fun u => (unitChar u).toString
+    return (← cls i e39).map JStr.fromCharCode
 
 end
 
@@ -1012,10 +963,9 @@ def parseStart (i : In) (fuel : Nat) : M (Option (List WRow)) := parseProgram i 
 /-- 燃料：互いに呼ぶ関数の数（17）より多い 20 を、符号単位の数 + 1 に掛ける（頭の注の「止まること」）。 -/
 def fuelOf (n : Nat) : Nat := 20 * (n + 1)
 
-/-- 解析の入力を Pre から作る（字を符号単位に開き、単位の位置 → 字の番号の表を添える）。 -/
+/-- 解析の入力を Pre から作る（text と、その符号単位の値の表と、単位の位置 → 字の番号の表）。 -/
 def inOf (p : Pre) : In :=
-  let cs := chars p.text
-  { units := utf16Of cs, cpOf := cpTable cs, lineAt := p.lineAt }
+  { text := p.text, units := p.text.codes, cpOf := cpTable p.text, lineAt := p.lineAt }
 
 /--
 入口（生成物:169-2165 の peg$parse(input, options) を、options に rowAt・qAt を渡して呼んだ物）。
@@ -1036,11 +986,81 @@ def parse (p : Pre) : Except FrontErr (List WRow) := do
   | none => throw (syntaxErr i s)
 where
   /--
-  peg$buildStructuredError(peg$maxFailExpected, found, location)（生成物:2157-2163）の断り。found は `input.charAt(peg$maxFailPos)`
-  （符号単位1つ。対の片方なら U+FFFD、頭の注の「位置」）。
+  peg$buildStructuredError(peg$maxFailExpected, found, location)（生成物:2157-2163）の断り。found は
+  `peg$maxFailPos < input.length ? input.charAt(peg$maxFailPos) : null`（符号単位1つ。対の片方ならその片方のまま）。
   -/
   syntaxErr (i : In) (s : St) : FrontErr :=
     { name := "SyntaxError", reason := none, line := i.lineU s.maxFailPos,
-      message := buildMessage s.maxFailExpected (i.units[s.maxFailPos]?.map unitChar) }
+      message := buildMessage s.maxFailExpected i.units[s.maxFailPos]? }
+
+/-! ## 確かめ（対の無いサロゲート。期待は node v24.16.0 で peggy 4.2.0 の parser から取った値）
+
+`Pre.lineAt` の k 番目を `10 + k` にして、行がどの符号位置の番号で引かれたかも見る。
+-/
+
+/-- 確かめの Pre（`lineAt` の k 番目は `10 + k`、大きさは text の符号位置の数 + 1）。 -/
+private def preOf (us : Array UInt16) (ncp : Nat) : Pre :=
+  { text := ⟨us⟩, lineAt := (List.range (ncp + 1)).foldl (fun a k => a.push (10 + k)) #[] }
+
+-- `\😀`：charactor が `\` と前の半分を取り、後ろの半分で止まる。found は `\ude00`、位置 2 は字の番号 1
+#guard match parse (preOf #[0x5C, 0xD83D, 0xDE00] 2) with
+  | .error e => e.name == "SyntaxError" && e.reason.isNone && e.line == some 11 &&
+    e.message == ("Expected \" \", \"\\r\", or [!@~] but \"" : JStr) ++ ⟨#[0xDE00]⟩ ++ "\" found."
+  | .ok _ => false
+
+-- `a \ude00`・`a \ud800`・`😀`・`\ufffd`：found は対の片方のまま（U+FFFD と分かれる）
+#guard
+  let exp : JStr := "Expected \" \", \"!!\", \"#\", \"##\", \"###\", \"(\", \"-\", \"0b\", \"0r\", \"[\", \"\\\\\", \"\\r\", \"\\x02\", \"_\", \"`\", \"{\", \"|\", \"||\", \"~\", [!\"#$%&'\\-=\\^~|@;+:*,<>/?], [!$@], [0-9], or [a-zA-Z] but \""
+  let expNoR : JStr := "Expected \" \", \"!!\", \"#\", \"##\", \"###\", \"(\", \"-\", \"0b\", \"0r\", \"[\", \"\\\\\", \"\\x02\", \"_\", \"`\", \"{\", \"|\", \"||\", \"~\", [!\"#$%&'\\-=\\^~|@;+:*,<>/?], [!$@], [0-9], or [a-zA-Z] but \""
+  let msg (us : Array UInt16) (ncp : Nat) : Option JStr := match parse (preOf us ncp) with
+    | .error e => some e.message
+    | .ok _ => none
+  msg #[0x61, 0x20, 0xDE00] 3 == some (exp ++ ⟨#[0xDE00]⟩ ++ "\" found.") &&
+  msg #[0x61, 0x20, 0xD800] 3 == some (exp ++ ⟨#[0xD800]⟩ ++ "\" found.") &&
+  msg #[0xD83D, 0xDE00] 1 == some (expNoR ++ ⟨#[0xD83D]⟩ ++ "\" found.") &&
+  msg #[0xFFFD] 1 == some (expNoR ++ ⟨#[0xFFFD]⟩ ++ "\" found.")
+
+-- `a\u0001`：制御の字は `\x01`
+#guard match parse (preOf #[0x61, 0x01] 2) with
+  | .error e => e.line == some 11 &&
+    e.message == ("Expected \" \", \"\\r\", [!@~], or [a-zA-Z0-9_] but \"\\x01\" found." : JStr)
+  | .ok _ => false
+
+-- `\\\ud800 x`・`\\\udc00`・`` `a\ud800b` c ``：語に対の無いサロゲートがそのまま入る
+#guard match parse (preOf #[0x5C, 0xD800, 0x20, 0x78] 4) with
+  | .ok [.mk 0 (some 10) [] [.str a, .str b]] => a == ⟨#[0x5C, 0xD800]⟩ && b == ("<x>" : JStr)
+  | _ => false
+#guard match parse (preOf #[0x5C, 0xDC00] 2) with
+  | .ok [.mk 0 (some 10) [] [.str a]] => a == ⟨#[0x5C, 0xDC00]⟩
+  | _ => false
+#guard match parse (preOf #[0x60, 0x61, 0xD800, 0x62, 0x60, 0x20, 0x63] 7) with
+  | .ok [.mk 0 (some 10) [] [.str a, .str b]] => a == ⟨#[0x60, 0x61, 0xD800, 0x62, 0x60]⟩ && b == ("<c>" : JStr)
+  | _ => false
+
+-- `?` の位置：`` `😀` ? x `` は単位 5 → 字 4、逆さの対 `` `\ude00\ud83d` ? x `` は単位 5 → 字 5、
+-- `` `\ude00😀` ? x `` は単位 6 → 字 5（dump.mjs の cpMaps と同じ数え方）
+#guard match parse (preOf #[0x60, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78] 7) with
+  | .ok [.mk 0 (some 10) [4] [.str a, .str q, .str x]] =>
+    a == ⟨#[0x60, 0xD83D, 0xDE00, 0x60]⟩ && q == ("?" : JStr) && x == ("<x>" : JStr)
+  | _ => false
+#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0x60, 0x20, 0x3F, 0x20, 0x78] 8) with
+  | .ok [.mk 0 (some 10) [5] [.str a, .str q, .str x]] =>
+    a == ⟨#[0x60, 0xDE00, 0xD83D, 0x60]⟩ && q == ("?" : JStr) && x == ("<x>" : JStr)
+  | _ => false
+#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78] 8) with
+  | .ok [.mk 0 (some 10) [5] [.str a, _, _]] => a == ⟨#[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60]⟩
+  | _ => false
+
+-- `|a : 1|`：refuseDefineInEnclosure の断り（位置 0 の行）
+#guard match parse (preOf #[0x7C, 0x61, 0x20, 0x3A, 0x20, 0x31, 0x7C] 7) with
+  | .error e => e.line == some 10 &&
+    e.message == ("`|…|` の囲みの中には定義（`:`）を置けません。`:` は名前を付ける定義で値を返さないので、`|…|` の域に入りません。" : JStr)
+  | .ok _ => false
+
+-- `[a`：入力の終わり
+#guard match parse (preOf #[0x5B, 0x61] 2) with
+  | .error e => e.line == some 12 &&
+    e.message == ("Expected \" \", \"\\r\", \"]\", [!@~], [\\r ], or [a-zA-Z0-9_] but end of input found." : JStr)
+  | .ok _ => false
 
 end SignSem.Peg

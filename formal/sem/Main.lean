@@ -20,11 +20,14 @@ reason `resolve-stack-limit`）。Lean の写しはスタックの溢れを写�
 
 対の無いサロゲート：Lean の String はそれを持てない。行の JSON に対の無いサロゲートの escape があれば（源・text・peggy の断りの文の
 found など）、Lean の Json.parse はそれを U+FFFD に替える（この替え方を φ と書く）。そういう行は外さずに比べ、数を「U+FFFD に寄せた」に出す。
+段の入出力は JS の文字列（`JStr`、UTF-16 の符号単位の並び）で、Lean の Json との行き来は SignSem/Json.lean が受け持つ。
+ただし源だけは、この file が `getStr?` で取った String を自分で `JStr.ofString` に通す（:189、下の「入る側」）。
 比べの意味は、出る側と入る側で違う。
 
-- 出る側：写しは、JS が対の無いサロゲートを出す所で U+FFFD を出す（Peg.lean の頭）。期待も φ を通るので、比べは φ(JS の答え) と
-  写しの答えが同じかで、対の無いサロゲートと本物の U+FFFD は分けない。
-- 入る側：JS が受けたのは x で、写しが受けるのは φ(x)。比べは 写し(φ(x)) = φ(JS(x)) で、これが「写しは JS と同じ」と言えるのは
+- 出る側：写しの答えの文字列は対の無いサロゲートをそのまま持ち、Json.lean の `JStr.toJson` が Lean の Json に直す所で φ を当てる。
+  期待も φ を通るので、比べは φ(JS の答え) と φ(写しの答え) が同じかで、対の無いサロゲートと本物の U+FFFD は分けない。
+- 入る側：源は Lean の Json.parse が読んだ String（φ を通った物）で、`JStr.ofString` で JStr にして段に渡す。JS が受けたのは x で、
+  写しが受けるのは φ(x)。比べは φ(写し(φ(x))) = φ(JS(x)) で、これが「写しは JS と同じ」と言えるのは
   φ ∘ JS = φ ∘ JS ∘ φ の時だけ。いつもそうではない（lexer.js の断りの文の一部は源の字を JSON.stringify で載せる（lexer.js:130 など）
   ので、対の無いサロゲートと U+FFFD で文が変わる）。写しが JS のとおりなら、そういう行では答えが合わず、門は違いとして落とす。
 
@@ -182,6 +185,8 @@ def checkLine (st : St) (nShow : Nat) (line : String) : St := Id.run do
   if hasLoneSurrogateEscape line.toUTF8 then st := { st with lossy := st.lossy + 1 }
   let some src := (j.getObjValD "source").getStr?.toOption
     | return { st with bad := st.bad + 1 }
+  -- 段に渡す源（φ を通った String を JS の文字列に）。src は違いを見せる文にだけ使う。
+  let srcJ := JStr.ofString src
   let b1 := j.getObjValD "b1"
   let b2 := j.getObjValD "b2"
   let b3 := j.getObjValD "b3"
@@ -189,7 +194,7 @@ def checkLine (st : St) (nShow : Nat) (line : String) : St := Id.run do
   -- 前処理
   if !raw then
     let (st', s) := compare st nShow st.pre id src b1 fun _ =>
-      let r := Lex.preprocess src
+      let r := Lex.preprocess srcJ
       ((match r with | .ok p => p.toJson | .error e => errJ e), internalOf r)
     st := { st' with pre := s }
   -- 文法（b1 の Pre から）
@@ -231,7 +236,7 @@ def checkLine (st : St) (nShow : Nat) (line : String) : St := Id.run do
       | .ok e => Json.mkObj [("err", e)]
       | .error _ => b3
     let (st', s) := compare st nShow st.front id src expect fun _ =>
-      let r := Front.front src
+      let r := Front.front srcJ
       ((match r with | .ok rows => rowsJ rows | .error e => errJ e), internalOf r)
     st := { st' with front := s }
   return st
