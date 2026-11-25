@@ -51,7 +51,7 @@ String の `==`・`String.toList`・`String.length` は Classical.choice に依�
 
 比べは `signsem check`（Main.lean）で、JS の答え（node v24.16.0 と peggy 4.2.0 で formal/check/sem/dump.mjs と gen の道具が書いた stages）と
 写しの答えを JV の値の `==` で比べた。文字列は UTF-16 の単位ごとに比べ、対の無いサロゲートもそのまま比べる。位置は peggy の offset（単位の番号）のまま。
-formal/check/sem/gate.mjs の 20 個の集まりの全部で、文法の段を当てた 2,064,121 行（通る 778,875・断る 1,285,246）に違いは無く、
+formal/check/sem/gate.mjs の 20 個の集まりの全部で、文法の段を当てた 2,064,130 行（通る 778,882・断る 1,285,248）に違いは無く、
 外したのは下の id 1193 の1行だけ。集まりごとには次のとおり。
 
 - formal/check/out/sem/stages.jsonl.gz の全部の行 354,751 本：b1 が通る 354,628 本のうち、id 1193（括り 2 万段。JS は RangeError の

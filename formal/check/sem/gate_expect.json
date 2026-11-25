@@ -1,35 +1,35 @@
 {
  "lexrev_hand": {
-  "lines": 190,
-  "loneIn": 16,
+  "lines": 201,
+  "loneIn": 17,
   "loneOut": 10,
   "pre": {
-   "run": 190,
-   "ok": 95,
-   "err": 95,
+   "run": 201,
+   "ok": 104,
+   "err": 97,
    "excluded": [],
-   "digest": "9e3d87fbbde83f52"
+   "digest": "f0737f921f037ba3"
   },
   "peg": {
-   "run": 95,
-   "ok": 37,
-   "err": 58,
+   "run": 104,
+   "ok": 44,
+   "err": 60,
    "excluded": [],
-   "digest": "07779f09b0b8f17c"
+   "digest": "296103e922685009"
   },
   "tree": {
-   "run": 37,
-   "ok": 27,
+   "run": 44,
+   "ok": 34,
    "err": 10,
    "excluded": [],
-   "digest": "f49cc9936651bede"
+   "digest": "f034ef782723a6d6"
   },
   "front": {
-   "run": 190,
-   "ok": 27,
-   "err": 163,
+   "run": 201,
+   "ok": 34,
+   "err": 167,
    "excluded": [],
-   "digest": "4b8f1c864b910c4a"
+   "digest": "1beea4df92beac5b"
   },
   "dumpExcused": []
  },

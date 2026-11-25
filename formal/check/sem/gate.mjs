@@ -10,8 +10,9 @@
 //      壊した行を作り、同じ集まりのほかの行の頭と終わりに置いて signsem check に流し、1 を返し、違いが出るはずの段にちょうど1つの違いが出て、
 //      合うはずの段は合い、読めない行が無く、InternalError がそのとおりの段にだけ1つ出るかを見る。壊さない同じ並びは 0 を返すかも見る。壊した欄を
 //      入力に使う後ろの段（b1 → 文法、b2 → 木）は、壊した所が答えに届くかが行で変わるので、どちらの組にも入れない（届くと決まった種の行では、
-//      違いが出るはずの組に入れる）。壊し方は 46 種：
-//        前処理：lineAt の頭、文法が引かない lineAt の全部（囲みのある複数行の行で）、text の単位1つ。前処理と通し：b1 の断りの文。
+//      違いが出るはずの組に入れる）。壊し方は 53 種：
+//        前処理：lineAt の頭、文法が引かない lineAt の全部（囲みのある複数行の行で）、text の単位1つ、対の下の半分の位置の lineAt。
+//        前処理と通し：b1 の断りの文。
 //        文法：行の line、後ろの行の at、? の位置、後ろの行の語、peggy の断りの文、b3 が null の行の行を空に。
 //        木と通し：行の line、断りの文、後ろの行の奥の葉、行を空に、空の行に足す。
 //        対の無いサロゲート（上の半分と下の半分の、それぞれで7つ）：
@@ -19,18 +20,22 @@
 //          入る側：b3 が null の行の text の対の無いサロゲート（b2 の答えに届く物）を同じ半分の別の値に。
 //          源から：源の対の無いサロゲート（b1 の text・b2 の語・b3 に届く物）を、源・b1 の text・b2 の語・b3 のどれか1つで同じ半分の別の値に
 //            （違いが出るのは、源なら前処理と通し、b1 の text なら前処理と文法、b2 の語なら文法と木、b3 なら木と通し）。
+//        源の U+FFFD（ふつうの字の U+FFFD が源・b1 の text・b2 の語・b3 に届く行で）：lineAt の頭（前処理）、行の line（文法、木と通し）。
+//          源に U+FFFD があって b1 が断る行の断りの文（前処理と通し）、b2 の断りの文に U+FFFD がある行の断りの文（文法）。
+//          b3 が null で text に U+FFFD がある行の行の line（文法）。
 //        対の向き：対の上と下の半分を入れ替える（b1 の text、b2 の語、b3 の、どれか1つで）。
 //        形：期待の rows と err を入れ替える（b3 で2向き、b3 が null の行の b2 で2向き）。
 //        InternalError：signsem check --force-internal で、その行の走る段の答えを InternalError にする（4つの段が走る行と、b3 が null の行）。
 //        長い行（main と treerev_big の、それぞれ当たる中でいちばん長い行で4つ）：後ろの段が入力に使う欄（混ぜる行では壊さない欄）を、行の後ろの
 //          方で壊す。後ろの行の書き始めの lineAt と text の単位1つ（前処理）、後ろの行の line と語（文法）。
 //      対の無いサロゲートを U+FFFD や対のもう片方や同じ半分の別の値と分けない読み（段に渡す入力でも、4つの段のどの比べでも、上の半分か下の
-//      半分の片方だけでも）は対の無いサロゲートの壊し方で、対の2つの単位の順を取り違える写しは対の向きで、写しの答えの形が期待と違う行や
-//      InternalError の行で期待を返す写しは形と InternalError で、長い行でだけ後ろの段が入力に使う欄を比べない写しは長い行の壊し方で落ちる。
+//      半分の片方だけでも）は対の無いサロゲートの壊し方で、U+FFFD のある行で比べを飛ばす写しは源の U+FFFD で、位置を符号位置に寄せて比べる
+//      写しは対の下の半分の位置の lineAt で、対の2つの単位の順を取り違える写しは対の向きで、写しの答えの形が期待と違う行や InternalError の
+//      行で期待を返す写しは形と InternalError で、長い行でだけ後ろの段が入力に使う欄を比べない写しは長い行の壊し方で落ちる。
 //      綴りの試し：lexrev_hand の全部と peg_rawfuzz の頭の 200 行を、値を変えずに綴りだけ替えて（物の鍵の順、文字列の単位の書き方、空白）流し、
 //      0 を返し、結果の行（数と digest）が元の綴りの物と同じかを見る。
-//      終わりの印も、行を1つ落とす・印を消す・complete を偽に・印の後に行・行が 0・units を消す（位置の数え方の印が無い）の6つで、狙った知らせ
-//      だけが出て 1 を返すかを見る。
+//      終わりの印も、行を1つ落とす・印を消す・complete を偽に・印の後に行・行が 0・units を消す（位置の数え方の印が無い）・units を別の値
+//      （"utf8"）に・印を2つ（2つ目は印の後の行）の8つで、狙った知らせだけが出て 1 を返すかを見る。
 //   4. 集まりごと：stages を流す途中で、でたらめに選んだ MIX 個の位置と、いちばん長い（バイトの多い）MIX_BIG 本の行の位置で、行の期待を
 //      壊して混ぜ（壊すのは、どの段の答えも依らない欄。でたらめな位置の行は、違いが出る段の組を1つでたらめに選び、その組の種類と葉を
 //      でたらめに選んで1か所だけ壊す。いちばん長い行は、段の組の全部で1か所ずつ壊す。組と種類は breakForMix の頭）、壊した段にちょうど
@@ -722,6 +727,11 @@ async function selfTest() {
   };
   const lastRow = (j) => j.b2.rows[j.b2.rows.length - 1];
   const HALVES = [[true, "上の半分"], [false, "下の半分"]];
+  // root のどこかの文字列（葉）に s があるか
+  const hasStr = (root, s) => isObj(root) && leavesOf(root).some(({ o, k }) => typeof o[k] === "string" && o[k].includes(s));
+  // 源の U+FFFD の種：b1・b2・b3 が通り（b2・b3 に行がある）、源・b1 の text・b2 の語・b3 のどれにも U+FFFD がある行
+  const fffdSeed = (j) => b1ok(j) && b2rows(j) && b3rows(j) && j.b2.rows.length > 0 && j.b3.rows.length > 0 && typeof j.b3.rows[0].line === "number" &&
+    typeof j.source === "string" && j.source.includes(FFFD) && j.b1.text.includes(FFFD) && hasStr(j.b2, FFFD) && hasStr(j.b3, FFFD);
   // 対の向きの種：b1 の text・b2 の語・b3 のどれにも対がある行
   const pairSeed = (j) => b1ok(j) && b2rows(j) && b3rows(j) && pairAt(j.b1.text) >= 0 && !!pairSlot(j.b2) && !!pairSlot(j.b3);
   const swapIn = (root) => {
@@ -752,6 +762,11 @@ async function selfTest() {
       } }, ["pre"], ["peg", "tree", "front"]],
     ["前処理（text の単位）", "peg", pick("peg", (j) => b1ok(j) && b2rows(j) && isObj(j.b3) && j.b1.text.length > 0, "b1 が通り text が空でない"),
       { json: breakTextUnit }, ["pre"], ["tree", "front"]],
+    // 対の下の半分の位置の lineAt（文法は引かない）：位置を符号位置に寄せて比べ、対の下の半分の位置を見ない写しが落ちる
+    ["前処理（対の下の半分の lineAt）", "hand",
+      pick("hand", (j) => b1ok(j) && b2rows(j) && b3rows(j) && pairAt(j.b1.text) >= 0 && !wrowSlots(j.b2.rows).ats.has(pairAt(j.b1.text) + 1),
+        "b1 の text に対があり、その下の半分の位置が行の書き始めでない"),
+      { json: (j) => ((j.b1.lineAt[pairAt(j.b1.text) + 1] += 1000), j) }, ["pre"], ["peg", "tree", "front"]],
     ["文法（後ろの行の at）", "peg", pick("peg", (j) => b2rows(j) && j.b2.rows.length >= 2 && isObj(j.b3), "b2 が2行以上で通る"),
       { json: (j) => ((j.b2.rows[j.b2.rows.length - 1].at += 1000), j) }, ["peg"], ["pre", "tree", "front"]],
     ["文法（? の位置）", "peg", pick("peg", (j) => b2rows(j) && j.b2.rows.some((r) => Array.isArray(r.q) && r.q.length) && isObj(j.b3), "b2 の行に ? の語がある"),
@@ -809,6 +824,21 @@ async function selfTest() {
         pick("hand", loneSrcSeed(hi), `源の対の無いサロゲートが1つだけ（${h}）で、b1 の text・b2 の語・b3 に届く`),
         { json: (j) => (f(j, loneSrcUnit(j)), j) }, must, clean]),
     ]),
+    // 源の U+FFFD（対の無いサロゲートでない、ふつうの字）：U+FFFD のある行で比べを飛ばす写しや期待を返す写しが、どの段でも落ちる
+    ["源の U+FFFD（前処理）", "hand", pick("hand", fffdSeed, "源・b1 の text・b2 の語・b3 に U+FFFD がある"), { json: (j) => ((j.b1.lineAt[0] += 1000), j) },
+      ["pre"], ["tree", "front"]],
+    ["源の U+FFFD（文法）", "hand", pick("hand", fffdSeed, "源・b1 の text・b2 の語・b3 に U+FFFD がある"), { json: (j) => ((j.b2.rows[0].line += 1000), j) },
+      ["peg"], ["pre", "front"]],
+    ["源の U+FFFD（木）", "hand", pick("hand", fffdSeed, "源・b1 の text・b2 の語・b3 に U+FFFD がある"), { json: (j) => ((j.b3.rows[0].line += 1000), j) },
+      ["tree", "front"], ["pre", "peg"]],
+    ["源の U+FFFD（b1 の断り）", "hand", pick("hand", (j) => isObj(j.b1.err) && typeof j.b1.err.message === "string" && j.source.includes(FFFD), "源に U+FFFD があり b1 が断る"),
+      { json: (j) => ((j.b1.err.message += "×"), j) }, ["pre", "front"], ["peg", "tree"]],
+    ["源の U+FFFD（文法の断りの found）", "hand",
+      pick("hand", (j) => b1ok(j) && isObj(j.b2.err) && typeof j.b2.err.message === "string" && !stackish(j.b2.err) && j.b2.err.message.includes(FFFD) && j.source.includes(FFFD),
+        "源に U+FFFD があり、b2 の断りの文に U+FFFD がある"),
+      { json: (j) => ((j.b2.err.message += "×"), j) }, ["peg"], ["pre", "tree", "front"]],
+    ["文法（b3 が null・text に U+FFFD）", "raw", pick("raw", (j) => raw(j) && b1ok(j) && b2rows(j) && j.b2.rows.length > 0 && j.b1.text.includes(FFFD), "b3 が null で、text に U+FFFD があり b2 に行がある"),
+      { json: (j) => ((j.b2.rows[0].line += 1000), j) }, ["peg"], ["pre", "tree", "front"]],
     // 対の向き：対の2つの単位の順を取り違える写しが落ちる
     ["対の向き（b1 の text）", "hand", pick("hand", pairSeed, "b1 の text・b2 の語・b3 に対がある"),
       { json: (j) => ((j.b1.text = swapAt(j.b1.text, pairAt(j.b1.text))), j) }, ["pre"], ["tree", "front"]],
@@ -900,6 +930,8 @@ async function selfTest() {
     ["印の後に行", [...d.slice(0, n - 1), endOf(n), d[n - 1]], "[印の後に行がある]"],
     ["行が 0", [endOf(0)], "[行が 0]"],
     ["units を消す", [...d, JSON.stringify({ end: true, lines: n, complete: true })], "[単位が違う]"],
+    ["units を別の値に", [...d, JSON.stringify({ end: true, units: "utf8", lines: n, complete: true })], "[単位が違う]"],
+    ["印を2つ", [...d, endOf(n), endOf(n)], "[印の後に行がある]"],
   ];
   nMarks = marks.length - 1;
   const checkMark = async ([what, ls, note]) => {

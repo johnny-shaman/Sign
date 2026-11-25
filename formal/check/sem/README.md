@@ -67,20 +67,21 @@ node formal/check/sem/gate.mjs            # 今ある stages に当てる（約 
 - 入る側（`loneIn`）：段の入力にある行（源に。b3 が null の行では b1 の text に）。集まりの中では lexrev_hand・pegrev_randastral の源と、peg_rawfuzz・peg_rawfuzz2 の text。
 - 答え（`loneOut`）：入る側に無く、b1・b2・b3 のどこかにある行（peggy の断りの文の found が対の片方の時など）。
 
-`signsem check` が 1 を返すのは、違い・読めない行・InternalError がある時と、終わりの印が無い・印の units が `"utf16"` でない・印の本数が読んだ行と違う・印が部分の書き出し・印の後に行がある・行が 0 の時（`--no-end` なら印も units も見ない）。`gate.mjs` は順に次を見て、どれかが崩れたら 1 で終わる。
+`signsem check` が 1 を返すのは、違い・読めない行・InternalError がある時と、終わりの印が無い・印の units が `"utf16"` でない・印の本数が読んだ行と違う・印が部分の書き出し・印の後に行がある（2つ目の印も印の後の行に数え、照らすのは最初の印）・行が 0 の時（`--no-end` なら印も units も見ない）。`gate.mjs` は順に次を見て、どれかが崩れたら 1 で終わる。
 
 1. 組み立て：`--exe` が無ければ `formal/sem` で `lake build --no-build` を走らせ、signsem が今の Lean の源から組んだ物かを見る。
 2. `--dump` の時：全部を書き直す（上の「走らせ方」）。dump.mjs は自分の門が崩れたら 1 で終わる。
-3. 自己試験（毎回）：種の集まり（peg・lexrev_hand・peg_rawfuzz の頭 4 MiB と、main・treerev_big のいちばん長い 3 本）の行から、期待を壊した行を作り、同じ集まりのほかの行（100 行まで）の頭と終わりに置いて流す。壊した並びは 1 を返し、違いが出るはずの段にちょうど1つの違いが出て、合うはずの段は合い、読めない行が無く、InternalError がそのとおりの段にだけ出るかを見る。壊さない同じ並びは 0 を返すかも見る。`signsem check` は 4 本まで同時に走らせる。壊し方は 46 種（並びと種の行の選び方は `gate.mjs` の頭）。
-   - 段の欄（15）：前処理の lineAt の頭・文法が引かない lineAt の全部・text の単位1つ、前処理と通しの b1 の断りの文、文法の行の line・後ろの行の at・`?` の位置・後ろの行の語・peggy の断りの文（Expected）・b3 が null の行の行を空に、木と通しの行の line・断りの文・後ろの行の奥の葉・行を空に・空の行に足す。文法が引かない lineAt と b2 の行の at・q を壊す物は、後ろの段が合うことで、そこがどの段の入力にもならないことも見る。
+3. 自己試験（毎回）：種の集まり（peg・lexrev_hand・peg_rawfuzz の頭 4 MiB と、main・treerev_big のいちばん長い 3 本）の行から、期待を壊した行を作り、同じ集まりのほかの行（100 行まで）の頭と終わりに置いて流す。壊した並びは 1 を返し、違いが出るはずの段にちょうど1つの違いが出て、合うはずの段は合い、読めない行が無く、InternalError がそのとおりの段にだけ出るかを見る。壊さない同じ並びは 0 を返すかも見る。`signsem check` は 4 本まで同時に走らせる。壊し方は 53 種（並びと種の行の選び方は `gate.mjs` の頭）。
+   - 段の欄（16）：前処理の lineAt の頭・文法が引かない lineAt の全部・text の単位1つ・対の下の半分の位置の lineAt（lexrev_hand の、対の下の半分の位置が行の書き始めでない行で。位置を符号位置に寄せて比べる写しは、そこを見ない）、前処理と通しの b1 の断りの文、文法の行の line・後ろの行の at・`?` の位置・後ろの行の語・peggy の断りの文（Expected）・b3 が null の行の行を空に、木と通しの行の line・断りの文・後ろの行の奥の葉・行を空に・空の行に足す。文法が引かない lineAt と b2 の行の at・q を壊す物は、後ろの段が合うことで、そこがどの段の入力にもならないことも見る。
    - 対の無いサロゲート（14。上の半分と下の半分で7つずつ）：出る側（b2 の断りの文の対の無いサロゲートを U+FFFD に・対のもう片方に）、入る側（b3 が null の行の text の物を同じ半分の別の値に）、源から（源・b1 の text・b2 の語・b3 のどれか1つで、源の対の無いサロゲートが届いた単位を同じ半分の別の値に）。
+   - 源の U+FFFD（6）：対の無いサロゲートでない、ふつうの字の U+FFFD を源に持つ lexrev_hand の行で、源・b1 の text・b2 の語・b3 に U+FFFD が届く行の lineAt の頭（前処理）・b2 の行の line（文法）・b3 の行の line（木と通し）、b1 が断る行の断りの文（前処理と通し）、b2 の断りの文の found が U+FFFD の行の断りの文（文法）と、peg_rawfuzz の頭の、b3 が null で text に U+FFFD がある行の b2 の行の line（文法）。U+FFFD のある行で比べを飛ばす写しが、どの段でも落ちる。
    - 対の向き（3）：b1 の text・b2 の語・b3 のどれか1つで、対の2つの単位を入れ替える。
    - 形（4）：期待の rows と err を入れ替える（b3 で2向き、b3 が null の行の b2 で2向き）。
    - InternalError（2）：`signsem check --force-internal` で、4つの段が走る行と b3 が null の行の答えを InternalError にする。
    - 長い行（8）：main と treerev_big の、当たる中でいちばん長い行で、後ろの段が入力に使う欄（混ぜる行では壊さない欄）を行の後ろの方で壊す（後ろの行の書き始めの lineAt・text の単位・後ろの行の line・後ろの行の語）。
 
    綴りの試し（2）：lexrev_hand の全部と peg_rawfuzz の頭の 200 行を、値を変えずに綴りだけ替えて（物の鍵の順、`\/` と 16 進の escape の対などの文字列の書き方、空白）流し、0 を返し、結果の行（数と digest）が元の綴りの物と同じかを見る。
-   終わりの印（6）：lexrev_hand の全部の行で、行を1つ落とす・印を消す・complete を偽にする・印の後に行を置く・行を 0 にする・units を消す、を流し、狙った知らせだけが出て 1 を返すかを見る（印のとおりの並びは 0）。
+   終わりの印（8）：lexrev_hand の全部の行で、行を1つ落とす・印を消す・complete を偽にする・印の後に行を置く・行を 0 にする・units を消す・units を別の値（`"utf8"`）にする・印を2つ置く、を流し、狙った知らせだけが出て 1 を返すかを見る（印のとおりの並びは 0）。
 4. 集まりごと：stages を流す途中で、でたらめに選んだ 8 つの位置と、いちばん長い（バイトの多い）3 本の行の位置で、行の期待を壊して混ぜる（位置が壊せない行に当たれば次の壊せる行に回す。少なくなるのは終わりの近くの位置だけ）。壊すのはどの段の答えも依らない欄なので、写しの答えは変わらない。でたらめな位置の行は、違いが出る段の組を1つでたらめに選び、その組の種類と葉をでたらめに選んで1か所だけ壊す。いちばん長い行は、段の組の全部で1か所ずつ壊す。
    - b3 が null の行：b2 の葉・b2 の行を空に・b2 の行に足す・b2 の形を返す（文法）。
    - b1 が断る行：b1 の断りの葉（前処理と通し）。
@@ -139,6 +140,14 @@ alpha1 が変わって数が変わったら、`--dump --update-expect` で書き
 - 源が 20,000 単位より長い行でだけ、通しが期待を返す写し（front_long_liar）。
 - 写しの答えを JS の綴りで書き、行のバイトと比べる写し（bytes）。
 - JSON の読み手が大文字の 16 進の escape を取り違え、それを見る `#guard` も外した写し（upper_hex_noguard）。
+- 終わりの印の units を見ない写し（units_skip）。
+- 終わりの印の units が文字列なら、値を見ずに通す写し（units_any）。
+- 2つ目の印を印の後の行に数えず、後の印で上書きする写し（two_marks）。
+- 比べる前に、写しの答えと期待の両方の位置（前処理の lineAt、文法の行の at・q）を符号位置に寄せる写し（cp_compare）。
+- 源に U+FFFD（対の無いサロゲートでない、ふつうの字）がある行で、どの段でも期待を返す写し（src_fffd_skip）。
+- b1 の text に U+FFFD がある行で、文法が期待を返す写し（text_fffd_skip）。
+
+捕まえると言い切れない物：源の大きさが決まった窓の中（たとえば 700〜1000 単位）の行でだけ期待を返す写し（src_liar700）は、混ぜる行の選び方（でたらめな 8 つと、バイトの多い 3 本）に当たった時だけ落ちる。選ぶ行を決めて足しても窓が動くだけなので、窓で嘘をつく写しは偶然でしか捕まらない。「何単位より長い行で」嘘をつく写しは、いちばん長い行がいつも混ざるので捕まる（size_liar・text_ignored_long・front_long_liar）。
 
 ## 集まり
 
@@ -146,7 +155,7 @@ alpha1 が変わって数が変わったら、`--dump --update-expect` で書き
 |---|---|---:|---|
 | main | record.mjs | 354,751 | 試験一式と仕様の例に来た源 |
 | lex | gen/gen_lex_sources.mjs | 30,138 | 前処理の枝（字下げ・括り・引用符・CR・CRLF・`\` の続き） |
-| lexrev_hand・chars・lines・frames | gen/gen_lexrev.mjs | 190・453,673・558,174・65,392 | 前処理の境目の字（BMP の外の字と源の対の無いサロゲートを含む）、字の並びの総当たり、行の型の総当たり（`\` で続けた行の lineAt）、括りの中の `?` の行（CRLF を含む） |
+| lexrev_hand・chars・lines・frames | gen/gen_lexrev.mjs | 201・453,673・558,174・65,392 | 前処理の境目の字（BMP の外の字と源の対の無いサロゲートと U+FFFD を含む）、字の並びの総当たり、行の型の総当たり（`\` で続けた行の lineAt）、括りの中の `?` の行（CRLF を含む） |
 | lexrev_astral | gen/gen_lexrev_astral.mjs | 982,759 | BMP の外の字 |
 | peg・pegrev・pegrev_astral | gen/peg_sources.mjs・pegrev_sources.mjs | 36・189・7 | 文法の生成物の枝 |
 | pegrev_rand・pegrev_randastral | gen/gen_src.mjs | 40,000・10,000 | 文法に沿った乱れた源 |
@@ -162,6 +171,6 @@ main の源には CR が無く、`\` の直後に改行がある源は2本、`^`
 - main の b1 の err 123（param-block-bracket 87 ほか）、b2 の err 9（peggy 8、JS のスタックの溢れ 1）、b3 の err 56（compare-chain 21・infix-missing-operand 15・pointfree-tree-notation 8 ほか、b2 の 9 を含む）。
 - dump.mjs の門：resolve が通る 305,436 本で、b3 の rows は resolve の rows と全部同じ。b2 と b3 の行の数と行の並びは 354,572 本で全部合う。前段の断り 179 本のうち 178 本は resolve の断りと同じで、残る 1 本（id 1193、括り 2 万段）は b2 が生の RangeError、resolve と b3 は stackRefusal の resolve-stack-limit。
 - main を全部書くと 1.84 GB（b3 が 1.32 GB）で、gzip の `stages.jsonl.gz` は 31.6 MB。
-- gate.mjs：20 個の集まり、2,991,534 行。段を当てた行は前処理 2,585,631・文法 2,064,121・木 713,928・通し 2,585,630 で、混ぜた行のほかは、どの段も違い 0・読めない行 0・InternalError 0（混ぜた行の元も全部合う）。外したのは main の id 1193（文法と通し）だけ。
-- 対の無いサロゲートのある行は 343,892。入る側（loneIn）53,869：peg_rawfuzz 31,998・peg_rawfuzz2 21,854・lexrev_hand 16・pegrev_randastral 1。答えだけ（loneOut）290,023：lexrev_astral 265,849・peg_rawfuzz 19,701・peg_rawfuzz2 4,305・pegrev_randastral 154・lexrev_hand 10・pegrev_astral 4。
-- 時：`gate.mjs` は約 9 分（548 秒。集まりの `signsem check` で長いのは main 約 230 秒・lexrev_astral 約 55 秒・lexrev_lines 約 38 秒）。`gate.mjs --dump` は約 43 分（2,568 秒。main の書き出し 468 秒・gen/all.mjs 約 1 分・残りの書き出し約 25 分（treerev_big 924 秒）・当てる所約 9 分）。
+- gate.mjs：20 個の集まり、2,991,545 行。段を当てた行は前処理 2,585,642・文法 2,064,130・木 713,935・通し 2,585,641 で、混ぜた行のほかは、どの段も違い 0・読めない行 0・InternalError 0（混ぜた行の元も全部合う）。外したのは main の id 1193（文法と通し）だけ。
+- 対の無いサロゲートのある行は 343,893。入る側（loneIn）53,870：peg_rawfuzz 31,998・peg_rawfuzz2 21,854・lexrev_hand 17・pegrev_randastral 1。答えだけ（loneOut）290,023：lexrev_astral 265,849・peg_rawfuzz 19,701・peg_rawfuzz2 4,305・pegrev_randastral 154・lexrev_hand 10・pegrev_astral 4。
+- 時：`gate.mjs` は約 9 分（558 秒。集まりの `signsem check` で長いのは main 約 230 秒・lexrev_astral 約 55 秒・lexrev_lines 約 38 秒）。`gate.mjs --dump` は約 43 分（2,568 秒。main の書き出し 468 秒・gen/all.mjs 約 1 分・残りの書き出し約 25 分（treerev_big 924 秒）・当てる所約 9 分）。

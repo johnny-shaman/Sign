@@ -1,5 +1,5 @@
 // lex の点検（lex-review）で足す源。node gen_lexrev.mjs [out の dir]（既定 out/sem、相対の道は out/sem から解く）
-//   lexrev_hand.jsonl   ：手で書いた枝の例（JS の被覆で 0 回だった枝・境目の字・BMP の外の字・源の対の無いサロゲート）
+//   lexrev_hand.jsonl   ：手で書いた枝の例（JS の被覆で 0 回だった枝・境目の字・BMP の外の字・源の対の無いサロゲート・源の U+FFFD）
 //   lexrev_chars.jsonl  ：字の並びの総当たり（2つの字の組で、長さ 5 まで・長さ 4 まで）
 //   lexrev_lines.jsonl  ：行の型の総当たり（TAB の数 × 行の中身、3行まで）
 //   lexrev_frames.jsonl ：括りの中の `?` の行（R135）の形の総当たりと乱数
@@ -23,6 +23,8 @@ const write = (name, from, list) => {
 const E = "\u{1F600}";
 // 対の無いサロゲート（上の半分・下の半分。JS の文字列は UTF-16 の単位の並びで、対の無い単位も1つの単位として持てる）
 const H = "\ud83d", L = "\ude00", H2 = "\ud800", L2 = "\udc00", H3 = "\udbff", L3 = "\udfff";
+// U+FFFD（替えの字）。読む側が対の無いサロゲートと取り違えないかを見るために、源にも置く
+const F = String.fromCharCode(0xfffd);
 const hand = [
   // questionBeforeBracket の `\` の枝（:447）と、`?` の数え方
   "s : \\a [m :\n\t\ty\n\t? y\n]",
@@ -160,6 +162,19 @@ const hand = [
   `x : 1 +\n \`${L}\` + 2`,
   `x : "${H}\\${L}"`,
   `x : \`${L3}${H3}\``,
+  // 源の U+FFFD（対の無いサロゲートとは別の、ふつうの BMP の字）：字のまま・`\` の後・注・括りの中・対や対の無いサロゲートの隣と、
+  // 前処理の断り（閉じない字のまま・置けない字下げ）、文法の断りの found
+  `x : \`${F}\` + 1`,
+  `x : \`a${F}b\`\ny : 2`,
+  `x : \\${F} + 1`,
+  `x : \`${F}${H}\` + \`${L}${F}\``,
+  `\`${F} comment\`\nx : \`${F}\``,
+  `x : [1 \`${F}\`]`,
+  `x : \`${E}${F}\``,
+  `x : \`${F}`,
+  `x : \`${F}\`\n\t5`,
+  `${F} : 1`,
+  `x : a${F}\ny : 2`,
 ];
 write("lexrev_hand.jsonl", "lexrev_hand", hand);
 

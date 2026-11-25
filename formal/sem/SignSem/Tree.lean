@@ -701,7 +701,7 @@ mutual
 燃料：字句の数を n とすると、parseLow・parseLowLoop・parseSegment・parseSegmentLoop・parseHigh・parseHighLoop の呼ばれる数の和は
 `4 + 5·(段1〜9 の中置の字句の数) + 3·(項の字句の数) + 6·(段12〜22 の中置の字句の数) ≤ 6n + 4`（parseLow は段1〜9 の中置ごとに1回と初めの1回、
 parseSegment も同じ数、ループは1回ごとに字句を1つ読む、並びの項は字句を1つ以上読む）。呼び出しの鎖の長さはこの和を超えないので、`6n + 5` で尽きない
-（formal/check/sem/gate.mjs の 20 個の集まりで木の段を当てた 713,928 行で、燃料の断り（InternalError）は 0）。燃料は字句の数で数え、語の綴りの長さ（単位の数）には依らない。 -/
+（formal/check/sem/gate.mjs の 20 個の集まりで木の段を当てた 713,935 行で、燃料の断り（InternalError）は 0）。燃料は字句の数で数え、語の綴りの長さ（単位の数）には依らない。 -/
 def parseRow (inBracket seat : Bool) : WRow → Except FrontErr PRow
   | .mk _ line _ words => do
     -- resolve.js:515-520：tokenize の断りは、この行が（括りの中の行が先に持っていなければ）行を持つ
