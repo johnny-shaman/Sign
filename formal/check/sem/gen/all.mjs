@@ -21,7 +21,7 @@
 //   rawfuzz2      rawfuzz.mjs peg_rawfuzz2_stages.jsonl --n 100000 --seed 99 --real 5000 --mut 0.1   peg_rawfuzz2_stages.jsonl
 //
 // *_sources.jsonl と lexrev*.jsonl は1行 {id, from, source}。JS の答えは dump.mjs --sources <源の集まり> --out <集まり>_stages.jsonl.gz で作る（組は gate.mjs の SETS。gate.mjs --dump が全部を書く）。
-// peg_*_stages.jsonl は stages と同じ形の行（b3 は null）で、最後の行は終わりの印 {end:true, lines:N, complete:true, stamp:S}（S は gen_front.mjs の frontStamp()）。
+// peg_*_stages.jsonl は stages と同じ形の行（b3 は null）で、最後の行は終わりの印 {end:true, units:"utf16", lines:N, complete:true, stamp:S}（S は gen_front.mjs の frontStamp()）。
 // treerev_fuzz・fuzz・rawfuzz は gen_front.mjs の STACK_ARG（--stack-size=8000）で走らせる（スタックの溢れで落とす源が、スタックの大きさで変わるため。fuzz・rawfuzz は版の印の stack にそれを書く）。
 import fs from "fs";
 import path from "path";

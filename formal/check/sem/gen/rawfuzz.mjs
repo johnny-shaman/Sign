@@ -2,9 +2,11 @@
 //   out と --stages は out/sem から解く（既定 peg_rawfuzz_stages.jsonl と stages.jsonl.gz）。
 //   傷を付ける割合は (b) と (c) が P、(d) が P / 2。--mut-real-always は (c) にいつも傷を付ける（割合の乱数を引かない）。
 // 前処理を通さない字の並び（text）を、alpha1 の peggy で作った parser（resolve.js と同じ peggy.generate）に当てて、stages と同じ形の行を書く：
-//   {id, source:"", b1:{text, lineAt}, b2, b3:null}。最後に終わりの印の行 {end:true, lines:N, complete:true, stamp:S}（N は書いた行の数、S は gen_front.mjs の frontStamp()。dump.mjs の印から sources と gate を除いた形）。
-// lineAt は字（符号位置）ごとに違う値（k + 1）。JS の側の lineAt(o)（o は UTF-16 の位置）は、o を含む字の番号 + 1（対の後ろの半分は前の半分と同じ字。
-// 前処理の lineAt も対の中では変わらない）。b2 の形と位置の直しは dump.mjs の b2Rows・errOf・cpMaps と同じ。
+//   {id, source:"", b1:{text, lineAt}, b2, b3:null}。最後に終わりの印の行 {end:true, units:"utf16", lines:N, complete:true, stamp:S}（N は書いた行の数、S は gen_front.mjs の
+//   frontStamp()。dump.mjs の印から sources と gate を除いた形）。
+// 位置（at・q・lineAt の添え字）は dump.mjs と同じく UTF-16 の符号単位の番号（peggy の offset）そのまま。lineAt は単位の位置ごとに違う値
+// （lineAt(o) = o + 1、o は 0..text.length に切り詰める。gen/fuzz.mjs と同じ）で、行の値が位置そのものを確かめる（対の後ろの半分を指す
+// 断りの位置も、前の半分と分かれる）。b2 の形は dump.mjs の b2Rows・errOf と同じ。
 // 字の並びは4種：(a) 字の表からの乱れた並び（BMP の外の字・対にならないサロゲートも）、(b) 文法に沿って作った並びに傷、
 // (c) stages の本物の b1.text に傷（--real K 本を頭から取る）、(d) 括りと `-` の先読みと |…| の入れ子を深めに組んだ並び。
 import fs from "fs";
@@ -161,37 +163,13 @@ if (opt.real > 0) {
   });
 }
 
-// dump.mjs と同じ直し
-function cpMaps(text) {
-  const n = text.length;
-  const toCp = new Int32Array(n + 1);
-  const floor = new Int32Array(n + 1);
-  let k = 0;
-  for (let i = 0; i < n; i++) {
-    toCp[i] = k;
-    floor[i] = k;
-    const c = text.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff && i + 1 < n && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      toCp[i + 1] = -1;
-      floor[i + 1] = k;
-      i++;
-    }
-    k++;
-  }
-  toCp[n] = k;
-  floor[n] = k;
-  return { toCp, floor, count: k };
-}
+// 位置 o が対の後ろの半分（上の半分の直後の下の半分）を指すか
+const midPair = (text, o) => o > 0 && o < text.length && (text.charCodeAt(o - 1) & 0xfc00) === 0xd800 && (text.charCodeAt(o) & 0xfc00) === 0xdc00;
 const TAGS = new Set(['"BRACKET_"', '"ABS_"', '"NORM_"', '"INDENT_"']);
-function b2Rows(rows, rowAt, qAt, lineAt, m) {
-  const cpOf = (o, what) => {
-    const k = m.toCp[o];
-    if (k < 0) throw new Error(`${what} がサロゲートの対の間`);
-    return k;
-  };
+function b2Rows(rows, rowAt, qAt, lineAt) {
   const row = (r) => {
     const o = rowAt.get(r);
-    return { at: cpOf(o, "行"), line: lineAt(o), q: (qAt.get(r) || []).map((x) => cpOf(x, "?")), w: r.map(word) };
+    return { at: o, line: lineAt(o), q: qAt.get(r) || [], w: r.map(word) };
   };
   const word = (w) => {
     if (typeof w === "string") return w;
@@ -201,6 +179,11 @@ function b2Rows(rows, rowAt, qAt, lineAt, m) {
   return rows.map(row);
 }
 
+// 書く文を UTF-8 のバイトに（JSON.stringify は対の無いサロゲートを escape で書く。字のままの物があれば、UTF-8 で U+FFFD に替わるので止める）
+const utf8Of = (s) => {
+  if (!s.isWellFormed()) throw new Error("書く行に字のままの対の無いサロゲートがある");
+  return Buffer.from(s, "utf8");
+};
 const fd = fs.openSync(out, "w");
 const C = { n: 0, rows: 0, err: 0, errorCall: 0, astral: 0, lone: 0, midPairErr: 0, kinds: { a: 0, b: 0, c: 0, d: 0 } };
 const seen = new Set();
@@ -215,20 +198,18 @@ while (C.n < opt.n && tries < opt.n * 5) {
   else { kd = "d"; text = deep(); if (chance(opt.mut / 2)) text = mutate(text); }
   if (seen.has(text)) continue;
   seen.add(text);
-  const m = cpMaps(text);
-  const lineAt = (o) => m.floor[Math.max(0, Math.min(o, text.length))] + 1;
-  const la = [];
-  for (let k = 0; k <= m.count; k++) la.push(k + 1);
+  const lineAt = (o) => Math.max(0, Math.min(o, text.length)) + 1;
+  const la = Array.from({ length: text.length + 1 }, (_, k) => k + 1);
   const rowAt = new WeakMap(), qAt = new WeakMap();
   let b2;
   try {
     const parsed = parser.parse(text, { rowAt, qAt });
-    b2 = { rows: b2Rows(parsed, rowAt, qAt, lineAt, m) };
+    b2 = { rows: b2Rows(parsed, rowAt, qAt, lineAt) };
     C.rows++;
   } catch (e) {
     if (!(e && e.location)) throw e;
     const o = e.location.start.offset;
-    if (m.toCp[Math.min(o, text.length)] < 0) C.midPairErr++;
+    if (midPair(text, o)) C.midPairErr++;
     b2 = { err: { name: e.name, reason: null, line: lineAt(o), message: String(e.message) } };
     C.err++;
     if (!e.expected) C.errorCall++;
@@ -238,9 +219,9 @@ while (C.n < opt.n && tries < opt.n * 5) {
     if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)) C.lone++;
   }
   C.kinds[kd]++;
-  fs.writeSync(fd, JSON.stringify({ id: C.n, source: "", b1: { text, lineAt: la }, b2, b3: null }) + "\n");
+  fs.writeSync(fd, utf8Of(JSON.stringify({ id: C.n, source: "", b1: { text, lineAt: la }, b2, b3: null }) + "\n"));
   C.n++;
 }
-fs.writeSync(fd, JSON.stringify({ end: true, lines: C.n, complete: true, stamp: STAMP }) + "\n");
+fs.writeSync(fd, utf8Of(JSON.stringify({ end: true, units: "utf16", lines: C.n, complete: true, stamp: STAMP }) + "\n"));
 fs.closeSync(fd);
 console.log(JSON.stringify(C));

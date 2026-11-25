@@ -27,9 +27,10 @@ import SignSem
 比べない物（数と id を出す）：JS のスタックの溢れ（期待が `{name: "RangeError", message: "Maximum call stack size exceeded"}` か
 reason `resolve-stack-limit`）。Lean の写しはスタックの溢れを写さない。
 
-終わりの印：dump.mjs（と gen/ の fuzz・rawfuzz）は最後に `{"end": true, "lines": N, "complete": B, …}` を書く（ほかの欄は gate.mjs が見る）。
-印が無い・N が読んだ行の数と違う・complete が偽（`--allow-partial` で許す）・印の後に行がある・行が 0 のどれかなら 1 を返す。
-印の無い入力は `--no-end` で読む。
+終わりの印：dump.mjs（と gen/ の fuzz・rawfuzz）は最後に `{"end": true, "units": "utf16", "lines": N, "complete": B, …}` を書く（ほかの欄は
+gate.mjs が見る）。units は位置（`at`・`q`・`lineAt` の添え字）の数え方で、"utf16" は UTF-16 の符号単位（JS の文字列の位置）。
+印が無い・units が "utf16" でない・N が読んだ行の数と違う・complete が偽（`--allow-partial` で許す）・印の後に行がある・行が 0 の
+どれかなら 1 を返す。印の無い入力は `--no-end` で読む（units も見ない）。
 `--max-diffs N` は、違いと読めない行が合わせて N に届いたら読むのを止めて 1 を返す（変異の試験で早く止める）。
 `--force-internal ID` は試験の口：id が ID の行では、走らせる段の全部で、段を走らせずに写しの答えを InternalError の断りにする
 （gate.mjs の自己試験が、InternalError を数えて 1 を返すかを見る。写しの InternalError は燃料が尽きた所と写しの前提が崩れた所だけで、
@@ -175,6 +176,8 @@ structure St where
   /-- 段の入力には無く、b1・b2・b3 のどこかに対の無いサロゲートがある行。 -/
   loneOut : Nat := 0
   endMark : Option (Nat × Bool) := none
+  /-- 終わりの印の units（文字列でなければ `none`）。 -/
+  endUnits : Option JStr := none
   afterEnd : Nat := 0
   pre : Stage := { name := "前処理" }
   peg : Stage := { name := "文法" }
@@ -224,7 +227,7 @@ def checkLine (st : St) (nShow : Nat) (forceId : Option Nat) (line : ByteArray) 
   if isTrue (j.getObjValD "end") then
     let n := (j.getObjValD "lines").getNat?.toOption.getD 0
     let complete := isTrue (j.getObjValD "complete")
-    return { st with lines := st.lines - 1, endMark := some (n, complete) }
+    return { st with lines := st.lines - 1, endMark := some (n, complete), endUnits := (j.getObjValD "units").getStr?.toOption }
   if st.endMark.isSome then st := { st with afterEnd := st.afterEnd + 1 }
   let id := (j.getObjValD "id").getNat?.toOption.getD 0
   let force := match forceId with
@@ -368,7 +371,13 @@ def check (args : List String) : IO UInt32 := do
       endOk := false
       IO.println "[終わりの印が無い] 入力が途中で切れたかもしれない（印の無い入力は --no-end）"
   | some (n, complete) =>
-    IO.println s!"  終わりの印：lines {n}・complete {complete}"
+    let units := match st.endUnits with
+      | some u => keyLabel u
+      | none => "無し"
+    IO.println s!"  終わりの印：lines {n}・complete {complete}・units {units}"
+    if needEnd && !(st.endUnits == some ("utf16" : JStr)) then
+      endOk := false
+      IO.println s!"[単位が違う] 終わりの印の units が {units}（\"utf16\" のはず。位置を UTF-16 の単位で数えた stages でない。dump.mjs で書き直す）"
     if n != st.lines then
       endOk := false
       IO.println s!"[本数が違う] 印は {n}、読んだのは {st.lines}"

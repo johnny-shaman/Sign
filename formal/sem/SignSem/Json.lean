@@ -182,9 +182,15 @@ def FrontErr.fromJson (j : JV) : Except String FrontErr := do
 def Pre.toJson (p : Pre) : JV :=
   JV.mkObj [("lineAt", .arr (p.lineAt.map JV.ofNat)), ("text", p.text.toJson)]
 
+/--
+`{text, lineAt}` を Pre に。lineAt の添え字は text の符号単位の位置 0〜`text.length` なので、大きさが `text.size + 1` でない物は
+断る（位置を別の数え方で書いた lineAt を、黙って読まない）。
+-/
 def Pre.fromJson (j : JV) : Except String Pre := do
   let text ← JStr.fromJson (← j.getObjVal? "text")
   let la ← (← j.getObjVal? "lineAt").getArr?
+  if la.size != text.size + 1 then
+    throw s!"lineAt の大きさ {la.size} が text の単位の数 + 1（{text.size + 1}）でない（位置は UTF-16 の単位で数える）"
   return { text, lineAt := ← la.mapM (·.getNat?) }
 
 /-! ## 確かめ：書いた物は鍵の順に並んでいて（`mkObj` の並べ替えが走らない）、読み直すと同じ木に戻る -/
@@ -204,7 +210,12 @@ private def lone : JStr := ⟨#[0x78, 0xD83D, 0xDC00, 0xDE00]⟩
   sorted? (FrontErr.toJson { name := "SyntaxError", reason := none, line := some 1, message := lone }) &&
   sorted? (Pre.toJson { text := lone, lineAt := #[1, 1, 1, 1, 1] })
 -- 対の無いサロゲートも1つの単位のまま出て、読むと戻る
-#guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2] })).toOption.map (·.text) == some lone
+#guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4, 5] })).toOption.map (·.text) == some lone
+-- lineAt の大きさは text の単位の数 + 1（lone は 4 単位で、うち2つが対）。符号位置の数 + 1（4）や短い物は読まない
+#guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4] })).toOption.isNone &&
+  (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4, 5, 6] })).toOption.isNone &&
+  (Pre.fromJson (Pre.toJson { text := JStr.empty, lineAt := #[] })).toOption.isNone &&
+  (Pre.fromJson (Pre.toJson { text := JStr.empty, lineAt := #[1] })).toOption.isSome
 #guard match FrontErr.fromJson (FrontErr.toJson { name := "SyntaxError", reason := some lone, line := none, message := lone }) with
   | .ok e => e.reason == some lone && e.message == lone && e.line.isNone
   | .error _ => false

@@ -29,7 +29,8 @@
 //      InternalError の行で期待を返す写しは形と InternalError で、長い行でだけ後ろの段が入力に使う欄を比べない写しは長い行の壊し方で落ちる。
 //      綴りの試し：lexrev_hand の全部と peg_rawfuzz の頭の 200 行を、値を変えずに綴りだけ替えて（物の鍵の順、文字列の単位の書き方、空白）流し、
 //      0 を返し、結果の行（数と digest）が元の綴りの物と同じかを見る。
-//      終わりの印も、行を1つ落とす・印を消す・complete を偽に・印の後に行・行が 0 の5つで、狙った知らせだけが出て 1 を返すかを見る。
+//      終わりの印も、行を1つ落とす・印を消す・complete を偽に・印の後に行・行が 0・units を消す（位置の数え方の印が無い）の6つで、狙った知らせ
+//      だけが出て 1 を返すかを見る。
 //   4. 集まりごと：stages を流す途中で、でたらめに選んだ MIX 個の位置と、いちばん長い（バイトの多い）MIX_BIG 本の行の位置で、行の期待を
 //      壊して混ぜ（壊すのは、どの段の答えも依らない欄。でたらめな位置の行は、違いが出る段の組を1つでたらめに選び、その組の種類と葉を
 //      でたらめに選んで1か所だけ壊す。いちばん長い行は、段の組の全部で1か所ずつ壊す。組と種類は breakForMix の頭）、壊した段にちょうど
@@ -37,7 +38,7 @@
 //      その違いが混ぜた分に紛れるので）。位置は走らせるたびに変わるので、何行目から先は比べない（期待を返す）写しも、どの段でも捕まえる。
 //      いちばん長い行はいつも、どの段の組でも壊して混ぜるので、長い行でだけ、どれかの段の比べを飛ばす写しも、走らせるたびに捕まえる
 //      （後ろの段が入力に使う欄だけを長い行で比べない写しは、自己試験の長い行の壊し方で）。
-//      そして終わりの印について、本数と complete（signsem とは別に）、版（stamp）が今の物と同じか、源の集まり（sources）が今の file と
+//      そして終わりの印について、本数と complete と units（signsem とは別に）、版（stamp）が今の物と同じか、源の集まり（sources）が今の file と
 //      同じか、dump.mjs の門の数が 0 かを見る。
 //      最後に指紋（行の数・対の無いサロゲートのある行の数（段の入力にある loneIn と、答えにだけある loneOut）・段ごとの走らせた数・通った数・
 //      断りの数・外した id・写しの答えのハッシュ、と dump.mjs が許したスタックの溢れの id。混ぜた行は壊す前の期待で数え直す）が
@@ -564,7 +565,8 @@ const headLines = (stages, n) => {
   fs.closeSync(fd);
   return b.subarray(0, k).toString("utf8").split("\n").slice(0, -1);
 };
-const endOf = (n) => JSON.stringify({ end: true, lines: n, complete: true });
+// 終わりの印（units は位置の数え方。signsem check は "utf16" でない印を断る）
+const endOf = (n) => JSON.stringify({ end: true, units: "utf16", lines: n, complete: true });
 // 行を signsem に渡すバイトにする。行は JSON の文で、対の無いサロゲートは escape で書く。字のままの対の無いサロゲートは UTF-8 にすると
 // U+FFFD に替わるので、あれば止める。
 const asInput = (ls) => {
@@ -653,6 +655,7 @@ async function inPool(tasks, k) {
   return out;
 }
 let nCanaries = 0;
+let nMarks = 0; // 終わりの印の崩しの数（印のとおりの並びを除く）
 async function selfTest() {
   const errs = [];
   const seeds = {};
@@ -893,10 +896,12 @@ async function selfTest() {
     ["印のとおり", [...d, endOf(n)], null],
     ["行を1つ落とす", [...d.slice(0, n >> 1), ...d.slice((n >> 1) + 1), endOf(n)], "[本数が違う]"],
     ["印を消す", [...d], "[終わりの印が無い]"],
-    ["complete を偽に", [...d, JSON.stringify({ end: true, lines: n, complete: false })], "[部分の書き出し]"],
+    ["complete を偽に", [...d, JSON.stringify({ end: true, units: "utf16", lines: n, complete: false })], "[部分の書き出し]"],
     ["印の後に行", [...d.slice(0, n - 1), endOf(n), d[n - 1]], "[印の後に行がある]"],
     ["行が 0", [endOf(0)], "[行が 0]"],
+    ["units を消す", [...d, JSON.stringify({ end: true, lines: n, complete: true })], "[単位が違う]"],
   ];
+  nMarks = marks.length - 1;
   const checkMark = async ([what, ls, note]) => {
     const r = await runCheck(asInput(ls));
     const notes = r.out.split("\n").filter((l) => l.startsWith("["));
@@ -913,7 +918,7 @@ async function selfTest() {
   if (errs.length) {
     fail("自己試験", ...errs);
     if (opt.failFast) stop();
-  } else rows.push(["自己試験", `期待を壊した行 ${nCanaries} 種（頭と終わりに置いて）と、綴りの試し 2 つと、終わりの印の崩し 5 種は、どれも狙いどおりだった`]);
+  } else rows.push(["自己試験", `期待を壊した行 ${nCanaries} 種（頭と終わりに置いて）と、綴りの試し 2 つと、終わりの印の崩し ${nMarks} 種は、どれも狙いどおりだった`]);
 }
 const runFailed = failed; // 組み立て・書き直し・自己試験で落ちた数（0 でなければ --update-expect は書かない）
 
@@ -985,6 +990,7 @@ for (const [name, sources, stages] of sets) {
   else {
     if (res && !res.stopped && last.lines !== res.lines) extra.push(`[本数が違う] 印は ${last.lines}、signsem が読んだのは ${res.lines}`);
     if (last.complete !== true) extra.push("[部分の書き出し] 印の complete が真でない");
+    if (last.units !== "utf16") extra.push(`[単位が違う] 印の units は ${JSON.stringify(last.units)}（位置は UTF-16 の単位で数える。--dump で書き直す）`);
     if (JSON.stringify(last.stamp) !== JSON.stringify(STAMP)) extra.push(`[版が違う] stages は ${JSON.stringify(last.stamp)}、今は ${JSON.stringify(STAMP)}（--dump で書き直す）`);
     if (sources) {
       const buf = fs.existsSync(path.join(OUT, sources)) ? fs.readFileSync(path.join(OUT, sources)) : null;

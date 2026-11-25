@@ -14,8 +14,8 @@ alpha1/javascript/lexer.js の `preprocessWithLines`（:736）と、それが呼
 - `JSON.stringify` で源の字を載せる断りの文（lexer.js:130・600・637・641・682・685）は `JStr.jsonStringify`（ES2019 の
   well-formed な形：上の半分と下の半分の対はそのまま、対の無いサロゲートと逆さの対は `\udxxx`）。断りの文に源の字をそのまま
   載せる所（テンプレートと `+`）は JStr の `++`。数は `JStr.ofNat`・`JStr.ofInt`（JS の `String(n)`）。
-- 行の表：lineAt（lexer.js:745-786）は単位で数えて、位置 0〜`text.length` の全部で引く（`lineAtTable`）。`Pre.lineAt` は、それを
-  dump.mjs が書く符号位置の番号の表に引き直した物（`lineAtToCodePoints`）。
+- 行の表：lineAt（lexer.js:745-786）は単位で数えて、位置 0〜`text.length` の全部で引く（`lineAtTable`）。`Pre.lineAt` はその表
+  そのまま（添え字は単位の位置、大きさ `text.size + 1`。dump.mjs が書く物と同じ）。
 - ループ：`partial def` を使わない。1単位ずつ進むループは「残りの単位の数」で構造の再帰にする（燃料は要らない）。跳んで進むループ
   （`i += 2`、閉じの次へ跳ぶ、正規表現の当たりの終わりへ跳ぶ）は燃料（`Nat`）を引数にする。燃料はそのループが読む文字列の単位の
   数＋1（どの回も1単位以上進むので尽きない）で、尽きたら `FrontErr` の name `"InternalError"` を返す（JS には無い断り）。
@@ -1062,27 +1062,11 @@ def lineAtTable (marked text : JStr) (segs : Array Seg) (sourceLines : Array Nat
   return out
 
 /--
-単位の位置ごとの行の表（`lineAtTable`、大きさ `text.size + 1`）を、`Pre.lineAt` の添え字（`text` の Unicode の符号位置の番号）に
-引き直す。dump.mjs:70-88 の `cpMaps` の `toU16`（符号位置ごとの頭の UTF-16 の位置。上の半分の次が下の半分なら2単位で1つ、
-ほかの単位は対の無いサロゲートも1単位で1つ。最後に `text.length`）で引く（dump.mjs:251 の `m.toU16.map((o) => pre.lineAt(o))`）。
-対の判じ方は dump.mjs:79 と同じく `JStr.pairAt`。stages の位置が UTF-16 の単位になる段（S5）で消す。
-
-燃料は `text.size + 1`（符号位置の数＋1 以下の回で終わる）。
--/
-def lineAtToCodePoints (text : JStr) (perUnit : Array Nat) : Array Nat := go 0 #[] (text.size + 1)
-where
-  go (i : Nat) (acc : Array Nat) : Nat → Array Nat
-    | 0 => acc
-    | r + 1 =>
-      if i < text.size then go (if text.pairAt i then i + 2 else i + 1) (acc.push (perUnit.getD i 0)) r
-      else acc.push (perUnit.getD text.size 0)
-
-/--
 lexer.js:736 の `preprocessWithLines`：classifyNewlinesWithComments → markBlock → separateInfix と、位置から元の行を引く表。
 
 markBlock の断りに行が無ければ、読んでいた処理行の元の行（`sourceLines[track.at]`）を持たせる（:742-744）。classifyNewlines の
-断り（閉じない `` ` ``）は自分で行を持っている（:131）。行の表は単位の位置で作り（`lineAtTable`）、`Pre.lineAt` には符号位置の
-番号に引き直して置く（`lineAtToCodePoints`）。
+断り（閉じない `` ` ``）は自分で行を持っている（:131）。行の表は単位の位置 0〜`text.length` の全部で引いた物（`lineAtTable`）を
+そのまま `Pre.lineAt` に置く。
 -/
 def preprocessWithLines (input : JStr) : M Pre := do
   let c ← classifyNewlinesWithComments input
@@ -1091,7 +1075,7 @@ def preprocessWithLines (input : JStr) : M Pre := do
     | .error (at_, e) => throw (if e.line.isNone then { e with line := c.sourceLines[at_]? } else e)
   let text ← separateInfix marked
   let lineAt ← lineAtTable marked text segs c.sourceLines
-  return { text, lineAt := lineAtToCodePoints text lineAt }
+  return { text, lineAt }
 
 /--
 前段の入口：lexer.js:736 の `preprocessWithLines` と同じ（JS の `preprocess`（:727）は text だけを返すが、ここは行の表も返す）。
@@ -1118,14 +1102,20 @@ private def errIs (r : Except FrontErr Pre) (name : JStr) (line : Nat) (tail : A
 -- lexer.js:685：x : ⏎ ⏎ "\t😀" → "\t😀"（対はそのまま）
 #guard errIs (preprocess ⟨#[0x78, 0x20, 0x3A, 0x0D, 0x0D, 0x09, 0xD83D, 0xDE00]⟩) "SyntaxError" 3
   #[0x22, 0x5C, 0x74, 0xD83D, 0xDE00, 0x22]
--- `\` の後ろの `[\s\S]` は上の半分だけを取る：\😀:\ud800 → text は \😀 : \ud800、lineAt は符号位置 6 つ＋終わりの 7 つ
+-- `\` の後ろの `[\s\S]` は上の半分だけを取る：\😀:\ud800 → text は \😀 : \ud800、lineAt は単位 7 つ＋終わりの 8 つ
 #guard match preprocess ⟨#[0x5C, 0xD83D, 0xDE00, 0x3A, 0xD800]⟩ with
-  | .ok p => p.text.units == #[0x5C, 0xD83D, 0xDE00, 0x20, 0x3A, 0x20, 0xD800] && p.lineAt == #[1, 1, 1, 1, 1, 1, 1]
+  | .ok p => p.text.units == #[0x5C, 0xD83D, 0xDE00, 0x20, 0x3A, 0x20, 0xD800] && p.lineAt == #[1, 1, 1, 1, 1, 1, 1, 1]
   | .error _ => false
--- a\ud800 : ⏎ ⇥b → text は a\ud800  :  \x02b\x03、lineAt（対が無いので単位の表と同じ）は [1,1,1,1,1,1,1,1,2,2,2]
+-- a\ud800 : ⏎ ⇥b → text は a\ud800  :  \x02b\x03、lineAt は [1,1,1,1,1,1,1,1,2,2,2]
 #guard match preprocess ⟨#[0x61, 0xD800, 0x20, 0x3A, 0x0D, 0x09, 0x62]⟩ with
   | .ok p => p.text.units == #[0x61, 0xD800, 0x20, 0x20, 0x3A, 0x20, 0x20, 0x02, 0x62, 0x03] &&
       p.lineAt == #[1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2]
+  | .error _ => false
+
+-- x : ⏎ ⇥😀 → text は x  :  \x02😀\x03（単位 10）、lineAt は 11 個で、対の2つの単位（7・8）はどちらも 2 行目
+#guard match preprocess ⟨#[0x78, 0x20, 0x3A, 0x0D, 0x09, 0xD83D, 0xDE00]⟩ with
+  | .ok p => p.text.units == #[0x78, 0x20, 0x20, 0x3A, 0x20, 0x20, 0x02, 0xD83D, 0xDE00, 0x03] &&
+      p.lineAt == #[1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2]
   | .error _ => false
 
 end SignSem.Lex

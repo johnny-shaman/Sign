@@ -9,7 +9,7 @@ alpha1 の前段の2つ目（B2）。peggy 4.2.0（alpha1/javascript/node_module
 
 - 入口は `parse : Pre → Except FrontErr (List WRow)`。返す行は Program の結果（sign.pegjs:57）で、行ごとに
   start は Expression の offset()（sign.pegjs:74 の rowAt）、line は `Pre.lineAt[start]`、qs は `?` の語の位置（sign.pegjs:76-79 の qAt）。
-  位置は下の「文字列と位置」のとおり符号位置の番号に直す。
+  位置は下の「文字列と位置」のとおり符号単位の番号のまま。
 - 断りは JS の throw の写しで、name は `"SyntaxError"`、reason は無し。line は frontEnd（resolve.js:250-252）と同じく
   断りの位置（location.start.offset）の `Pre.lineAt`。
 - 写した JS は、sign.pegjs の規則と、peggy が作る parser の source（`peggy.generate(文法, {output: "source", format: "es"})`、
@@ -28,10 +28,9 @@ k 番目が JS の `input.charCodeAt(k)`）。字の組の判定（`input.charAt
 返す文字列（`$( … )` の字の取り出し、語、断りの文）も符号単位から直に作るので、対の無いサロゲートは対の無いまま出る（断りの文の
 found が対の片方の時、`Pre.text` に対の無いサロゲートがある時）。断りの文の期待の並べ（`descriptions.sort()`）は符号単位の辞書式（`JStr.lt`）。
 
-返す位置（WRow の start・qs）は `Pre` と同じ Unicode の符号位置の番号に直し（`In.cpOf`）、行は `Pre.lineAt` をその番号で引く。
-符号位置は、上の半分の直後に下の半分がある2単位を1つ、ほかの単位（対の無いサロゲートも）を1つずつ数える（dump.mjs:70-94 の cpMaps）。
-対の後ろの半分を指す位置（断りの位置だけがそうなる）はその字の番号にする（前処理の lineAt は対の中で変わらない）。
-この直し（`cpTable`・`In.cpOf`・`In.cp`）は、stages の位置を符号単位のまま書く段（計画の S5）で除く。
+返す位置（WRow の start・qs）は peg$currPos（符号単位の番号）のままで、dump.mjs が書く peggy の offset と同じ。行は `Pre.lineAt`
+（添え字は同じ符号単位の位置、大きさは単位の数 + 1）をその位置で引く。対の後ろの半分を指す位置（断りの位置だけがそうなる）も
+1つの位置で、そこの lineAt を引く。
 
 ## 止まること
 
@@ -60,24 +59,6 @@ String の `==`・`String.toList`・`String.length` は Classical.choice に依�
 -/
 
 namespace SignSem.Peg
-
-/-! ## 字の道具 -/
-
-/--
-符号単位の位置 → 字（符号位置）の番号。k 番目の字の単位（対なら2つとも）に k を置き、最後に字の数を置く（大きさは単位の数 + 1）。
-字は、上の半分の直後に下の半分がある2単位（`JStr.pairAt`）を1つ、ほかの単位（対の無いサロゲートも）を1つと数える。dump.mjs の
-位置の直し（cpMaps の toCp、dump.mjs:70-94）と同じ数え方で、対の後ろの半分（toCp では -1）はその字の番号にする。燃料は単位の数 + 1 で、
-1回で1単位以上進むので尽きない。stages の位置を符号単位のまま書く段（計画の S5）で除く。
--/
-def cpTable (s : JStr) : Array Nat := go 0 0 #[] (s.size + 1)
-where
-  go (k cp : Nat) (acc : Array Nat) : Nat → Array Nat
-    | 0 => acc.push cp
-    | r + 1 =>
-      if k < s.size then
-        if s.pairAt k then go (k + 2) (cp + 1) ((acc.push cp).push cp) r
-        else go (k + 1) (cp + 1) (acc.push cp) r
-      else acc.push cp
 
 /-! ## 期待（peggy の expectation） -/
 
@@ -308,20 +289,15 @@ structure St where
 
 - `text`：JS の `input`（`Pre.text`）。`$( … )` の字はここから切り出す。
 - `units`：`text` の符号単位の値（`input.charCodeAt(k)` の表）。位置（peg$currPos）はこの番号。
-- `cpOf`：符号単位の位置（0〜単位の数）→ 字（符号位置）の番号（`cpTable`）。返す位置と行を引くのに使う。
-- `lineAt`：字の番号から元の行を引く表（Pre.lineAt）。
+- `lineAt`：符号単位の位置（0〜単位の数）から元の行を引く表（Pre.lineAt）。
 -/
 structure In where
   text : JStr
   units : Array Nat
-  cpOf : Array Nat
   lineAt : Array Nat
 
-/-- 符号単位の位置 u の、字の番号（Pre の位置）。 -/
-def In.cp (i : In) (u : Nat) : Nat := i.cpOf[u]?.getD u
-
 /-- 符号単位の位置 u の元の行（frontEnd の `lineAt(offset)`、resolve.js:252・261）。 -/
-def In.lineU (i : In) (u : Nat) : Option Nat := i.lineAt[i.cp u]?
+def In.lineU (i : In) (u : Nat) : Option Nat := i.lineAt[u]?
 
 /-- 解析の型。PEG の失敗（peg$FAILED）は `none`、JS の throw（error()）は `Except` の `error`。 -/
 abbrev M := StateT St (Except FrontErr)
@@ -724,8 +700,8 @@ def parseExpression (i : In) (fuel : Nat) : M (Option WRow) :=
       let tail ← parseExpressionTail i f #[]
       let items := h :: tail.toList
       let words := items.flatMap fun x => x.1.words
-      let qs := items.filterMap fun x => if x.1.isQ then some (i.cp x.2) else none
-      return some (.mk (i.cp s0) (i.lineU s0) qs words)
+      let qs := items.filterMap fun x => if x.1.isQ then some x.2 else none
+      return some (.mk s0 (i.lineU s0) qs words)
     | none =>
       setPos s0
       return none
@@ -963,9 +939,9 @@ def parseStart (i : In) (fuel : Nat) : M (Option (List WRow)) := parseProgram i 
 /-- 燃料：互いに呼ぶ関数の数（17）より多い 20 を、符号単位の数 + 1 に掛ける（頭の注の「止まること」）。 -/
 def fuelOf (n : Nat) : Nat := 20 * (n + 1)
 
-/-- 解析の入力を Pre から作る（text と、その符号単位の値の表と、単位の位置 → 字の番号の表）。 -/
+/-- 解析の入力を Pre から作る（text と、その符号単位の値の表と、行の表）。 -/
 def inOf (p : Pre) : In :=
-  { text := p.text, units := p.text.codes, cpOf := cpTable p.text, lineAt := p.lineAt }
+  { text := p.text, units := p.text.codes, lineAt := p.lineAt }
 
 /--
 入口（生成物:169-2165 の peg$parse(input, options) を、options に rowAt・qAt を渡して呼んだ物）。
@@ -995,16 +971,16 @@ where
 
 /-! ## 確かめ（対の無いサロゲート。期待は node v24.16.0 で peggy 4.2.0 の parser から取った値）
 
-`Pre.lineAt` の k 番目を `10 + k` にして、行がどの符号位置の番号で引かれたかも見る。
+`Pre.lineAt` の k 番目を `10 + k` にして、行がどの符号単位の位置で引かれたかも見る。
 -/
 
-/-- 確かめの Pre（`lineAt` の k 番目は `10 + k`、大きさは text の符号位置の数 + 1）。 -/
-private def preOf (us : Array UInt16) (ncp : Nat) : Pre :=
-  { text := ⟨us⟩, lineAt := (List.range (ncp + 1)).foldl (fun a k => a.push (10 + k)) #[] }
+/-- 確かめの Pre（`lineAt` の k 番目は `10 + k`、大きさは text の符号単位の数 + 1）。 -/
+private def preOf (us : Array UInt16) : Pre :=
+  { text := ⟨us⟩, lineAt := (List.range (us.size + 1)).foldl (fun a k => a.push (10 + k)) #[] }
 
--- `\😀`：charactor が `\` と前の半分を取り、後ろの半分で止まる。found は `\ude00`、位置 2 は字の番号 1
-#guard match parse (preOf #[0x5C, 0xD83D, 0xDE00] 2) with
-  | .error e => e.name == "SyntaxError" && e.reason.isNone && e.line == some 11 &&
+-- `\😀`：charactor が `\` と前の半分を取り、後ろの半分で止まる。found は `\ude00`、断りの位置は対の後ろの半分（単位の位置 2）
+#guard match parse (preOf #[0x5C, 0xD83D, 0xDE00]) with
+  | .error e => e.name == "SyntaxError" && e.reason.isNone && e.line == some 12 &&
     e.message == ("Expected \" \", \"\\r\", or [!@~] but \"" : JStr) ++ ⟨#[0xDE00]⟩ ++ "\" found."
   | .ok _ => false
 
@@ -1012,53 +988,52 @@ private def preOf (us : Array UInt16) (ncp : Nat) : Pre :=
 #guard
   let exp : JStr := "Expected \" \", \"!!\", \"#\", \"##\", \"###\", \"(\", \"-\", \"0b\", \"0r\", \"[\", \"\\\\\", \"\\r\", \"\\x02\", \"_\", \"`\", \"{\", \"|\", \"||\", \"~\", [!\"#$%&'\\-=\\^~|@;+:*,<>/?], [!$@], [0-9], or [a-zA-Z] but \""
   let expNoR : JStr := "Expected \" \", \"!!\", \"#\", \"##\", \"###\", \"(\", \"-\", \"0b\", \"0r\", \"[\", \"\\\\\", \"\\x02\", \"_\", \"`\", \"{\", \"|\", \"||\", \"~\", [!\"#$%&'\\-=\\^~|@;+:*,<>/?], [!$@], [0-9], or [a-zA-Z] but \""
-  let msg (us : Array UInt16) (ncp : Nat) : Option JStr := match parse (preOf us ncp) with
+  let msg (us : Array UInt16) : Option JStr := match parse (preOf us) with
     | .error e => some e.message
     | .ok _ => none
-  msg #[0x61, 0x20, 0xDE00] 3 == some (exp ++ ⟨#[0xDE00]⟩ ++ "\" found.") &&
-  msg #[0x61, 0x20, 0xD800] 3 == some (exp ++ ⟨#[0xD800]⟩ ++ "\" found.") &&
-  msg #[0xD83D, 0xDE00] 1 == some (expNoR ++ ⟨#[0xD83D]⟩ ++ "\" found.") &&
-  msg #[0xFFFD] 1 == some (expNoR ++ ⟨#[0xFFFD]⟩ ++ "\" found.")
+  msg #[0x61, 0x20, 0xDE00] == some (exp ++ ⟨#[0xDE00]⟩ ++ "\" found.") &&
+  msg #[0x61, 0x20, 0xD800] == some (exp ++ ⟨#[0xD800]⟩ ++ "\" found.") &&
+  msg #[0xD83D, 0xDE00] == some (expNoR ++ ⟨#[0xD83D]⟩ ++ "\" found.") &&
+  msg #[0xFFFD] == some (expNoR ++ ⟨#[0xFFFD]⟩ ++ "\" found.")
 
 -- `a\u0001`：制御の字は `\x01`
-#guard match parse (preOf #[0x61, 0x01] 2) with
+#guard match parse (preOf #[0x61, 0x01]) with
   | .error e => e.line == some 11 &&
     e.message == ("Expected \" \", \"\\r\", [!@~], or [a-zA-Z0-9_] but \"\\x01\" found." : JStr)
   | .ok _ => false
 
 -- `\\\ud800 x`・`\\\udc00`・`` `a\ud800b` c ``：語に対の無いサロゲートがそのまま入る
-#guard match parse (preOf #[0x5C, 0xD800, 0x20, 0x78] 4) with
+#guard match parse (preOf #[0x5C, 0xD800, 0x20, 0x78]) with
   | .ok [.mk 0 (some 10) [] [.str a, .str b]] => a == ⟨#[0x5C, 0xD800]⟩ && b == ("<x>" : JStr)
   | _ => false
-#guard match parse (preOf #[0x5C, 0xDC00] 2) with
+#guard match parse (preOf #[0x5C, 0xDC00]) with
   | .ok [.mk 0 (some 10) [] [.str a]] => a == ⟨#[0x5C, 0xDC00]⟩
   | _ => false
-#guard match parse (preOf #[0x60, 0x61, 0xD800, 0x62, 0x60, 0x20, 0x63] 7) with
+#guard match parse (preOf #[0x60, 0x61, 0xD800, 0x62, 0x60, 0x20, 0x63]) with
   | .ok [.mk 0 (some 10) [] [.str a, .str b]] => a == ⟨#[0x60, 0x61, 0xD800, 0x62, 0x60]⟩ && b == ("<c>" : JStr)
   | _ => false
 
--- `?` の位置：`` `😀` ? x `` は単位 5 → 字 4、逆さの対 `` `\ude00\ud83d` ? x `` は単位 5 → 字 5、
--- `` `\ude00😀` ? x `` は単位 6 → 字 5（dump.mjs の cpMaps と同じ数え方）
-#guard match parse (preOf #[0x60, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78] 7) with
-  | .ok [.mk 0 (some 10) [4] [.str a, .str q, .str x]] =>
+-- `?` の位置（符号単位の位置のまま）：`` `😀` ? x `` は 5、逆さの対 `` `\ude00\ud83d` ? x `` は 5、`` `\ude00😀` ? x `` は 6
+#guard match parse (preOf #[0x60, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78]) with
+  | .ok [.mk 0 (some 10) [5] [.str a, .str q, .str x]] =>
     a == ⟨#[0x60, 0xD83D, 0xDE00, 0x60]⟩ && q == ("?" : JStr) && x == ("<x>" : JStr)
   | _ => false
-#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0x60, 0x20, 0x3F, 0x20, 0x78] 8) with
+#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0x60, 0x20, 0x3F, 0x20, 0x78]) with
   | .ok [.mk 0 (some 10) [5] [.str a, .str q, .str x]] =>
     a == ⟨#[0x60, 0xDE00, 0xD83D, 0x60]⟩ && q == ("?" : JStr) && x == ("<x>" : JStr)
   | _ => false
-#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78] 8) with
-  | .ok [.mk 0 (some 10) [5] [.str a, _, _]] => a == ⟨#[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60]⟩
+#guard match parse (preOf #[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60, 0x20, 0x3F, 0x20, 0x78]) with
+  | .ok [.mk 0 (some 10) [6] [.str a, _, _]] => a == ⟨#[0x60, 0xDE00, 0xD83D, 0xDE00, 0x60]⟩
   | _ => false
 
 -- `|a : 1|`：refuseDefineInEnclosure の断り（位置 0 の行）
-#guard match parse (preOf #[0x7C, 0x61, 0x20, 0x3A, 0x20, 0x31, 0x7C] 7) with
+#guard match parse (preOf #[0x7C, 0x61, 0x20, 0x3A, 0x20, 0x31, 0x7C]) with
   | .error e => e.line == some 10 &&
     e.message == ("`|…|` の囲みの中には定義（`:`）を置けません。`:` は名前を付ける定義で値を返さないので、`|…|` の域に入りません。" : JStr)
   | .ok _ => false
 
 -- `[a`：入力の終わり
-#guard match parse (preOf #[0x5B, 0x61] 2) with
+#guard match parse (preOf #[0x5B, 0x61]) with
   | .error e => e.line == some 12 &&
     e.message == ("Expected \" \", \"\\r\", \"]\", [!@~], [\\r ], or [a-zA-Z0-9_] but end of input found." : JStr)
   | .ok _ => false

@@ -8,14 +8,14 @@
    "ok": 95,
    "err": 95,
    "excluded": [],
-   "digest": "1a1874c9c69d4114"
+   "digest": "9e3d87fbbde83f52"
   },
   "peg": {
    "run": 95,
    "ok": 37,
    "err": 58,
    "excluded": [],
-   "digest": "c54288ad74be2038"
+   "digest": "07779f09b0b8f17c"
   },
   "tree": {
    "run": 37,
@@ -110,14 +110,14 @@
    "ok": 7,
    "err": 0,
    "excluded": [],
-   "digest": "afa3c27fba2b5d93"
+   "digest": "6663379e1c1edca2"
   },
   "peg": {
    "run": 7,
    "ok": 3,
    "err": 4,
    "excluded": [],
-   "digest": "405fc2caaca7c49a"
+   "digest": "c4afe48ab81e218c"
   },
   "tree": {
    "run": 3,
@@ -348,14 +348,14 @@
    "ok": 7310,
    "err": 2690,
    "excluded": [],
-   "digest": "cab9fc38681a3043"
+   "digest": "9e0abf7970bab1d2"
   },
   "peg": {
    "run": 7310,
    "ok": 2058,
    "err": 5252,
    "excluded": [],
-   "digest": "e1dbf7fa7b803387"
+   "digest": "71289b8f73d78996"
   },
   "tree": {
    "run": 2058,
@@ -518,14 +518,14 @@
    "ok": 549061,
    "err": 433698,
    "excluded": [],
-   "digest": "4bdc8db2c3dc8897"
+   "digest": "e324672bd57b65e5"
   },
   "peg": {
    "run": 549061,
    "ok": 72780,
    "err": 476281,
    "excluded": [],
-   "digest": "8f6d1bd0c67d6d9d"
+   "digest": "ce3e9f763eabfc59"
   },
   "tree": {
    "run": 72780,
@@ -592,7 +592,7 @@
    "ok": 13512,
    "err": 136488,
    "excluded": [],
-   "digest": "89a5055892d49d07"
+   "digest": "10a369956bc7c545"
   },
   "tree": {
    "run": 0,
@@ -625,7 +625,7 @@
    "ok": 13520,
    "err": 86480,
    "excluded": [],
-   "digest": "7df64e3e52e0ba28"
+   "digest": "ca5715bca57bf790"
   },
   "tree": {
    "run": 0,

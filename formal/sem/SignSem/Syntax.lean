@@ -10,7 +10,8 @@ alpha1 の前段が作る2つの木の形を、Lean の型にする。どちら�
 
 文字列の欄（綴り・印・字面・前処理の後の文字列・断りの欄）は、どれも `JStr`（JS の文字列。UTF-16 の符号単位の並びで、対の無い
 サロゲートも1つの単位としてそのまま持つ）。位置の欄（`WRow` の `start`・`qs` と `Pre.lineAt` の添え字）は、前処理の後の文字列の
-Unicode の符号位置の番号で、dump.mjs:13-17 の数え方（サロゲートの対は2単位で1つ、対の無いサロゲートは1単位で1つ）。
+UTF-16 の符号単位の番号（JS の文字列の位置。peggy の offset と lexer.js の lineAt が受ける位置そのまま、dump.mjs の頭）。サロゲートの
+対は2つの位置、対の無いサロゲートは1つの位置。
 
 import は `SignSem.JStr` だけ（その先は Init だけ）。JSON との行き来は `SignSem.Json` に置く。
 -/
@@ -82,10 +83,9 @@ inductive Word where
 /--
 文法の行（sign.pegjs の Expression の結果）。
 
-- `start`：行の書き始めの位置（rowAt）。前処理の後の文字列の Unicode の符号位置の番号で、peggy の位置（UTF-16 の符号単位の番号）を
-  dump.mjs:70-94 の cpMaps・cpOf で直した物。
+- `start`：行の書き始めの位置（rowAt）。前処理の後の文字列の符号単位の番号（peggy の位置そのまま）。
 - `line`：その位置の元のソースの行（lineAt(start)）。
-- `qs`：行の中の `?` の語の位置（左から。qAt）。数え方は `start` と同じ（符号位置の番号）。
+- `qs`：行の中の `?` の語の位置（左から。qAt）。数え方は `start` と同じ（符号単位の番号）。
 - `words`：語の並び。
 -/
 inductive WRow where
@@ -97,10 +97,9 @@ end
 前処理（lexer.js の preprocessWithLines）の結果。
 
 - `text`：文法に渡す文字列（JS の文字列。`text.size` は JS の `text.length`）。
-- `lineAt`：`text` の位置ごとの、元のソースの行（1 から）。添え字は `text` の Unicode の符号位置の番号 0〜（符号位置の数）で、
-  k 番目は、k 番目の符号位置の頭の UTF-16 の位置（k が符号位置の数なら `text.length`）を JS の lineAt（preprocessWithLines が返す
-  関数。lexer.js:774 で位置を 0〜`text.length` に切り詰める）に渡した値（dump.mjs:13-17・251）。`lineAt.size` は `text` の符号位置の
-  数 + 1 で、サロゲートの対の無い `text` なら `text.size + 1`。
+- `lineAt`：`text` の位置ごとの、元のソースの行（1 から）。添え字は `text` の符号単位の位置 0〜`text.length` で、k 番目は JS の
+  lineAt（preprocessWithLines が返す関数。lexer.js:774 で位置を 0〜`text.length` に切り詰める）に k を渡した値（dump.mjs の頭）。
+  `lineAt.size` は `text.size + 1`（対の後ろの半分の位置にも値がある。`Pre.fromJson` は大きさの違う物を断る）。
 -/
 structure Pre where
   text : JStr

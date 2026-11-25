@@ -3,10 +3,10 @@
 //   out と --stages は out/sem から解く（既定 peg_fuzz_stages.jsonl と stages.jsonl.gz）。
 //   1行 {id, source, b1:{text, lineAt}, b2, b3:null}。lineAt は位置ごとに違う値（k + 1）にして、行の値が位置そのものを確かめるようにする。
 //   字の並びは3種：(a) 字の表からの乱れた並び、(b) 文法に沿って作った並びに小さな傷、(c) stages の本物の b1.text に小さな傷（--real K 本）。
-//   最後に終わりの印の行 {end:true, lines:N, complete:true, stamp:S}（N は書いた行の数、S は gen_front.mjs の frontStamp()。dump.mjs の印から sources と gate を除いた形）を書く。
+//   最後に終わりの印の行 {end:true, units:"utf16", lines:N, complete:true, stamp:S}（N は書いた行の数、S は gen_front.mjs の frontStamp()。dump.mjs の印から sources と
+//   gate を除いた形）を書く。位置（at・q・lineAt の添え字）は dump.mjs と同じく UTF-16 の符号単位の番号（peggy の offset）そのまま。
 import fs from "fs";
 import zlib from "zlib";
-import readline from "readline";
 import { PEGGY_URL, JS, frontStamp } from "../gen_front.mjs";
 const STAMP = frontStamp(); // 走らせ始めの版（alpha1 の前段の file・peggy・道具・node・スタック）
 import { outPath } from "./paths.mjs";
@@ -108,7 +108,8 @@ function mutate(s, times) {
   return s;
 }
 
-// --- JS の答え（dump.mjs の b2Rows と errOf の写し。BMP の外の字は作らないので位置は UTF-16 のままで符号位置と同じ） ---
+// --- JS の答え（dump.mjs の b2Rows と errOf の写し。位置は peggy の offset のまま、lineAt(o) は o + 1。サロゲートは作らない：BMP の外の字と
+// 対の無いサロゲートは gen/rawfuzz.mjs が当てる） ---
 const TAGS = new Set(['"BRACKET_"', '"ABS_"', '"NORM_"', '"INDENT_"']);
 function b2Of(text) {
   for (let k = 0; k < text.length; k++) {
@@ -156,10 +157,25 @@ for (let k = 0; k < opt.n; k++) {
   } else if (r < 5) emit(genProgram());
   else emit(mutate(genProgram(), 1 + ri(3)));
 }
+// gz の JSONL の行（LF だけで分ける。JSON.stringify は U+2028・U+2029 を字のまま書くので、それで分ける readline は使わない）。LF（0x0A）は
+// UTF-8 の字の途中に来ないので、バイトで分けてから字にする。途中で止めれば（break）流れを閉じる。
+async function* gzLines(file) {
+  let parts = [];
+  for await (const c of fs.createReadStream(file).pipe(zlib.createGunzip())) {
+    let start = 0;
+    for (let k = c.indexOf(10); k >= 0; k = c.indexOf(10, start)) {
+      parts.push(c.subarray(start, k));
+      yield Buffer.concat(parts).toString("utf8");
+      parts = [];
+      start = k + 1;
+    }
+    if (start < c.length) parts.push(c.subarray(start));
+  }
+  if (parts.length) yield Buffer.concat(parts).toString("utf8");
+}
 if (opt.stages && opt.real > 0) {
-  const rl = readline.createInterface({ input: fs.createReadStream(opt.stages).pipe(zlib.createGunzip()), crlfDelay: Infinity });
   let taken = 0;
-  for await (const line of rl) {
+  for await (const line of gzLines(opt.stages)) {
     if (taken >= opt.real) break;
     const i1 = line.indexOf(',"b1":'), i2 = line.indexOf(',"b2":');
     if (i1 < 0) continue; // 終わりの印の行
@@ -168,8 +184,7 @@ if (opt.stages && opt.real > 0) {
     taken++;
     for (let m = 0; m < 3; m++) emit(mutate(b1.text, 1 + ri(3)));
   }
-  rl.close();
 }
-fs.writeSync(fd, JSON.stringify({ end: true, lines: id, complete: true, stamp: STAMP }) + "\n");
+fs.writeSync(fd, JSON.stringify({ end: true, units: "utf16", lines: id, complete: true, stamp: STAMP }) + "\n");
 fs.closeSync(fd);
 console.log(JSON.stringify({ written: id, kinds }));

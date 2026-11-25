@@ -1,6 +1,7 @@
 // BMP の外の字の源（lex-review）。node gen_lexrev_astral.mjs [out の dir]（既定 out/sem、相対の道は out/sem から解く。gen_lexrev.mjs の後に）
 //   lexrev_astral.jsonl：lexrev_chars の1つ目の字の組の `x` を U+1F600 に替えた総当たり（長さ 5 まで）と、
-//   lexrev_lines・lexrev_frames の `x`・`y` を U+1F600・U+20000 に替えた物。JS は UTF-16 で数え、Lean は符号位置で数える所を当てる。
+//   lexrev_lines・lexrev_frames の `x`・`y` を U+1F600・U+20000 に替えた物。字がサロゲートの対（2単位）になる所：位置・行の表
+//   （lineAt は対の後ろの半分にも値を持つ）、`\` の後ろで対の片方だけを取る所、断りの文の found が対の片方になる所を当てる。
 import fs from "fs";
 import path from "path";
 import { outPath } from "./paths.mjs";

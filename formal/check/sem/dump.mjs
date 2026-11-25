@@ -10,20 +10,23 @@
 //   stackRefusal で包むので、JS のスタックの溢れは b2 では生の RangeError、b3 では resolve-stack-limit になる）。
 //   err は {name, reason, line, message}（無い欄は null）。peggy の断り（location を持つ物）の line は frontEnd と同じく lineAt(e.location.start.offset)。
 //
-// 位置の直し方：at・q・lineAt の添え字は、JS の文字列の位置（UTF-16 の符号単位の番号）でなく、Unicode の符号位置（code point）の番号で書く。
-//   text の UTF-16 の位置 o は、text.slice(0, o) の符号位置の数に直す（サロゲートの対は2単位で1字、対になっていないサロゲートは1単位で1字）。
-//   lineAt の配列の k 番目は、k 番目の符号位置の UTF-16 の位置（k = 符号位置の数なら text.length）での lineAt の値。
-//   対の間を指す位置（at・q）が来たら止める。BMP の外の字（と対になっていないサロゲート）を含む源の数を数える。
-// 行（line・err.line）は元のソースの行の番号（1 から）で、位置ではないので直さない。
+// 位置：at・q・lineAt の添え字は、JS の文字列の位置（UTF-16 の符号単位の番号。peggy の offset と lexer.js の lineAt が受ける位置）そのまま。
+//   lineAt の配列の k 番目は lineAt(k)（k = 0..text.length。大きさは text.length + 1 で、lexer.js:774 が位置を切り詰める範囲と同じ）。
+//   サロゲートの対は2単位、対になっていないサロゲートは1単位で、対の間（後ろの半分）の位置も1つの位置。at・q が整数で 0..text.length に
+//   あることは確かめる（外なら止める）。BMP の外の字（と対になっていないサロゲート）を含む源の数を数える。
+// 行（line・err.line）は元のソースの行の番号（1 から）。
+// 書く行はどれも JSON.stringify の文で、対の無いサロゲートは escape（\udxxx）で書くので、書く前に isWellFormed() を確かめる（UTF-8 にする時に
+//   字のままの対の無いサロゲートが U+FFFD に替わらないこと）。
 //
 // 門：書いた行の b3.rows を JSON から rowsjson.mjs の importRows で戻し、本物の resolve(source) が通る源では、その rows と同じ物か（deep equal。resolve の側の
 //   core.raw は見ない、行の木の行も比べる）を見る。resolve が断る源では、b3（b1 が err なら b1）の err と、b2 が err ならその err も、resolve の断りと同じか、
 //   b3 が通るなら後の段の断りとして理由ごとに数える。また b2 の行（括りと字下げの中の行も）の数・並びと、b3 の行の木（"line" を持つ物）の数・行の並びが合うかを見る。
-// 1件ずつ try で囲む。段の断り（段の呼び出しの中で投げた物）は err に書き、道具の誤り（直し・写し・書き出しの中で投げた物）は id を言って止める。
+// 1件ずつ try で囲む。段の断り（段の呼び出しの中で投げた物）は err に書き、道具の誤り（位置の確かめ・写し・書き出しの中で投げた物）は id を言って止める。
 // 書く量が --limit-mb（既定 200、MB は 10^6 バイト）を超える行の手前（.jsonl.gz なら、超える塊（ほどいて約 16 MB）の手前）で書くのを止める（id の順の頭だけが残る）。数と門は書くのを止めた後も全部の源で数え、
 //   全部を書いたときの大きさ（bytesIfAllWritten）と欄ごとの大きさ（fieldBytes）を出す。--skip N は頭の N 本を飛ばし、--max N は N 本だけ、--out は out/sem の下の名前、
 //   --no-write は書かずに数えるだけ、--sources は out/sem の下の源の集まりの名前（既定 sources.jsonl）。数は out/sem/<out の名前>_counts.json に書き、標準出力にも出す。
-// 最後に終わりの印の行 {"end":true,"lines":N,"complete":B,"stamp":S,"sources":R,"gate":G} を書く。N は書いた行の数、B は源の全部を書いたか（--skip・--max・上限で欠けたら偽）、
+// 最後に終わりの印の行 {"end":true,"units":"utf16","lines":N,"complete":B,"stamp":S,"sources":R,"gate":G} を書く。units は位置の数え方（UTF-16 の符号単位。
+//   signsem check は units が "utf16" でない印を断る）、N は書いた行の数、B は源の全部を書いたか（--skip・--max・上限で欠けたら偽）、
 //   S は gen_front.mjs の frontStamp()（alpha1 の前段の file の sha1 の頭・peggy の版・stages を書く道具の sha1 の頭・node の版とスタックの大きさ）、
 //   R は読んだ源の集まり {name, lines, sha1}（sha1 は file の中身の sha1 の頭 12 字）、G は門の結果（rowsDiffer・resolveOkButFrontErr・rowCountDiffer・frontErrUnexcused・
 //   frontErrExcused）。G の4つの数のどれかが 0 でなければ、数を書いた後に 1 で終わる。frontErrExcused は JS のスタックの溢れの組の id。
@@ -65,32 +68,26 @@ const tool = (m) => {
   throw new ToolError(m);
 };
 
-// --- 位置の直し ---
-// UTF-16 の位置 → 符号位置の番号（対の間は -1）と、符号位置の番号 → UTF-16 の位置。
-function cpMaps(text) {
-  const n = text.length;
-  const toCp = new Int32Array(n + 1);
-  const toU16 = [];
-  let astral = 0, lone = 0;
-  for (let i = 0; i < n; i++) {
-    toCp[i] = toU16.length;
-    toU16.push(i);
-    const c = text.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff && i + 1 < n && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      toCp[i + 1] = -1;
-      i++;
-      astral++;
-    } else if (c >= 0xd800 && c <= 0xdfff) lone++;
+// --- 位置と字 ---
+// 位置 o（UTF-16 の符号単位の番号）が整数で 0..n（n は text.length）にあれば o そのまま
+const posOf = (n, o, what) => {
+  if (!Number.isInteger(o) || o < 0 || o > n) tool(`${what} の位置 ${o} が text の外`);
+  return o;
+};
+// s のサロゲートの対（上の半分の直後に下の半分）の数と、対の無いサロゲートの数
+function surrogates(s) {
+  let pairs = 0, lone = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) (pairs++, i++);
+    else if (c >= 0xd800 && c <= 0xdfff) lone++;
   }
-  toCp[n] = toU16.length;
-  toU16.push(n);
-  return { toCp, toU16, astral, lone };
+  return { pairs, lone };
 }
-const cpOf = (m, o, what) => {
-  if (!Number.isInteger(o) || o < 0 || o >= m.toCp.length) tool(`${what} の位置 ${o} が text の外`);
-  const k = m.toCp[o];
-  if (k < 0) tool(`${what} の位置 ${o} がサロゲートの対の間`);
-  return k;
+// 書く文を UTF-8 のバイトに（字のままの対の無いサロゲートがあれば、UTF-8 で U+FFFD に替わるので止める）
+const utf8Of = (s, what) => {
+  if (!s.isWellFormed()) tool(`${what}に字のままの対の無いサロゲートがある`);
+  return Buffer.from(s, "utf8");
 };
 
 const isPeggy = (e) => !!e && typeof e === "object" && !!e.location && !!e.location.start;
@@ -106,12 +103,12 @@ function errOf(e, line) {
 const keyOf = (err, peg) => err.reason || (peg ? (/^Expected /.test(err.message) ? "(peggy) Expected … found" : `(peggy error()) ${err.message.slice(0, 40)}`) : `(${err.name}) ${err.message.split(/[:：]/)[0].slice(0, 60)}`);
 
 const TAGS = new Set(['"BRACKET_"', '"ABS_"', '"NORM_"', '"INDENT_"']);
-function b2Rows(rows, rowAt, qAt, lineAt, m) {
+function b2Rows(rows, rowAt, qAt, lineAt, n) {
   const row = (r) => {
     if (!Array.isArray(r)) tool("b2 の行が配列でない");
     if (!rowAt.has(r)) tool("b2 の行に rowAt が無い");
-    const o = rowAt.get(r);
-    return { at: cpOf(m, o, "行の書き始め"), line: lineAt(o), q: (qAt.get(r) || []).map((x) => cpOf(m, x, "`?`")), w: r.map(word) };
+    const o = posOf(n, rowAt.get(r), "行の書き始め");
+    return { at: o, line: lineAt(o), q: (qAt.get(r) || []).map((x) => posOf(n, x, "`?`")), w: r.map(word) };
   };
   const word = (w) => {
     if (typeof w === "string") return w;
@@ -216,7 +213,7 @@ const ex = (list, x) => list.length < 10 && list.push(x);
 const fd = opt.write ? fs.openSync(path.join(OUT, opt.out), "w") : null;
 function flushGz() {
   if (!pendCount) return;
-  const z = zlib.gzipSync(Buffer.from(pend.join(""), "utf8"));
+  const z = zlib.gzipSync(utf8Of(pend.join(""), "書く塊"));
   if (C.writtenBytes + z.length > LIMIT) C.stoppedWritingAtLimit = true;
   else {
     fs.writeSync(fd, z);
@@ -234,8 +231,8 @@ for (let li = opt.skip; li < srcLines.length && C.done < opt.max; li++) {
   try {
     if (typeof source !== "string") tool("源が文字列でない");
     const rec = { id, source, b1: null, b2: null, b3: null };
-    const sm = cpMaps(source);
-    if (sm.astral) (C.bmp.astralSources++, (C.bmp.astralChars += sm.astral));
+    const sm = surrogates(source);
+    if (sm.pairs) (C.bmp.astralSources++, (C.bmp.astralChars += sm.pairs));
     if (sm.lone) C.bmp.loneSurrogateSources++;
     // B1
     let pre = null, b1err = null;
@@ -244,11 +241,9 @@ for (let li = opt.skip; li < srcLines.length && C.done < opt.max; li++) {
     } catch (e) {
       b1err = errOf(e);
     }
-    let m = null;
     if (pre) {
       if (typeof pre.text !== "string" || typeof pre.lineAt !== "function") tool("preprocessWithLines の返す物の形が違う");
-      m = cpMaps(pre.text);
-      const la = m.toU16.map((o) => pre.lineAt(o));
+      const la = Array.from({ length: pre.text.length + 1 }, (_, o) => pre.lineAt(o));
       for (const l of la) if (!Number.isSafeInteger(l)) tool(`lineAt が整数でない ${l}`);
       rec.b1 = { text: pre.text, lineAt: la };
       C.b1.ok++;
@@ -275,7 +270,7 @@ for (let li = opt.skip; li < srcLines.length && C.done < opt.max; li++) {
       }
       if (parsed) {
         if (!Array.isArray(parsed)) tool("parse の返す物が配列でない");
-        rec.b2 = { rows: b2Rows(parsed, rowAt, qAt, pre.lineAt, m) };
+        rec.b2 = { rows: b2Rows(parsed, rowAt, qAt, pre.lineAt, pre.text.length) };
         C.b2.ok++;
       }
     }
@@ -323,7 +318,7 @@ for (let li = opt.skip; li < srcLines.length && C.done < opt.max; li++) {
     } else if (fd !== null && !C.stoppedWritingAtLimit) {
       if (C.writtenBytes + bytes > LIMIT) C.stoppedWritingAtLimit = true;
       else {
-        fs.writeSync(fd, text + "\n");
+        fs.writeSync(fd, utf8Of(text + "\n", "書く行"));
         C.written++;
         C.writtenBytes += bytes;
         C.lastWrittenId = id;
@@ -387,8 +382,8 @@ const gateEnd = {
   frontErrExcused: C.gate.frontErrExcused,
 };
 if (fd !== null) {
-  const end = JSON.stringify({ end: true, lines: C.written, complete: C.written === C.sources && !C.stoppedWritingAtLimit, stamp: STAMP, sources: SRC, gate: gateEnd }) + "\n";
-  fs.writeSync(fd, GZ ? zlib.gzipSync(Buffer.from(end, "utf8")) : end);
+  const end = utf8Of(JSON.stringify({ end: true, units: "utf16", lines: C.written, complete: C.written === C.sources && !C.stoppedWritingAtLimit, stamp: STAMP, sources: SRC, gate: gateEnd }) + "\n", "終わりの印");
+  fs.writeSync(fd, GZ ? zlib.gzipSync(end) : end);
   fs.closeSync(fd);
 }
 C.seconds = Math.round((Date.now() - t0) / 1000);

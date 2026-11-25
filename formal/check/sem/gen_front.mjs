@@ -21,8 +21,8 @@ export const sha1Head = (buf) => crypto.createHash("sha1").update(buf).digest("h
 // 下のどれかが変われば落とす）。前段の JS の答えを決める alpha1 の file（前段の import の全部）の sha1 の頭（12 字）と peggy の版、
 // stages を書く道具（tools、formal/check/sem の下）の sha1 の頭、node の版とスタックの大きさ（node の --stack-size。どちらも JS のスタックの
 // 溢れの所を変える）。源の集まりの中身は印に入れない（dump.mjs が終わりの印の sources に書き、gate.mjs が照らす）。
-// stack は走っている node の引数から取る。gate.mjs は自分では --stack-size を付けずに走るので、照らす側では STACK_ARG（gate.mjs が
-// dump.mjs に、gen/all.mjs が fuzz・rawfuzz に付ける物）に置き換える。
+// stack は走っている node の引数から取る。gate.mjs は stages の印の stack を STACK_ARG（gate.mjs が dump.mjs に、gen/all.mjs が fuzz・rawfuzz に
+// 付ける物）と照らす（gate.mjs も STACK_ARG を付けた node で自分を走らせ直すが、照らすのは自分の引数でなく子に付ける STACK_ARG）。
 export const STACK_ARG = "--stack-size=8000";
 export const STAMP_FILES = ["lexer.js", "sign.pegjs", "resolve.js", "operator_table.js", "errors.js"];
 export const STAMP_TOOLS = ["dump.mjs", "rowsjson.mjs", "gen_front.mjs", "gen/fuzz.mjs", "gen/rawfuzz.mjs"];
