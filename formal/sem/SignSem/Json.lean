@@ -211,7 +211,7 @@ private def lone : JStr := ⟨#[0x78, 0xD83D, 0xDC00, 0xDE00]⟩
   sorted? (Pre.toJson { text := lone, lineAt := #[1, 1, 1, 1, 1] })
 -- 対の無いサロゲートも1つの単位のまま出て、読むと戻る
 #guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4, 5] })).toOption.map (·.text) == some lone
--- lineAt の大きさは text の単位の数 + 1（lone は 4 単位で、うち2つが対）。符号位置の数 + 1（4）や短い物は読まない
+-- lineAt の大きさは text の単位の数 + 1（lone は 4 単位で、うち2つが対なので 5）。それより短い物（4）も長い物（6）も、空の text に空の lineAt も読まない
 #guard (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4] })).toOption.isNone &&
   (Pre.fromJson (Pre.toJson { text := lone, lineAt := #[1, 2, 3, 4, 5, 6] })).toOption.isNone &&
   (Pre.fromJson (Pre.toJson { text := JStr.empty, lineAt := #[] })).toOption.isNone &&

@@ -47,7 +47,12 @@ String の `==`・`String.toList`・`String.length` は Classical.choice に依�
 `JStr` にする所（`Coe String JStr` の `JStr.ofString`、公理なし）でだけ使い、比べには使わない。文字列は JStr の `==`（単位ごと、
 公理なし）と `JStr.lt` で、符号単位は Nat の `==`・`≤` で比べる。
 
-## 確かめ（2026-11-24）
+## 確かめ（2026-11-25）
+
+比べは `signsem check`（Main.lean）で、JS の答え（node v24.16.0 と peggy 4.2.0 で formal/check/sem/dump.mjs と gen の道具が書いた stages）と
+写しの答えを JV の値の `==` で比べた。文字列は UTF-16 の単位ごとに比べ、対の無いサロゲートもそのまま比べる。位置は peggy の offset（単位の番号）のまま。
+formal/check/sem/gate.mjs の 20 個の集まりの全部で、文法の段を当てた 2,064,121 行（通る 778,875・断る 1,285,246）に違いは無く、
+外したのは下の id 1193 の1行だけ。集まりごとには次のとおり。
 
 - formal/check/out/sem/stages.jsonl.gz の全部の行 354,751 本：b1 が通る 354,628 本のうち、id 1193（括り 2 万段。JS は RangeError の
   スタックの溢れ）を外した 354,627 本で、b2 と全部合う（rows 354,619 本・断り 8 本、message と line まで）。b1 が断る 123 本は入力が無いので飛ばした。
@@ -55,7 +60,8 @@ String の `==`・`String.toList`・`String.length` は Classical.choice に依�
 - 前段を通す源（dump.mjs の答えと比べた。formal/check/out/sem/ の pegrev_* と peg_*）：手書き 189 本（stages で通らない生成物の枝を通す物）、
   BMP の外の字の手書き 7 本、乱れた源 40,000 本（b1 が通る 29,080 本）、BMP の外の字を混ぜた乱れた源 10,000 本（同 7,310 本）、前の手書き 36 本で全部合う。
   stages とこれらで、前処理を通る源から届く生成物の塊は全部通った（残りは先読みの中の peg$fail など通らない塊と、閉じの無い行頭の ` の comment）。
-- 前処理を通さない字の並び：155,903 本と 250,000 本（BMP の外の字 97,055 本・対にならないサロゲート 53,852 本を含む）で、peggy の parser の答えと全部合う。
+- 前処理を通さない字の並び（peg_fuzz・peg_rawfuzz・peg_rawfuzz2）：155,903 本と 250,000 本（BMP の外の字 97,055 本・
+  対にならないサロゲート 53,852 本を含む）で、peggy の parser の答えと全部合う。
 -/
 
 namespace SignSem.Peg

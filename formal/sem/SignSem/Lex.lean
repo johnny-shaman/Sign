@@ -1102,7 +1102,7 @@ private def errIs (r : Except FrontErr Pre) (name : JStr) (line : Nat) (tail : A
 -- lexer.js:685：x : ⏎ ⏎ "\t😀" → "\t😀"（対はそのまま）
 #guard errIs (preprocess ⟨#[0x78, 0x20, 0x3A, 0x0D, 0x0D, 0x09, 0xD83D, 0xDE00]⟩) "SyntaxError" 3
   #[0x22, 0x5C, 0x74, 0xD83D, 0xDE00, 0x22]
--- `\` の後ろの `[\s\S]` は上の半分だけを取る：\😀:\ud800 → text は \😀 : \ud800、lineAt は単位 7 つ＋終わりの 8 つ
+-- `\` の後ろの `[\s\S]` は上の半分だけを取る：\😀:\ud800 → text は \😀 : \ud800（7 単位）、lineAt は位置 0〜7 の 8 つ
 #guard match preprocess ⟨#[0x5C, 0xD83D, 0xDE00, 0x3A, 0xD800]⟩ with
   | .ok p => p.text.units == #[0x5C, 0xD83D, 0xDE00, 0x20, 0x3A, 0x20, 0xD800] && p.lineAt == #[1, 1, 1, 1, 1, 1, 1, 1]
   | .error _ => false

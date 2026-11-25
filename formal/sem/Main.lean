@@ -30,8 +30,8 @@ reason `resolve-stack-limit`）。Lean の写しはスタックの溢れを写�
 終わりの印：dump.mjs（と gen/ の fuzz・rawfuzz）は最後に `{"end": true, "units": "utf16", "lines": N, "complete": B, …}` を書く（ほかの欄は
 gate.mjs が見る）。units は位置（`at`・`q`・`lineAt` の添え字）の数え方で、"utf16" は UTF-16 の符号単位（JS の文字列の位置）。
 印が無い・units が "utf16" でない・N が読んだ行の数と違う・complete が偽（`--allow-partial` で許す）・印の後に行がある・行が 0 の
-どれかなら 1 を返す。印の無い入力は `--no-end` で読む（units も見ない）。
-`--max-diffs N` は、違いと読めない行が合わせて N に届いたら読むのを止めて 1 を返す（変異の試験で早く止める）。
+どれかなら 1 を返す。印の無い入力は `--no-end` で読む（units も見ない）。違い・読めない行・写しの InternalError が1つでもあっても 1 を返す。
+`--show N` は、違いと読めない行を N 個まで見せる（既定 40）。`--max-diffs N` は、違いと読めない行が合わせて N に届いたら読むのを止めて 1 を返す（変異の試験で早く止める）。
 `--force-internal ID` は試験の口：id が ID の行では、走らせる段の全部で、段を走らせずに写しの答えを InternalError の断りにする
 （gate.mjs の自己試験が、InternalError を数えて 1 を返すかを見る。写しの InternalError は燃料が尽きた所と写しの前提が崩れた所だけで、
 どの入力でも起きないので、この口で起こす）。
