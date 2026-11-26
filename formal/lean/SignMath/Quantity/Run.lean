@@ -3,7 +3,7 @@ import Mathlib.Computability.StateTransition
 import Mathlib.Computability.TuringMachine.PostTuringMachine
 
 /-!
-# L. 計算の量の像（その4：走らせる式 Σ h∘Tⁿ と、チューリングマシン）
+# L. 計算の量の像（その3：走らせる式 Σ h∘Tⁿ と、チューリングマシン）
 
 状態の型 `σ` と、1歩の遷移 `f : σ → Option σ` を取る。
 `f s = some s'` は、`s` から1歩で `s'` へ進むことを言う。

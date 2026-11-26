@@ -3,7 +3,7 @@ import Mathlib.Data.Finsupp.Weight
 import Mathlib.Logic.Equiv.Fin.Basic
 
 /-!
-# L. 計算の量の像（その3：データの対は ⊗、一緒に見る演算は ⊕ から書けない）
+# L. 計算の量の像（その4：データの対は ⊗、一緒に見る演算は ⊕ から書けない）
 
 量の側の模型は、A 節と同じ自由可換モノイド `A →₀ ℕ` である。
 集合 `A` の点 `a` は `single a 1` に行く。
