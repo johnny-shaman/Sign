@@ -14,3 +14,8 @@ import SignMath.Arith
 import SignMath.Digits
 import SignMath.Reals
 import SignMath.NegFree
+import SignMath.Quantity.Embed
+import SignMath.Quantity.Partial
+import SignMath.Quantity.Run
+import SignMath.Quantity.Pairing
+import SignMath.Quantity.Rel
