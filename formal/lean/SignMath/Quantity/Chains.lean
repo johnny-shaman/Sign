@@ -5,7 +5,7 @@ import Mathlib.CategoryTheory.Monoidal.Closed.Zero
 import Mathlib.Logic.Equiv.Prod
 
 /-!
-# L. 計算の量の像（その7：2本の鎖。分解の半分の2つの三角）
+# L. 計算の量の像（その7：2本の鎖。分解の半分の2つの三角と、一意の半分）
 
 2本の鎖は、次の2つである。
 - 1本目：a ⇒ (a,a) ⇒ (a → a) ⇒ a
@@ -23,11 +23,14 @@ import Mathlib.Logic.Equiv.Prod
 - 分解が在る半分（組から射を作り、それを割ると組に戻る）は、対角の側の三角と、組へ割る射の自然性が言う。
   積（Δ ⊣ ×）では、1本目と射影（余単位）の自然性。余積（+ ⊣ Δ）では、2本目と入口（単位）の自然性。
 - 一意の半分（射を組に割り、その組から射を作り直すと射に戻る）は、関手であることと、もう一方の三角と、
-  組から射を作る側の自然性が言う。積では、`Δ ≫ (π₁ × π₂) = 𝟙`（組の η 則）と写し（単位）の自然性。
+  組から射を作る側の自然性が言う。積では、`Δ ≫ (π₁ × π₂) = 𝟙`（もう一方の三角）と写し（単位）の自然性。
   余積では、入口の和のあとに畳むと恒等なことと、畳み（余単位）の自然性。
   一意の半分に入る自然性は、どちらも写しと畳みの自然性（L.8 の対話）である。
 積の側でも余積の側でも、単位も余単位も自然で、対角の側の三角も立つのに、もう一方の三角が崩れて
 一意が崩れる例がある。だから自然性だけでは、一意の半分は出ない。
+型の上では、分解の半分の仮定（余単位の自然性と対角の側の三角）の下で、一意の半分はちょうど、射影がまとめて
+点を分けることで、もう一方の三角はその帰結である。余積では、入口の自然性と2本目の三角の下で、一意の半分は
+ちょうど、入口がまとめて全部の点を覆うことである。
 
 2本の `(a,a)` は、1本目では積 `a ⨯ a` に、2本目では余積 `a ⨿ a` にある。
 零射のある圏で、2つを入口と射影に揃えて同じ対象に置けるのは、余積から積への比べの射が同型な時である。
@@ -40,8 +43,11 @@ import Mathlib.Logic.Equiv.Prod
 - 型の上で、積と余積の、分解の半分と一意の半分の形。積の側と余積の側のそれぞれで、
   単位と余単位が自然で、対角の側の三角が立っても、もう一方の三角が崩れる例。積の側の例は射の集まりの
   全単射を持たない（だから随伴にならない、の最後の1歩は散文。L.9d）。
-- 関係の圏の `×` で、写しと可換な関係は2つの射影で決まる。一価は写しとの可換から、残りは組の η 則から出る。
-  組の η 則の無い `HalfG` の2つの射影では、写しと可換なグラフでも決まらない。
+- 型の上で、分解の半分の仮定の下で、一意の半分 ⇔ 射影がまとめて点を分ける。点を分けるなら、もう一方の三角は
+  帰結で、射の集まりの間に自然な全単射がある（逆向きは `1` からの射の所の単射で足りる）。余積では、
+  一意の半分 ⇔ 入口がまとめて全部の点を覆う。`HalfG` の射影は点を分けず、`HalfH` の入口は覆わない（L.10）。
+- 関係の圏の `×` で、写しと可換な関係は2つの射影で決まる。一価は写しとの可換から、残りは射影が点を分けること
+  （`Prod.ext`）から出る。射影が点を分けない `HalfG` の2つの射影では、写しと可換なグラフでも決まらない。
   恒等の名前（対角）はどの関係とも滑るが、射影だけでは決まらない（L.9e）。
 - 零射のある圏で、余積から積への比べの射が同型 ⇔ 双積（L.9f）。
 - 関係の圏の `×` の上の写しと照合は、Frobenius の2つの律と双代数の中心の律を満たすが、
@@ -128,7 +134,7 @@ theorem existence_half {G : Type → Type → Type}
     exact h1.trans (congrArg g h2)
 
 /-- 定理 L.9d（一意の半分）：型の上の関手 `G` で、単位 `η` が自然で、もう一方の三角
-（`G(ε₁, ε₂) ∘ η = id`。積なら組の η 則）が立つなら、どの射 `h` も、余単位で割った組
+（`G(ε₁, ε₂) ∘ η = id`）が立つなら、どの射 `h` も、余単位で割った組
 `(ε₁ ∘ h, ε₂ ∘ h)` から作り直した射に等しい。 -/
 theorem uniqueness_half {G : Type → Type → Type}
     (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → G b c → G b' c')
@@ -341,6 +347,151 @@ theorem half_coprod_uniqueness_fails :
 
 end HalfTriangle
 
+section Separation
+
+/-- 定理 L.10a（一意の半分と、点を分けること）：型の上の `G` で、余単位 `ε₁, ε₂` が自然で、対角の側の三角
+（単位のあとに余単位で恒等）が立つなら、一意の半分（どの射 `h` も、余単位で割った組から作り直した射に等しい）と、
+射影がまとめて点を分けること（射影が同じ2点は等しい）は同値。関手であること・単位の自然性・もう一方の三角は、
+仮定に無い。 -/
+theorem uniqueness_half_iff_separating {G : Type → Type → Type}
+    (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → G b c → G b' c')
+    (η : ∀ x : Type, x → G x x) (ε₁ : ∀ {b c : Type}, G b c → b) (ε₂ : ∀ {b c : Type}, G b c → c)
+    (hε : ∀ {b b' c c' : Type} (f : b → b') (g : c → c'),
+      ε₁ ∘ map f g = f ∘ ε₁ ∧ ε₂ ∘ map f g = g ∘ ε₂)
+    (tri : ∀ x : Type, ε₁ ∘ η x = id ∧ ε₂ ∘ η x = id) :
+    (∀ {x b c : Type} (h : x → G b c), map (ε₁ ∘ h) (ε₂ ∘ h) ∘ η x = h) ↔
+    (∀ {b c : Type} (p q : G b c), ε₁ p = ε₁ q → ε₂ p = ε₂ q → p = q) := by
+  constructor
+  · intro hu b c p q h1 h2
+    have hp := congrFun (hu (x := PUnit) (fun _ => p)) PUnit.unit
+    have hq := congrFun (hu (x := PUnit) (fun _ => q)) PUnit.unit
+    have e1 : (ε₁ ∘ fun _ : PUnit => p) = (ε₁ ∘ fun _ : PUnit => q) := funext fun _ => h1
+    have e2 : (ε₂ ∘ fun _ : PUnit => p) = (ε₂ ∘ fun _ : PUnit => q) := funext fun _ => h2
+    rw [e1, e2] at hp
+    exact hp.symm.trans hq
+  · intro hs x b c h
+    funext a
+    obtain ⟨e1, e2⟩ := existence_half map η ε₁ ε₂ hε tri (ε₁ ∘ h) (ε₂ ∘ h)
+    exact hs _ _ (congrFun e1 a) (congrFun e2 a)
+
+/-- 定理 L.10b（もう一方の三角は帰結）：`uniqueness_half_iff_separating` と同じ仮定で、射影がまとめて点を
+分けるなら、もう一方の三角 `G(ε₁, ε₂) ∘ η = id` が立つ。使うのは、余単位の自然性と対角の側の三角だけ。 -/
+theorem other_triangle_of_separating {G : Type → Type → Type}
+    (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → G b c → G b' c')
+    (η : ∀ x : Type, x → G x x) (ε₁ : ∀ {b c : Type}, G b c → b) (ε₂ : ∀ {b c : Type}, G b c → c)
+    (hε : ∀ {b b' c c' : Type} (f : b → b') (g : c → c'),
+      ε₁ ∘ map f g = f ∘ ε₁ ∧ ε₂ ∘ map f g = g ∘ ε₂)
+    (tri : ∀ x : Type, ε₁ ∘ η x = id ∧ ε₂ ∘ η x = id)
+    (hs : ∀ {b c : Type} (p q : G b c), ε₁ p = ε₁ q → ε₂ p = ε₂ q → p = q) :
+    ∀ b c : Type, map ε₁ ε₂ ∘ η (G b c) = id := by
+  intro b c
+  funext p
+  apply hs
+  · have h1 := congrFun (hε (ε₁ (b := b) (c := c)) (ε₂ (b := b) (c := c))).1 (η (G b c) p)
+    have h2 := congrFun (tri (G b c)).1 p
+    exact h1.trans (congrArg ε₁ h2)
+  · have h1 := congrFun (hε (ε₁ (b := b) (c := c)) (ε₂ (b := b) (c := c))).2 (η (G b c) p)
+    have h2 := congrFun (tri (G b c)).2 p
+    exact h1.trans (congrArg ε₂ h2)
+
+/-- 定義 L.10c：`uniqueness_half_iff_separating` と同じ仮定で、射影がまとめて点を分けるなら、
+`(x → G b c) ≃ (x → b) × (x → c)`。向きの一方は射影で割る写像、もう一方は `G(f, g) ∘ η`。 -/
+def homEquiv_of_separating {G : Type → Type → Type}
+    (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → G b c → G b' c')
+    (η : ∀ x : Type, x → G x x) (ε₁ : ∀ {b c : Type}, G b c → b) (ε₂ : ∀ {b c : Type}, G b c → c)
+    (hε : ∀ {b b' c c' : Type} (f : b → b') (g : c → c'),
+      ε₁ ∘ map f g = f ∘ ε₁ ∧ ε₂ ∘ map f g = g ∘ ε₂)
+    (tri : ∀ x : Type, ε₁ ∘ η x = id ∧ ε₂ ∘ η x = id)
+    (hs : ∀ {b c : Type} (p q : G b c), ε₁ p = ε₁ q → ε₂ p = ε₂ q → p = q) (x b c : Type) :
+    (x → G b c) ≃ (x → b) × (x → c) where
+  toFun h := (ε₁ ∘ h, ε₂ ∘ h)
+  invFun fg := map fg.1 fg.2 ∘ η x
+  left_inv h := (uniqueness_half_iff_separating map η ε₁ ε₂ hε tri).mpr hs h
+  right_inv fg := Prod.ext (existence_half map η ε₁ ε₂ hε tri fg.1 fg.2).1
+                            (existence_half map η ε₁ ε₂ hε tri fg.1 fg.2).2
+
+/-- 定理 L.10c（射の集まりの自然な全単射）：同じ仮定で、射影がまとめて点を分けるなら、全単射が在り、
+その向きの一方は射影で割る写像である。その写像は `x` について自然で（前に `u : y → x` を当てると、
+両側で前に当たる。定義から）、`b, c` について自然（後ろに `G(f, g)` を当てると、組の成分の後ろに
+`f, g` が当たる。余単位の自然性から）。 -/
+theorem hom_bijection_of_separating {G : Type → Type → Type}
+    (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → G b c → G b' c')
+    (η : ∀ x : Type, x → G x x) (ε₁ : ∀ {b c : Type}, G b c → b) (ε₂ : ∀ {b c : Type}, G b c → c)
+    (hε : ∀ {b b' c c' : Type} (f : b → b') (g : c → c'),
+      ε₁ ∘ map f g = f ∘ ε₁ ∧ ε₂ ∘ map f g = g ∘ ε₂)
+    (tri : ∀ x : Type, ε₁ ∘ η x = id ∧ ε₂ ∘ η x = id)
+    (hs : ∀ {b c : Type} (p q : G b c), ε₁ p = ε₁ q → ε₂ p = ε₂ q → p = q) (x b c : Type) :
+    ∃ e : (x → G b c) ≃ (x → b) × (x → c),
+      (∀ h, e h = (ε₁ ∘ h, ε₂ ∘ h)) ∧
+      (∀ {y : Type} (u : y → x) (h : x → G b c), (ε₁ ∘ (h ∘ u), ε₂ ∘ (h ∘ u)) =
+        ((e h).1 ∘ u, (e h).2 ∘ u)) ∧
+      (∀ {b' c' : Type} (f : b → b') (g : c → c') (h : x → G b c),
+        (ε₁ ∘ (map f g ∘ h), ε₂ ∘ (map f g ∘ h)) = (f ∘ (e h).1, g ∘ (e h).2)) :=
+  ⟨homEquiv_of_separating map η ε₁ ε₂ hε tri hs x b c, fun _ => rfl, fun _ _ => rfl,
+    fun f g h => Prod.ext (funext fun a => congrFun (hε f g).1 (h a))
+      (funext fun a => congrFun (hε f g).2 (h a))⟩
+
+/-- 定理 L.10c（逆向き）：`1` からの射の所で、射影で割る写像が単射なら、射影はまとめて点を分ける。 -/
+theorem separating_of_proj_injective {G : Type → Type → Type}
+    (ε₁ : ∀ {b c : Type}, G b c → b) (ε₂ : ∀ {b c : Type}, G b c → c)
+    (hi : ∀ {b c : Type}, Function.Injective (fun h : PUnit.{1} → G b c => (ε₁ ∘ h, ε₂ ∘ h))) :
+    ∀ {b c : Type} (p q : G b c), ε₁ p = ε₁ q → ε₂ p = ε₂ q → p = q := by
+  intro b c p q h1 h2
+  have := hi (b := b) (c := c) (a₁ := fun _ => p) (a₂ := fun _ => q)
+    (Prod.ext (funext fun _ => h1) (funext fun _ => h2))
+  exact congrFun this PUnit.unit
+
+/-- 定理 L.10d（余積の一意の半分と、覆うこと）：型の上の `H` で、入口 `ι₁, ι₂` が自然で、対角の側の三角
+（入口のあとに畳むと恒等。2本目）が立つなら、一意の半分（どの射 `k` も、入口で割った組から作り直した射に
+等しい）と、入口がまとめて全部の点を覆うこと（どの点も、どちらかの入口の像）は同値。関手であること・
+畳みの自然性・`+` の側の三角は、仮定に無い。⇒ は試しの対象を `Prop` に取る。 -/
+theorem coprod_uniqueness_half_iff_covering {H : Type → Type → Type}
+    (map : ∀ {b b' c c' : Type}, (b → b') → (c → c') → H b c → H b' c')
+    (ι₁ : ∀ {b c : Type}, b → H b c) (ι₂ : ∀ {b c : Type}, c → H b c) (ε : ∀ x : Type, H x x → x)
+    (hι : ∀ {b b' c c' : Type} (f : b → b') (g : c → c'),
+      map f g ∘ ι₁ = ι₁ ∘ f ∧ map f g ∘ ι₂ = ι₂ ∘ g)
+    (tri : ∀ x : Type, ε x ∘ ι₁ = id ∧ ε x ∘ ι₂ = id) :
+    (∀ {x b c : Type} (k : H b c → x), ε x ∘ map (k ∘ ι₁) (k ∘ ι₂) = k) ↔
+    (∀ {b c : Type} (s : H b c), (∃ a, s = ι₁ a) ∨ (∃ c', s = ι₂ c')) := by
+  constructor
+  · intro hu b c s
+    let k : H b c → Prop := fun s => (∃ a, s = ι₁ a) ∨ (∃ c', s = ι₂ c')
+    let k' : H b c → Prop := fun _ => True
+    have e1 : k ∘ ι₁ = k' ∘ ι₁ :=
+      funext fun a => propext ⟨fun _ => trivial, fun _ => Or.inl ⟨a, rfl⟩⟩
+    have e2 : k ∘ ι₂ = k' ∘ ι₂ :=
+      funext fun a => propext ⟨fun _ => trivial, fun _ => Or.inr ⟨a, rfl⟩⟩
+    have hk := hu (x := Prop) k
+    have hk' := hu (x := Prop) k'
+    rw [e1, e2] at hk
+    have : k = k' := hk.symm.trans hk'
+    have hs : k s = k' s := congrFun this s
+    exact cast hs.symm trivial
+  · intro hc x b c k
+    funext s
+    obtain ⟨e1, e2⟩ := coprod_existence_half map ι₁ ι₂ ε hι tri (k ∘ ι₁) (k ∘ ι₂)
+    rcases hc s with ⟨a, rfl⟩ | ⟨a, rfl⟩
+    · exact congrFun e1 a
+    · exact congrFun e2 a
+
+/-- 定理 L.10e（`HalfG` の射影は点を分けない）：印だけが違う2点は、射影が同じ。 -/
+theorem halfG_not_separating :
+    ¬ (∀ {b c : Type} (p q : HalfG b c), halfFst p = halfFst q → halfSnd p = halfSnd q → p = q) :=
+  fun hs => by
+    have := hs (b := PUnit) (c := PUnit) (PUnit.unit, PUnit.unit, false) (PUnit.unit, PUnit.unit, true)
+      rfl rfl
+    simp at this
+
+/-- 定理 L.10e（`HalfH` の入口は覆わない）：印が `true` の点は、どちらの入口の像でもない。 -/
+theorem halfH_not_covering :
+    ¬ (∀ {b c : Type} (s : HalfH b c), (∃ a, s = halfInl a) ∨ (∃ c', s = halfInr c')) :=
+  fun hc => by
+    rcases hc (b := PUnit) (c := PUnit) (true, Sum.inl PUnit.unit) with ⟨a, h⟩ | ⟨a, h⟩
+    · simp [halfInl] at h
+    · simp [halfInr] at h
+
+end Separation
+
 section Uniqueness
 
 open SetRel
@@ -426,7 +577,7 @@ theorem name_inv_and_cup_swap (R : SetRel A B) :
 
 /-- 定理 L.9e（関係の圏の一意の半分）：写しと可換な関係 `R : X → A × B` は、
 写してから、成分ごとに `R` と射影を当てた物に等しい。つまり2つの射影で決まる。
-写しとの可換から出るのは `R` が一価なこと（L.8c）で、残りは型の組の η 則（`Prod.ext`）から出る。 -/
+写しとの可換から出るのは `R` が一価なこと（L.8c）で、残りは射影が点を分けること（`Prod.ext`）から出る。 -/
 theorem copy_natural_determined_by_projections (R : SetRel X (A × B))
     (hR : R ○ copyRel (A × B) = copyRel X ○ prodRel R R) :
     R = copyRel X ○ prodRel (R ○ Function.graph Prod.fst) (R ○ Function.graph Prod.snd) := by
@@ -444,7 +595,7 @@ theorem copy_natural_determined_by_projections (R : SetRel X (A × B))
     exact hq ▸ hb
 
 /-- 定理 L.9e（写しとの可換だけでは決まらない）：`1` から `HalfG 1 1` への2つの関数のグラフは、
-どちらも写しと可換で、`halfFst`・`halfSnd` での射影も同じなのに、違う。`HalfG` には組の η 則が無い。 -/
+どちらも写しと可換で、`halfFst`・`halfSnd` での射影も同じなのに、違う。`HalfG` の射影は点を分けない（L.10e）。 -/
 theorem half_copy_natural_same_projections :
     let h₀ : PUnit.{1} → HalfG PUnit PUnit := fun _ => (PUnit.unit, PUnit.unit, false)
     let h₁ : PUnit.{1} → HalfG PUnit PUnit := fun _ => (PUnit.unit, PUnit.unit, true)
